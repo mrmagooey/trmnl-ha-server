@@ -1,0 +1,18 @@
+.git/
+.github/
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Test files and fixtures
+test_*.py
+golden/
+
+# User config — mounted as a volume at runtime
+config.yaml
+
+# Dev files
+deployment.yaml
+pyproject.toml

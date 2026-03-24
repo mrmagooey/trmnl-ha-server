@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hass-image-server-config
+data:
+  config.yaml: |
+    device:
+      sleep_start: "23:00"
+      sleep_end: "07:00"
+    dashboards:
+      - name: "dash1"
+        title: "Dashboard 1 Title"
+        visibility:
+          start_time: "07:00"
+          end_time: "22:00"
+          days_of_the_week: "Monday-Friday"
+        allowed_ips: ["127.0.0.1"]
+        component:
+          - entity_name: "sensor.your_sensor_1"
+            friendly_name: "Sensor 1"
+            type: "history_graph"
+          - entity_name: "sensor.your_sensor_2"
+            friendly_name: "Sensor 2"
+            type: "history_graph"
+          - entity_name: "binary_sensor.your_binary_sensor"
+            friendly_name: "Some Value"
+            type: "entity"
+          - friendly_name: "Your Calendar"
+            type: "calendar"
+            large_display: true
+            arguments:
+              calendar_id: "calendar.your_calendar_id"
+              days: 1
+      - name: "dash2"
+        title: "Dashboard 2 Title"
+        visibility:
+          start_time: "07:00"
+          end_time: "22:00"
+          days_of_the_week: "Saturday-Sunday"
+        allowed_ips: []
+        component:
+          - entity_name: "sensor.your_sensor_3"
+            friendly_name: "Sensor 3"
+            type: "history_graph"
+          - friendly_name: "More Sensors"
+            type: "entities"
+            entities:
+              - entity_name: "sensor.your_sensor_4"
+                friendly_name: "Sensor 4"
+              - entity_name: "sensor.your_sensor_5"
+                friendly_name: "Sensor 5"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hass-image-server
+  labels:
+    app: hass-image-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hass-image-server
+  template:
+    metadata:
+      labels:
+        app: hass-image-server
+    spec:
+      containers:
+      - name: hass-image-server
+        image: hass-image-server:latest # Replace with your image registry if needed, e.g., your-repo/hass-image-server:latest
+        imagePullPolicy: IfNotPresent # Use 'Always' if pulling from a remote registry
+        ports:
+        - containerPort: 8000
+        env:
+        - name:  SERVER_NAME
+          value: "https://example.com" # Replace with your trmnl server path 
+        - name: HASS_URL
+          value: "http://homeassistant.local:8123" # Replace with your Home Assistant URL
+        - name: HASS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hass-credentials
+              key: token
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+        - name: log-volume
+          mountPath: /logs
+      volumes:
+        - name: config-volume
+          configMap:
+            name: hass-image-server-config
+        - name: log-volume
+          emptyDir: {}
