@@ -10,11 +10,13 @@ from io import BytesIO
 from PIL.Image import Image as PILImage
 
 
-class VisibilityConfig(TypedDict, total=False):
-    """Configuration for dashboard visibility rules."""
+class ScheduleEntry(TypedDict, total=False):
+    """A schedule entry linking a dashboard to display times for a device."""
+    dashboard: Required[str]
     start_time: str
     end_time: str
     days_of_the_week: str
+    refresh_rate: int
 
 
 class CalendarArguments(TypedDict, total=False):
@@ -51,23 +53,22 @@ class DashboardConfig(TypedDict, total=False):
     """Configuration for a dashboard."""
     name: Required[str]
     title: str
-    refresh_rate: int
-    visibility: VisibilityConfig
-    allowed_ids: list[str]
     components: list[ComponentConfig]
     portrait: bool
     rotate: int
 
 
 class DeviceConfig(TypedDict, total=False):
-    """Global device configuration."""
+    """Per-device configuration."""
+    id: Required[str]
     sleep_start: str
     sleep_end: str
+    schedule: list[ScheduleEntry]
 
 
 class Config(TypedDict, total=False):
     """Root configuration structure."""
-    device: DeviceConfig
+    devices: list[DeviceConfig]
     dashboards: list[DashboardConfig]
 
 

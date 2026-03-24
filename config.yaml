@@ -1,40 +1,54 @@
-# Global/device-level settings that apply across all dashboards.
-device:
-  # When the device is considered "sleeping" (local time, HH:MM).
-  # During the sleep window, the server will override any dashboard refresh_rate
-  # and instead set refresh_rate to the number of seconds until sleep_end.
-  sleep_start: "23:00"
-  # End of the sleep window (local time, HH:MM).
-  sleep_end: "06:00"
+# List of devices. Each device has an ID, optional sleep window, and a schedule
+# of dashboards to display at specific times/days.
+devices:
+  - # The device ID sent by the TRMNL firmware in the 'ID' HTTP header (MAC address).
+    # Fallback: IP address if no ID header is present.
+    id: "AA:BB:CC:DD:EE:FF"
 
-# List of dashboards to rotate through.
-# The server filters dashboards by visibility rules (time/day) and allowed IPs,
-# then cycles through the remaining dashboards on each /api/display call.
+    # Optional sleep window (local time, HH:MM). During this window the server
+    # overrides the refresh_rate to the number of seconds until sleep_end.
+    sleep_start: "23:00"
+    sleep_end: "06:00"
+
+    # Schedule of dashboards for this device.
+    # Each entry references a dashboard by its 'name' and defines when to show it.
+    schedule:
+      - # Name of the dashboard to display (must match a 'name' in the dashboards list).
+        dashboard: weekday_morning
+        # Start time (inclusive, HH:MM local time) when this dashboard is eligible.
+        start_time: "06:00"
+        # End time (exclusive, HH:MM local time) when this dashboard stops being shown.
+        end_time: "10:00"
+        # Days this entry is active. Formats: "Monday-Friday" (range) or "Monday" (single).
+        days_of_the_week: "Monday-Friday"
+        # How often (in seconds) the client should refresh while this dashboard is active.
+        refresh_rate: 600
+
+      - dashboard: daytime
+        start_time: "10:00"
+        end_time: "18:00"
+        days_of_the_week: "Monday-Friday"
+        refresh_rate: 600
+
+      - dashboard: night
+        start_time: "18:00"
+        end_time: "22:00"
+        days_of_the_week: "Monday-Sunday"
+        refresh_rate: 600
+
+
+# List of dashboards. Each dashboard defines content only — scheduling is
+# configured per-device above.
 dashboards:
   - # Unique identifier for the dashboard.
-    # This is also used to form the image filename: /static/<name>.png
+    # Also used to form the image filename: /static/<name>.png
     name: weekday_morning
     # Optional title rendered at the top of the image.
     title: "Morning"
-    # How often (in seconds) the client should refresh while this dashboard is active.
-    # This is overridden during the device sleep window (see device.sleep_start/end).
-    refresh_rate: 600
     # Optional: Rotate the dashboard image 90 degrees clockwise for portrait orientation.
     # portrait: true
-    # Rules controlling when this dashboard is eligible to be shown.
-    visibility:
-      # Start time (inclusive) for when this dashboard can be displayed (HH:MM, local time).
-      start_time: "06:00"
-      # End time (exclusive) for when this dashboard can be displayed (HH:MM, local time).
-      end_time: "10:00"
-      # Days of week this dashboard can be displayed.
-      # Supported formats:
-      # - "Monday-Friday" (range)
-      # - "Monday" (single day)
-      days_of_the_week: "Monday-Friday"
 
     # Components to render on the dashboard.
-    # Each component has a type and type-specific fields.
     components:
       - # Human-friendly label shown on the component.
         friendly_name: "Shared Calendar"
@@ -45,25 +59,16 @@ dashboards:
         # - "history_graph": shows a graph of numeric history for an entity
         # - "todo_list": shows incomplete items from a Home Assistant todo list
         type: "calendar"
-        # Type-specific arguments for calendar components.
         arguments:
-          # Home Assistant calendar entity id.
           calendar_id: "calendar.name"
-          # Number of days of events to fetch starting from today.
           days: 2
 
-      - # Home Assistant entity id to fetch the current state for.
-        entity_name: "sensor.sensor_name"
-        # Label shown on the component.
+      - entity_name: "sensor.sensor_name"
         friendly_name: "UV Forecast"
-        # "entity" renders a single value (state) for the entity.
         type: entity
 
-      - # Label shown on the component.
-        friendly_name: "Today's Weather"
-        # "entities" renders a list of entity values (state) in one component.
+      - friendly_name: "Today's Weather"
         type: "entities"
-        # List of entities to show in the component.
         entities:
           - entity_name: "sensor.sensor_name2"
             friendly_name: "Weather"
@@ -75,22 +80,12 @@ dashboards:
             friendly_name: "Currently Temp Feels Like"
 
       # Example todo_list component (commented out):
-      # - # Label shown on the component.
-      #   friendly_name: "Shopping List"
-      #   # "todo_list" renders items from a Home Assistant todo list.
-      #   # Shows incomplete items with checkboxes.
+      # - friendly_name: "Shopping List"
       #   type: "todo_list"
-      #   # Home Assistant todo list entity id.
       #   entity_name: "todo.shopping_list"
 
   - name: daytime
     title: "Daytime"
-    # Per-dashboard refresh interval in seconds (overridden during sleep window).
-    refresh_rate: 600
-    visibility:
-      start_time: "10:00"
-      end_time: "18:00"
-      days_of_the_week: "Monday-Friday"
     components:
       - friendly_name: "Shared Calendar"
         type: "calendar"
@@ -103,7 +98,6 @@ dashboards:
 
       - entity_name: "sensor.asdf"
         friendly_name: "friend name"
-        # "history_graph" fetches Home Assistant history and plots numeric values.
         type: history_graph
 
       - entity_name: "sensor.sensor_name"
@@ -116,11 +110,6 @@ dashboards:
 
   - name: night
     title: "Night"
-    refresh_rate: 600
-    visibility:
-      start_time: "18:00"
-      end_time: "22:00"
-      days_of_the_week: "Monday-Sunday"
     components:
       - entity_name: "sensor.sensor_name"
         friendly_name: "friendly sensor name"
@@ -133,4 +122,3 @@ dashboards:
       - entity_name: "sensor.sensor_name3"
         friendly_name: "temp"
         type: entity
-

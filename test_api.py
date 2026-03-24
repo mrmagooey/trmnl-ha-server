@@ -13,7 +13,7 @@ class TestAPISimple(unittest.TestCase):
     """Simple API tests that work reliably."""
 
     def setUp(self):
-        api._dashboard_index = 0
+        api._device_indices.clear()
 
     def create_handler(self, path, headers=None):
         """Create a minimal mock handler."""
@@ -49,10 +49,9 @@ class TestAPISimple(unittest.TestCase):
         self.assertEqual(response['api_key'], 'test_token_123')
     
     @mock.patch('config.read_config')
-    @mock.patch('config.is_dashboard_visible')
-    def test_api_display_basic(self, mock_is_visible, mock_read_config):
+    def test_api_display_basic(self, mock_read_config):
         """Test basic display endpoint functionality."""
-        mock_read_config.return_value = {'dashboards': []}
+        mock_read_config.return_value = {'dashboards': [], 'devices': []}
         handler = self.create_handler('/api/display')
         handler._handle_api_display()
         

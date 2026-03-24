@@ -11,7 +11,7 @@ from io import BytesIO, SEEK_END
 from os import environ
 from typing import TYPE_CHECKING
 
-from models import APIDisplayResponse, APISetupResponse, DashboardConfig, RenderData
+from models import APIDisplayResponse, APISetupResponse, DashboardConfig, DeviceConfig, ScheduleEntry, RenderData
 from state import server_state
 from components import (
     render_dashboard_image,
@@ -19,7 +19,7 @@ from components import (
     eink_display,
     tile_components,
 )
-from config import read_config, is_dashboard_visible
+from config import read_config, is_schedule_entry_visible
 from hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 SERVER_NAME: str = environ.get("SERVER_NAME", "https://www.example.com")
 
-_dashboard_index: int = 0
+_device_indices: dict[str, int] = {}
 _dashboard_lock: threading.Lock = threading.Lock()
 
 
@@ -75,7 +75,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
     def _handle_api_display(self) -> None:
         """Handle /api/display endpoint."""
         from datetime import datetime, timedelta
-        
+
         # Capture battery voltage header
         device_id: str = self._get_device_id()
         battery_voltage_header: str | None = self.headers.get('Battery-Voltage')
@@ -90,86 +90,86 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-type', 'application/json')
         self.end_headers()
 
-        image_url: str = ""
-        out_filename: str = "no_dashboards.png"
-        from config import read_config
         config = read_config(self.logger)
         dashboards: list[DashboardConfig] = config.get('dashboards', [])
-        device_config = config.get('device', {})
+        devices: list[DeviceConfig] = config.get('devices', [])
 
         now: datetime = datetime.now()
         self.logger.debug(f"Request from device: {device_id}")
 
-        # Filter dashboards by visibility
-        from config import is_dashboard_visible
-        time_visible_dashboards: list[DashboardConfig] = [
-            d for d in dashboards if is_dashboard_visible(d, now, self.logger)
-        ]
+        # Find device config
+        device_config: DeviceConfig | None = next(
+            (d for d in devices if d.get('id') == device_id), None
+        )
 
-        # Filter by allowed device IDs
-        visible_dashboards: list[DashboardConfig] = []
-        for d in time_visible_dashboards:
-            allowed_ids: list[str] | None = d.get('allowed_ids')
-            if not allowed_ids or device_id in allowed_ids:
-                visible_dashboards.append(d)
-
-        if self.logger.isEnabledFor(10):  # DEBUG
-            self.logger.debug("visible dashboards: %s", visible_dashboards)
+        out_filename: str = "no_dashboard_visible.png"
+        image_url: str = f"{SERVER_NAME}/static/{out_filename}"
         refresh_rate: int = self.refresh_rate
-        sleep_start_str: str | None = device_config.get('sleep_start')
-        sleep_end_str: str | None = device_config.get('sleep_end')
 
-        if visible_dashboards:
-            with _dashboard_lock:
-                global _dashboard_index
-                if _dashboard_index >= len(visible_dashboards):
-                    _dashboard_index = 0
-                dashboard: DashboardConfig = visible_dashboards[_dashboard_index]
-                _dashboard_index = (_dashboard_index + 1) % len(visible_dashboards)
+        if device_config is not None:
+            schedule: list[ScheduleEntry] = device_config.get('schedule', [])
 
-            dashboard_name: str = dashboard.get('name', 'unknown')
-            out_filename = f"{dashboard_name}.png"
-            image_url = f"{SERVER_NAME}/static/{out_filename}"
+            # Filter schedule entries by time/day visibility
+            visible_entries: list[ScheduleEntry] = [
+                e for e in schedule if is_schedule_entry_visible(e, now, self.logger)
+            ]
 
-            dashboard_refresh_rate: int | None = dashboard.get('refresh_rate')
-            if isinstance(dashboard_refresh_rate, int) and dashboard_refresh_rate > 0:
-                refresh_rate = dashboard_refresh_rate
-            else:
-                refresh_rate = self.refresh_rate
-        else:
-            out_filename = "no_dashboard_visible.png"
-            image_url = f"{SERVER_NAME}/static/{out_filename}"
+            if self.logger.isEnabledFor(10):  # DEBUG
+                self.logger.debug("visible schedule entries: %s", visible_entries)
 
-        # Handle sleep schedule
-        if sleep_start_str and sleep_end_str:
-            try:
-                now_time = now.time()
-                sleep_start = datetime.strptime(sleep_start_str, "%H:%M").time()
-                sleep_end = datetime.strptime(sleep_end_str, "%H:%M").time()
+            if visible_entries:
+                # Build a lookup map for dashboard configs
+                dashboard_map: dict[str, DashboardConfig] = {
+                    d['name']: d for d in dashboards if 'name' in d
+                }
 
-                is_sleeping: bool = False
-                if sleep_start > sleep_end:  # Overnight
-                    if now_time >= sleep_start or now_time < sleep_end:
-                        is_sleeping = True
-                else:  # Same day
-                    if sleep_start <= now_time < sleep_end:
-                        is_sleeping = True
+                with _dashboard_lock:
+                    idx = _device_indices.get(device_id, 0)
+                    if idx >= len(visible_entries):
+                        idx = 0
+                    entry: ScheduleEntry = visible_entries[idx]
+                    _device_indices[device_id] = (idx + 1) % len(visible_entries)
 
-                if is_sleeping:
-                    sleep_end_dt: datetime = now.replace(
-                        hour=sleep_end.hour,
-                        minute=sleep_end.minute,
-                        second=0,
-                        microsecond=0,
-                    )
-                    if now >= sleep_end_dt:
-                        sleep_end_dt += timedelta(days=1)
+                dashboard_name: str = entry.get('dashboard', 'unknown')
+                out_filename = f"{dashboard_name}.png"
+                image_url = f"{SERVER_NAME}/static/{out_filename}"
 
-                    refresh_rate = int((sleep_end_dt - now).total_seconds())
-                    self.logger.info(f"Device is sleeping. New refresh rate: {refresh_rate} seconds.")
+                entry_refresh_rate: int | None = entry.get('refresh_rate')
+                if isinstance(entry_refresh_rate, int) and entry_refresh_rate > 0:
+                    refresh_rate = entry_refresh_rate
 
-            except ValueError:
-                self.logger.error("Invalid time format in device config. Use HH:MM.")
+            # Handle sleep schedule
+            sleep_start_str: str | None = device_config.get('sleep_start')
+            sleep_end_str: str | None = device_config.get('sleep_end')
+            if sleep_start_str and sleep_end_str:
+                try:
+                    now_time = now.time()
+                    sleep_start = datetime.strptime(sleep_start_str, "%H:%M").time()
+                    sleep_end = datetime.strptime(sleep_end_str, "%H:%M").time()
+
+                    is_sleeping: bool = False
+                    if sleep_start > sleep_end:  # Overnight
+                        if now_time >= sleep_start or now_time < sleep_end:
+                            is_sleeping = True
+                    else:  # Same day
+                        if sleep_start <= now_time < sleep_end:
+                            is_sleeping = True
+
+                    if is_sleeping:
+                        sleep_end_dt: datetime = now.replace(
+                            hour=sleep_end.hour,
+                            minute=sleep_end.minute,
+                            second=0,
+                            microsecond=0,
+                        )
+                        if now >= sleep_end_dt:
+                            sleep_end_dt += timedelta(days=1)
+
+                        refresh_rate = int((sleep_end_dt - now).total_seconds())
+                        self.logger.info(f"Device is sleeping. New refresh rate: {refresh_rate} seconds.")
+
+                except ValueError:
+                    self.logger.error("Invalid time format in device config. Use HH:MM.")
 
         response: APIDisplayResponse = {
             "filename": f"{time.time()}-{out_filename}",
@@ -219,20 +219,28 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             self.wfile.write(img_io.read())
             return True
 
-        from config import read_config
         config = read_config(self.logger)
         dashboards = config.get('dashboards', [])
+        devices: list[DeviceConfig] = config.get('devices', [])
+
+        # Check device is registered and has this dashboard in its schedule
+        device_config: DeviceConfig | None = next(
+            (d for d in devices if d.get('id') == device_id), None
+        )
+        if device_config is not None:
+            schedule = device_config.get('schedule', [])
+            if not any(e.get('dashboard') == dashboard_name for e in schedule):
+                self.logger.warning(f"Device {device_id} denied access to dashboard '{dashboard_name}'.")
+                return False
+        else:
+            self.logger.warning(f"Device {device_id} not found in devices config.")
+            return False
+
         dashboard_to_render: DashboardConfig | None = None
         for dash in dashboards:
             if dash.get('name') == dashboard_name:
                 dashboard_to_render = dash
                 break
-
-        if dashboard_to_render:
-            allowed_ids = dashboard_to_render.get('allowed_ids')
-            if allowed_ids and device_id not in allowed_ids:
-                self.logger.warning(f"Device {device_id} denied access to dashboard '{dashboard_name}'.")
-                return False
 
         if dashboard_to_render and 'components' in dashboard_to_render:
             t0 = time.perf_counter()

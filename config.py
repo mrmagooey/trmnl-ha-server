@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from models import Config, DashboardConfig
+from models import Config, DashboardConfig, ScheduleEntry
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -25,6 +25,43 @@ DAYS_MAP: dict[str, int] = {
 
 def _validate_config(config: Config, logger: "Logger") -> None:
     """Log warnings for any invalid configuration fields."""
+    devices = config.get("devices")
+    if devices is not None:
+        if not isinstance(devices, list):
+            logger.warning("config: 'devices' must be a list")
+        else:
+            for i, device in enumerate(devices):
+                tag = f"device[{i}]"
+                dev_id = device.get("id")
+                if not dev_id or not isinstance(dev_id, str):
+                    logger.warning(f"config: {tag} missing or invalid 'id'")
+                else:
+                    tag = f"device '{dev_id}'"
+
+                schedule = device.get("schedule")
+                if schedule is not None and not isinstance(schedule, list):
+                    logger.warning(f"config: {tag} 'schedule' must be a list")
+                elif schedule:
+                    for j, entry in enumerate(schedule):
+                        etag = f"{tag} schedule[{j}]"
+                        dashboard_name = entry.get("dashboard")
+                        if not dashboard_name or not isinstance(dashboard_name, str):
+                            logger.warning(f"config: {etag} missing or invalid 'dashboard'")
+
+                        refresh_rate = entry.get("refresh_rate")
+                        if refresh_rate is not None and (not isinstance(refresh_rate, int) or refresh_rate <= 0):
+                            logger.warning(f"config: {etag} 'refresh_rate' must be a positive integer, got {refresh_rate!r}")
+
+                        days_str = entry.get("days_of_the_week")
+                        if days_str is not None:
+                            parts = [p.strip() for p in str(days_str).split("-", 1)]
+                            for part in parts:
+                                if part and part not in VALID_DAYS:
+                                    logger.warning(
+                                        f"config: {etag} unrecognised day {part!r} in 'days_of_the_week'. "
+                                        f"Valid values: {', '.join(sorted(VALID_DAYS))}"
+                                    )
+
     dashboards = config.get("dashboards")
     if dashboards is None:
         return
@@ -41,26 +78,6 @@ def _validate_config(config: Config, logger: "Logger") -> None:
             tag = f"dashboard[{i}] (unnamed)"
         else:
             tag = f"dashboard '{name}'"
-
-        refresh_rate = dashboard.get("refresh_rate")
-        if refresh_rate is not None and (not isinstance(refresh_rate, int) or refresh_rate <= 0):
-            logger.warning(f"config: {tag} 'refresh_rate' must be a positive integer, got {refresh_rate!r}")
-
-        allowed_ids = dashboard.get("allowed_ids")
-        if allowed_ids is not None and not isinstance(allowed_ids, list):
-            logger.warning(f"config: {tag} 'allowed_ids' must be a list")
-
-        visibility = dashboard.get("visibility")
-        if visibility is not None:
-            days_str = visibility.get("days_of_the_week")
-            if days_str is not None:
-                parts = [p.strip() for p in str(days_str).split("-", 1)]
-                for part in parts:
-                    if part and part not in VALID_DAYS:
-                        logger.warning(
-                            f"config: {tag} unrecognised day {part!r} in 'days_of_the_week'. "
-                            f"Valid values: {', '.join(sorted(VALID_DAYS))}"
-                        )
 
         for j, component in enumerate(dashboard.get("components", [])):
             ctype = component.get("type")
@@ -87,18 +104,14 @@ def read_config(logger: "Logger") -> Config:
         return {}
 
 
-def is_dashboard_visible(
-    dashboard: DashboardConfig,
+def is_schedule_entry_visible(
+    entry: ScheduleEntry,
     now: datetime,
     logger: "Logger",
 ) -> bool:
-    """Checks if a dashboard should be visible based on its visibility rules."""
-    visibility = dashboard.get('visibility')
-    if not visibility:
-        return True
-
+    """Checks if a schedule entry should be active based on its time and day rules."""
     # Check day of the week
-    days_of_week_str = visibility.get('days_of_the_week')
+    days_of_week_str = entry.get('days_of_the_week')
     if days_of_week_str:
         current_day_index: int = now.weekday()
 
@@ -120,8 +133,8 @@ def is_dashboard_visible(
             return False
 
     # Check time
-    start_time_str = visibility.get('start_time')
-    end_time_str = visibility.get('end_time')
+    start_time_str = entry.get('start_time')
+    end_time_str = entry.get('end_time')
     if start_time_str and end_time_str:
         try:
             start_time = datetime.strptime(start_time_str, "%H:%M").time()
@@ -135,7 +148,7 @@ def is_dashboard_visible(
                 if not (now_time >= start_time or now_time < end_time):
                     return False
         except ValueError:
-            logger.error(f"Invalid time format in visibility for dashboard {dashboard.get('name')}")
+            logger.error(f"Invalid time format in schedule entry for dashboard '{entry.get('dashboard')}'")
             return False
 
     return True
