@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 # Constants
 COMPONENT_TITLE_FONT_SIZE: int = 35
 NOTO_FONT: str = "NotoSans-Regular.ttf"
+_font_warned: list[bool] = [False]  # logged once to avoid repetition per render
 
 
 def _load_font(size: int, logger: "Logger") -> ImageFont.FreeTypeFont:
@@ -34,7 +35,9 @@ def _load_font(size: int, logger: "Logger") -> ImageFont.FreeTypeFont:
     try:
         return ImageFont.truetype(NOTO_FONT, size)
     except IOError:
-        logger.warning(f"{NOTO_FONT} not found, using default font. Check that the font file is present.")
+        if not _font_warned[0]:
+            logger.warning("%s not found, using default font. Check that the font file is present.", NOTO_FONT)
+            _font_warned[0] = True
         return ImageFont.load_default()
 
 
@@ -143,7 +146,9 @@ def _draw_graph_component(
         font_axes = ImageFont.truetype(NOTO_FONT, 15 * scale)
         font_value = ImageFont.truetype(NOTO_FONT, 30 * scale)
     except IOError:
-        logger.warning(f"{NOTO_FONT} not found. Using default font.")
+        if not _font_warned[0]:
+            logger.warning("%s not found. Using default font.", NOTO_FONT)
+            _font_warned[0] = True
         font_title = ImageFont.load_default()
         font_axes = ImageFont.load_default()
         font_value = ImageFont.load_default()
@@ -309,7 +314,9 @@ def _draw_entity_component(
             title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
             title_width_val = title_bbox[2] - title_bbox[0]
     except IOError:
-        logger.warning(f"{NOTO_FONT} not found. Using default font.")
+        if not _font_warned[0]:
+            logger.warning("%s not found. Using default font.", NOTO_FONT)
+            _font_warned[0] = True
 
     y_tweak: int = 40
     # Draw title
@@ -319,12 +326,9 @@ def _draw_entity_component(
     title_y: float = 20 * scale - y_tweak
     d.text((title_x, title_y), friendly_name, font=font_title, fill='black')
 
-    # Format value
-    logger.debug(value)
     if value is None:
         value_str: str = "N/A"
     elif isinstance(value, float):
-        logger.debug("float")
         value_str = f"{value:.2f}"
     else:
         value_str = str(value)
@@ -410,7 +414,9 @@ def _draw_calendar_component(
         font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
         font_event = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
-        logger.warning(f"{NOTO_FONT} not found. Using default font.")
+        if not _font_warned[0]:
+            logger.warning("%s not found. Using default font.", NOTO_FONT)
+            _font_warned[0] = True
         font_title = ImageFont.load_default()
         font_event = ImageFont.load_default()
 
@@ -436,7 +442,7 @@ def _draw_calendar_component(
 
         for event in events:
             from pprint import pformat as pf
-            logger.debug(pf(event))
+            logger.debug("calendar event: %s", pf(event))
             summary: str = event.get('summary', 'No summary')
             start = event.get('start', {})
             end = event.get('end', {})
@@ -515,7 +521,9 @@ def _draw_entities_component(
         font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
         font_list = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
-        logger.warning(f"{NOTO_FONT} not found. Using default font.")
+        if not _font_warned[0]:
+            logger.warning("%s not found. Using default font.", NOTO_FONT)
+            _font_warned[0] = True
         font_title = ImageFont.load_default()
         font_list = ImageFont.load_default()
 
@@ -602,7 +610,9 @@ def _draw_todo_list_component(
         font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
         font_item = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
-        logger.warning(f"{NOTO_FONT} not found. Using default font.")
+        if not _font_warned[0]:
+            logger.warning("%s not found. Using default font.", NOTO_FONT)
+            _font_warned[0] = True
         font_title = ImageFont.load_default()
         font_item = ImageFont.load_default()
 
@@ -780,7 +790,7 @@ def tile_components(
                 logger,
             )
         else:
-            logger.warning(f"Unknown component type: {component_type}")
+            logger.warning("Unknown component type: %s", component_type)
             return _create_info_image(f"Unknown component:\n{component_type}", tile_width, tile_height, logger)
 
     available_height: int = height - top_margin
@@ -890,8 +900,8 @@ def render_dashboard_image(
                 data = _fetch_calendar_events(calendar_id, days=days, logger=logger)
             else:
                 logger.warning(
-                    f"Calendar component for entity {component.get('friendly_name')} "
-                    f"is missing 'calendar_id' in arguments."
+                    "Calendar component for entity %s is missing 'calendar_id' in arguments.",
+                    component.get('friendly_name'),
                 )
         elif component_type == 'entities':
             entity_list = component.get('entities', [])
@@ -912,7 +922,7 @@ def render_dashboard_image(
             entity_name = component.get('entity_name', '')
             data = _fetch_todo_list(entity_name, logger)
         else:
-            logger.warning(f"Unknown component type {component_type!r} — component will be skipped.")
+            logger.warning("Unknown component type %r — component will be skipped.", component_type)
 
         component_render_data.append({
             'type': component_type or 'unknown',
@@ -934,7 +944,6 @@ def render_dashboard_image(
         draw.text((5, 0), current_time_text, font=font_value, fill='black')
 
         if title:
-            logger.debug("drawing title")
             text_bbox = draw.textbbox((0, 0), title, font=font_value)
             text_width: int = text_bbox[2] - text_bbox[0]
             draw.text(((WIDTH - text_width) / 2, 0), title, font=font_value, fill='black')
@@ -954,7 +963,7 @@ def render_dashboard_image(
                 y: int = 0
                 draw.text((x, y), battery_text, font=font_value, fill='black')
             except (ValueError, TypeError):
-                logger.warning(f"Invalid battery voltage value: {battery_voltage}")
+                logger.warning("Invalid battery voltage value: %s", battery_voltage)
 
         draw.line([(0, TOP_MARGIN - 1), (WIDTH, TOP_MARGIN - 1)], fill='black', width=1)
 
@@ -965,7 +974,7 @@ def render_dashboard_image(
     if rotate in (90, -90):
         final_img = final_img.rotate(rotate, expand=True)
     elif rotate is not None:
-        logger.warning(f"Unsupported rotate value {rotate!r} — must be 90 or -90. Skipping rotation.")
+        logger.warning("Unsupported rotate value %r — must be 90 or -90. Skipping rotation.", rotate)
 
     # Save to memory
     img_io = BytesIO()

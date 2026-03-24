@@ -84,7 +84,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 v: float = float(battery_voltage_header)
                 server_state.set_battery_voltage(device_id, v)
             except ValueError:
-                self.logger.warning(f"Invalid Battery-Voltage header: {battery_voltage_header}")
+                self.logger.warning("Invalid Battery-Voltage header: %s", battery_voltage_header)
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
@@ -95,7 +95,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         devices: list[DeviceConfig] = config.get('devices', [])
 
         now: datetime = datetime.now()
-        self.logger.debug(f"Request from device: {device_id}")
+        self.logger.debug("Request from device: %s", device_id)
 
         device_config: DeviceConfig | None = find_device(devices, device_id)
 
@@ -103,7 +103,9 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         image_url: str = f"{SERVER_NAME}/static/{out_filename}"
         refresh_rate: int = self.refresh_rate
 
-        if device_config is not None:
+        if device_config is None:
+            self.logger.warning("Device %s not found in devices config.", device_id)
+        else:
             schedule: list[ScheduleEntry] = device_config.get('schedule', [])
 
             visible_entries: list[ScheduleEntry] = [
@@ -124,6 +126,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 dashboard_name: str = entry.get('dashboard', 'unknown')
                 out_filename = f"{dashboard_name}.png"
                 image_url = f"{SERVER_NAME}/static/{out_filename}"
+                self.logger.info("Device %s → dashboard '%s'", device_id, dashboard_name)
 
                 entry_refresh_rate: int | None = entry.get('refresh_rate')
                 if isinstance(entry_refresh_rate, int) and entry_refresh_rate > 0:
@@ -156,7 +159,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                             sleep_end_dt += timedelta(days=1)
 
                         refresh_rate = int((sleep_end_dt - now).total_seconds())
-                        self.logger.info(f"Device is sleeping. New refresh rate: {refresh_rate} seconds.")
+                        self.logger.info("Device %s is sleeping. Refresh rate: %d seconds.", device_id, refresh_rate)
 
                 except ValueError:
                     self.logger.error("Invalid time format in device config. Use HH:MM.")
@@ -186,7 +189,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         device_id: str = self._get_device_id()
         dashboard_name: str = self.path.split('/')[-1][:-4]
 
-        self.logger.debug(dashboard_name)
+        self.logger.debug("static request: %s", dashboard_name)
         if dashboard_name == 'no_dashboard_visible':
             img: Image.Image = _create_info_image(
                 "No dashboard is scheduled for display.",
@@ -217,10 +220,10 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         if device_config is not None:
             schedule = device_config.get('schedule', [])
             if not any(e.get('dashboard') == dashboard_name for e in schedule):
-                self.logger.warning(f"Device {device_id} denied access to dashboard '{dashboard_name}'.")
+                self.logger.warning("Device %s denied access to dashboard '%s'.", device_id, dashboard_name)
                 return False
         else:
-            self.logger.warning(f"Device {device_id} not found in devices config.")
+            self.logger.warning("Device %s not found in devices config.", device_id)
             return False
 
         dashboard_to_render: DashboardConfig | None = None
@@ -248,7 +251,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Handle GET requests."""
-        self.logger.info("--- GET Request ---\nPath: %s\nHeaders:\n%s", self.path, str(self.headers))
+        self.logger.debug("GET %s\nHeaders:\n%s", self.path, str(self.headers))
         try:
             if self.path == '/api/setup':
                 self._handle_api_setup()
@@ -291,8 +294,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 except json.JSONDecodeError:
                     pass  # Not json, log as is
 
-            self.logger.info(
-                "--- POST Request ---\nPath: %s\nHeaders:\n%s\nBody:\n%s",
+            self.logger.debug(
+                "POST %s\nHeaders:\n%s\nBody:\n%s",
                 self.path,
                 str(self.headers),
                 log_body,

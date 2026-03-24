@@ -34,23 +34,23 @@ def _validate_config(config: Config, logger: "Logger") -> None:
                 tag = f"device[{i}]"
                 dev_id = device.get("id")
                 if not dev_id or not isinstance(dev_id, str):
-                    logger.warning(f"config: {tag} missing or invalid 'id'")
+                    logger.warning("config: %s missing or invalid 'id'", tag)
                 else:
                     tag = f"device '{dev_id}'"
 
                 schedule = device.get("schedule")
                 if schedule is not None and not isinstance(schedule, list):
-                    logger.warning(f"config: {tag} 'schedule' must be a list")
+                    logger.warning("config: %s 'schedule' must be a list", tag)
                 elif schedule:
                     for j, entry in enumerate(schedule):
                         etag = f"{tag} schedule[{j}]"
                         dashboard_name = entry.get("dashboard")
                         if not dashboard_name or not isinstance(dashboard_name, str):
-                            logger.warning(f"config: {etag} missing or invalid 'dashboard'")
+                            logger.warning("config: %s missing or invalid 'dashboard'", etag)
 
                         refresh_rate = entry.get("refresh_rate")
                         if refresh_rate is not None and (not isinstance(refresh_rate, int) or refresh_rate <= 0):
-                            logger.warning(f"config: {etag} 'refresh_rate' must be a positive integer, got {refresh_rate!r}")
+                            logger.warning("config: %s 'refresh_rate' must be a positive integer, got %r", etag, refresh_rate)
 
                         days_str = entry.get("days_of_the_week")
                         if days_str is not None:
@@ -58,8 +58,8 @@ def _validate_config(config: Config, logger: "Logger") -> None:
                             for part in parts:
                                 if part and part not in VALID_DAYS:
                                     logger.warning(
-                                        f"config: {etag} unrecognised day {part!r} in 'days_of_the_week'. "
-                                        f"Valid values: {', '.join(sorted(VALID_DAYS))}"
+                                        "config: %s unrecognised day %r in 'days_of_the_week'. Valid values: %s",
+                                        etag, part, ', '.join(sorted(VALID_DAYS))
                                     )
 
     dashboards = config.get("dashboards")
@@ -74,7 +74,7 @@ def _validate_config(config: Config, logger: "Logger") -> None:
 
         name = dashboard.get("name")
         if not name or not isinstance(name, str):
-            logger.warning(f"config: {tag} missing or invalid 'name'")
+            logger.warning("config: %s missing or invalid 'name'", tag)
             tag = f"dashboard[{i}] (unnamed)"
         else:
             tag = f"dashboard '{name}'"
@@ -83,8 +83,8 @@ def _validate_config(config: Config, logger: "Logger") -> None:
             ctype = component.get("type")
             if ctype is not None and ctype not in VALID_COMPONENT_TYPES:
                 logger.warning(
-                    f"config: {tag} component[{j}] unknown type {ctype!r}. "
-                    f"Valid types: {', '.join(sorted(VALID_COMPONENT_TYPES))}"
+                    "config: %s component[%d] unknown type %r. Valid types: %s",
+                    tag, j, ctype, ', '.join(sorted(VALID_COMPONENT_TYPES))
                 )
 
 
@@ -97,10 +97,10 @@ def read_config(logger: "Logger") -> Config:
             _validate_config(config, logger)
             return config
     except FileNotFoundError:
-        logger.error(f"'{config_path}' not found.")
+        logger.error("'%s' not found.", config_path)
         return {}
     except yaml.YAMLError as e:
-        logger.error(f"Error parsing '{config_path}': {e}")
+        logger.error("Error parsing '%s': %s", config_path, e)
         return {}
 
 
@@ -151,7 +151,7 @@ def is_schedule_entry_visible(
                 if not (now_time >= start_time or now_time < end_time):
                     return False
         except ValueError:
-            logger.error(f"Invalid time format in schedule entry for dashboard '{entry.get('dashboard')}'")
+            logger.error("Invalid time format in schedule entry for dashboard '%s'", entry.get('dashboard'))
             return False
 
     return True

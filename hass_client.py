@@ -73,13 +73,13 @@ def get_entity_state(
             data: str = response.read().decode()
             obj: EntityState = json.loads(data)
             from pprint import pformat as pf
-            logger.debug(pf(obj))
+            logger.debug("entity state for %s: %s", entity_name, pf(obj))
             return obj
     except HTTPError as e:
-        logger.error(f"HTTP Error getting {entity_name}: {e.code} {e.reason}")
+        logger.error("HTTP error getting %s: %d %s", entity_name, e.code, e.reason)
         return None
     except URLError as e:
-        logger.error(f"URL Error getting {entity_name}: {e.reason}")
+        logger.error("URL error getting %s: %s", entity_name, e.reason)
         return None
 
 
@@ -113,10 +113,10 @@ def _fetch_history(
             data: str = response.read().decode()
             return json.loads(data)
     except HTTPError as e:
-        logger.error(f"HTTP Error getting history for {entity_name}: {e.code} {e.reason}")
+        logger.error("HTTP error getting history for %s: %d %s", entity_name, e.code, e.reason)
         return None
     except URLError as e:
-        logger.error(f"URL Error getting history for {entity_name}: {e.reason}")
+        logger.error("URL error getting history for %s: %s", entity_name, e.reason)
         return None
 
 
@@ -164,10 +164,10 @@ def _fetch_calendar_events(
         logger.error("Invalid time format in calendar arguments. Use HH:MM.")
         return []
     except HTTPError as e:
-        logger.error(f"HTTP Error getting calendar {calendar_id}: {e.code} {e.reason}")
+        logger.error("HTTP error getting calendar %s: %d %s", calendar_id, e.code, e.reason)
         return []
     except URLError as e:
-        logger.error(f"URL Error getting calendar {calendar_id}: {e.reason}")
+        logger.error("URL error getting calendar %s: %s", calendar_id, e.reason)
         return []
 
 
@@ -229,10 +229,10 @@ def _fetch_todo_list(
             
             return items
     except HTTPError as e:
-        logger.error(f"HTTP Error getting todo list {entity_name}: {e.code} {e.reason}")
+        logger.error("HTTP error getting todo list %s: %d %s", entity_name, e.code, e.reason)
         return []
     except URLError as e:
-        logger.error(f"URL Error getting todo list {entity_name}: {e.reason}")
+        logger.error("URL error getting todo list %s: %s", entity_name, e.reason)
         return []
 
 
