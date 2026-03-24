@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from models import Config, DashboardConfig, ScheduleEntry
+from models import Config, DashboardConfig, DeviceConfig, ScheduleEntry
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -104,13 +104,17 @@ def read_config(logger: "Logger") -> Config:
         return {}
 
 
+def find_device(devices: list[DeviceConfig], device_id: str) -> DeviceConfig | None:
+    """Return the DeviceConfig whose id matches device_id, or None."""
+    return next((d for d in devices if d.get('id') == device_id), None)
+
+
 def is_schedule_entry_visible(
     entry: ScheduleEntry,
     now: datetime,
     logger: "Logger",
 ) -> bool:
     """Checks if a schedule entry should be active based on its time and day rules."""
-    # Check day of the week
     days_of_week_str = entry.get('days_of_the_week')
     if days_of_week_str:
         current_day_index: int = now.weekday()
@@ -132,7 +136,6 @@ def is_schedule_entry_visible(
         if not allowed_days or current_day_index not in allowed_days:
             return False
 
-    # Check time
     start_time_str = entry.get('start_time')
     end_time_str = entry.get('end_time')
     if start_time_str and end_time_str:

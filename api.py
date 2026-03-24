@@ -19,7 +19,7 @@ from components import (
     eink_display,
     tile_components,
 )
-from config import read_config, is_schedule_entry_visible
+from config import read_config, is_schedule_entry_visible, find_device
 from hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
@@ -97,10 +97,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         now: datetime = datetime.now()
         self.logger.debug(f"Request from device: {device_id}")
 
-        # Find device config
-        device_config: DeviceConfig | None = next(
-            (d for d in devices if d.get('id') == device_id), None
-        )
+        device_config: DeviceConfig | None = find_device(devices, device_id)
 
         out_filename: str = "no_dashboard_visible.png"
         image_url: str = f"{SERVER_NAME}/static/{out_filename}"
@@ -109,7 +106,6 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         if device_config is not None:
             schedule: list[ScheduleEntry] = device_config.get('schedule', [])
 
-            # Filter schedule entries by time/day visibility
             visible_entries: list[ScheduleEntry] = [
                 e for e in schedule if is_schedule_entry_visible(e, now, self.logger)
             ]
@@ -118,11 +114,6 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 self.logger.debug("visible schedule entries: %s", visible_entries)
 
             if visible_entries:
-                # Build a lookup map for dashboard configs
-                dashboard_map: dict[str, DashboardConfig] = {
-                    d['name']: d for d in dashboards if 'name' in d
-                }
-
                 with _dashboard_lock:
                     idx = _device_indices.get(device_id, 0)
                     if idx >= len(visible_entries):
@@ -138,7 +129,6 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 if isinstance(entry_refresh_rate, int) and entry_refresh_rate > 0:
                     refresh_rate = entry_refresh_rate
 
-            # Handle sleep schedule
             sleep_start_str: str | None = device_config.get('sleep_start')
             sleep_end_str: str | None = device_config.get('sleep_end')
             if sleep_start_str and sleep_end_str:
@@ -223,10 +213,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         dashboards = config.get('dashboards', [])
         devices: list[DeviceConfig] = config.get('devices', [])
 
-        # Check device is registered and has this dashboard in its schedule
-        device_config: DeviceConfig | None = next(
-            (d for d in devices if d.get('id') == device_id), None
-        )
+        device_config: DeviceConfig | None = find_device(devices, device_id)
         if device_config is not None:
             schedule = device_config.get('schedule', [])
             if not any(e.get('dashboard') == dashboard_name for e in schedule):
