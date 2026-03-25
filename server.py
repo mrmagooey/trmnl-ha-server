@@ -8,7 +8,7 @@ import signal
 import socketserver
 import time
 from argparse import ArgumentParser, Namespace
-from logging import getLogger, StreamHandler, Formatter, DEBUG
+from logging import getLogger, StreamHandler, Formatter, DEBUG, INFO
 from logging.handlers import RotatingFileHandler
 from os import makedirs, path, environ
 from tempfile import gettempdir
@@ -33,7 +33,7 @@ def setup_logging() -> Logger:
 
     log_file: str = path.join(log_dir, "log")
     logger = getLogger(__name__)
-    logger.setLevel(DEBUG)
+    logger.setLevel(DEBUG if environ.get("DEBUG") else INFO)
 
     stream_handler = StreamHandler()
     file_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=3)

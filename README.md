@@ -25,6 +25,7 @@ A Python HTTP server that fetches data from Home Assistant and renders black-and
 | `SERVER_NAME` | Yes | Externally reachable base URL of this server (e.g. `https://trmnl.example.com`). Used to build `image_url` in `/api/display` responses. |
 | `CONFIG_PATH` | No | Path to the config file (default: `config.yaml`) |
 | `PORT` | No | Port to listen on (default: `8000`) |
+| `DEBUG` | No | Set to any non-empty value to enable debug logging |
 
 ### Configuration File (`config.yaml`)
 

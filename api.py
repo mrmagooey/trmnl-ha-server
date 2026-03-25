@@ -19,7 +19,7 @@ from components import (
     eink_display,
     tile_components,
 )
-from config import read_config, is_schedule_entry_visible, find_device
+from config import read_config, is_schedule_entry_visible, find_device, _coerce_time
 from hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
@@ -114,6 +114,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
         if device_config is None:
             self.logger.warning("Device %s not found in devices config.", label)
+            out_filename = "device_not_found.png"
+            image_url = f"{SERVER_NAME}/static/{out_filename}"
         else:
             schedule: list[ScheduleEntry] = device_config.get('schedule', [])
 
@@ -146,8 +148,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             if sleep_start_str and sleep_end_str:
                 try:
                     now_time = now.time()
-                    sleep_start = datetime.strptime(str(sleep_start_str), "%H:%M").time()
-                    sleep_end = datetime.strptime(str(sleep_end_str), "%H:%M").time()
+                    sleep_start = datetime.strptime(_coerce_time(sleep_start_str), "%H:%M").time()
+                    sleep_end = datetime.strptime(_coerce_time(sleep_end_str), "%H:%M").time()
 
                     is_sleeping: bool = False
                     if sleep_start > sleep_end:  # Overnight
@@ -199,9 +201,13 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         dashboard_name: str = self.path.split('/')[-1][:-4]
 
         self.logger.debug("static request: %s", dashboard_name)
-        if dashboard_name == 'no_dashboard_visible':
+        info_messages: dict[str, str] = {
+            'no_dashboard_visible': "No dashboard is scheduled for display.",
+            'device_not_found': f"Device {device_id} not found.",
+        }
+        if dashboard_name in info_messages:
             img: Image.Image = _create_info_image(
-                "No dashboard is scheduled for display.",
+                info_messages[dashboard_name],
                 800,
                 480,
                 self.logger,

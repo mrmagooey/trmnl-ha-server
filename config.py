@@ -15,6 +15,17 @@ from models import Config, DashboardConfig, DeviceConfig, ScheduleEntry
 if TYPE_CHECKING:
     from logging import Logger
 
+def _coerce_time(value: object) -> str:
+    """Convert a time value to HH:MM string.
+
+    PyYAML (YAML 1.1) parses unquoted HH:MM as a sexagesimal integer
+    (e.g. 06:00 → 360). This converts it back to a parseable string.
+    """
+    if isinstance(value, int):
+        return f"{value // 60:02d}:{value % 60:02d}"
+    return str(value)
+
+
 VALID_COMPONENT_TYPES = {"history_graph", "entity", "calendar", "entities", "todo_list"}
 VALID_DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 DAYS_MAP: dict[str, int] = {
@@ -144,8 +155,8 @@ def is_schedule_entry_visible(
     end_time_str = entry.get('end_time')
     if start_time_str and end_time_str:
         try:
-            start_time = datetime.strptime(str(start_time_str), "%H:%M").time()
-            end_time = datetime.strptime(str(end_time_str), "%H:%M").time()
+            start_time = datetime.strptime(_coerce_time(start_time_str), "%H:%M").time()
+            end_time = datetime.strptime(_coerce_time(end_time_str), "%H:%M").time()
             now_time = now.time()
 
             if start_time <= end_time:  # Same day
