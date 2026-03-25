@@ -37,6 +37,7 @@ Each entry defines a device, its optional sleep window, and a schedule of dashbo
 ```yaml
 devices:
   - id: "AA:BB:CC:DD:EE:FF"   # MAC address sent by device in the 'ID' header
+    name: "Living Room"        # Optional: human-readable name (used in log messages)
     sleep_start: "23:00"       # Optional: start of sleep window (HH:MM local time)
     sleep_end: "06:00"         # Optional: end of sleep window (HH:MM local time)
     schedule:

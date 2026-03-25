@@ -40,6 +40,14 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         self.logger = logger
         super().__init__(*args, **kwargs)
 
+    def _device_label(self, device_config: "DeviceConfig | None", device_id: str) -> str:
+        """Returns 'name (id)' if the device has a name, otherwise just the id."""
+        if device_config is not None:
+            name: str | None = device_config.get('name')
+            if name:
+                return f"{name} ({device_id})"
+        return device_id
+
     def _get_device_id(self) -> str:
         """Gets the device ID from the ID header, falling back to the request IP.
 
@@ -95,16 +103,17 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         devices: list[DeviceConfig] = config.get('devices', [])
 
         now: datetime = datetime.now()
-        self.logger.debug("Request from device: %s", device_id)
-
         device_config: DeviceConfig | None = find_device(devices, device_id)
+        label: str = self._device_label(device_config, device_id)
+
+        self.logger.debug("Request from device: %s", label)
 
         out_filename: str = "no_dashboard_visible.png"
         image_url: str = f"{SERVER_NAME}/static/{out_filename}"
         refresh_rate: int = self.refresh_rate
 
         if device_config is None:
-            self.logger.warning("Device %s not found in devices config.", device_id)
+            self.logger.warning("Device %s not found in devices config.", label)
         else:
             schedule: list[ScheduleEntry] = device_config.get('schedule', [])
 
@@ -126,7 +135,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 dashboard_name: str = entry.get('dashboard', 'unknown')
                 out_filename = f"{dashboard_name}.png"
                 image_url = f"{SERVER_NAME}/static/{out_filename}"
-                self.logger.info("Device %s → dashboard '%s'", device_id, dashboard_name)
+                self.logger.info("Device %s → dashboard '%s'", label, dashboard_name)
 
                 entry_refresh_rate: int | None = entry.get('refresh_rate')
                 if isinstance(entry_refresh_rate, int) and entry_refresh_rate > 0:
@@ -137,8 +146,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             if sleep_start_str and sleep_end_str:
                 try:
                     now_time = now.time()
-                    sleep_start = datetime.strptime(sleep_start_str, "%H:%M").time()
-                    sleep_end = datetime.strptime(sleep_end_str, "%H:%M").time()
+                    sleep_start = datetime.strptime(str(sleep_start_str), "%H:%M").time()
+                    sleep_end = datetime.strptime(str(sleep_end_str), "%H:%M").time()
 
                     is_sleeping: bool = False
                     if sleep_start > sleep_end:  # Overnight
@@ -159,7 +168,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                             sleep_end_dt += timedelta(days=1)
 
                         refresh_rate = int((sleep_end_dt - now).total_seconds())
-                        self.logger.info("Device %s is sleeping. Refresh rate: %d seconds.", device_id, refresh_rate)
+                        self.logger.info("Device %s is sleeping. Refresh rate: %d seconds.", label, refresh_rate)
 
                 except ValueError:
                     self.logger.error("Invalid time format in device config. Use HH:MM.")
@@ -217,13 +226,14 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         devices: list[DeviceConfig] = config.get('devices', [])
 
         device_config: DeviceConfig | None = find_device(devices, device_id)
+        label: str = self._device_label(device_config, device_id)
         if device_config is not None:
             schedule = device_config.get('schedule', [])
             if not any(e.get('dashboard') == dashboard_name for e in schedule):
-                self.logger.warning("Device %s denied access to dashboard '%s'.", device_id, dashboard_name)
+                self.logger.warning("Device %s denied access to dashboard '%s'.", label, dashboard_name)
                 return False
         else:
-            self.logger.warning("Device %s not found in devices config.", device_id)
+            self.logger.warning("Device %s not found in devices config.", label)
             return False
 
         dashboard_to_render: DashboardConfig | None = None

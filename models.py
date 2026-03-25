@@ -61,6 +61,7 @@ class DashboardConfig(TypedDict, total=False):
 class DeviceConfig(TypedDict, total=False):
     """Per-device configuration."""
     id: Required[str]
+    name: str
     sleep_start: str
     sleep_end: str
     schedule: list[ScheduleEntry]

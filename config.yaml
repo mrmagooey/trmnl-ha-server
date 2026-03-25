@@ -4,6 +4,8 @@ devices:
   - # The device ID sent by the TRMNL firmware in the 'ID' HTTP header (MAC address).
     # Fallback: IP address if no ID header is present.
     id: "AA:BB:CC:DD:EE:FF"
+    # Optional human-readable name for this device (used in log messages).
+    name: "Living Room"
 
     # Optional sleep window (local time, HH:MM). During this window the server
     # overrides the refresh_rate to the number of seconds until sleep_end.

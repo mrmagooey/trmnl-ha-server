@@ -38,6 +38,10 @@ def _validate_config(config: Config, logger: "Logger") -> None:
                 else:
                     tag = f"device '{dev_id}'"
 
+                name = device.get("name")
+                if name is not None and not isinstance(name, str):
+                    logger.warning("config: %s 'name' must be a string", tag)
+
                 schedule = device.get("schedule")
                 if schedule is not None and not isinstance(schedule, list):
                     logger.warning("config: %s 'schedule' must be a list", tag)
@@ -140,8 +144,8 @@ def is_schedule_entry_visible(
     end_time_str = entry.get('end_time')
     if start_time_str and end_time_str:
         try:
-            start_time = datetime.strptime(start_time_str, "%H:%M").time()
-            end_time = datetime.strptime(end_time_str, "%H:%M").time()
+            start_time = datetime.strptime(str(start_time_str), "%H:%M").time()
+            end_time = datetime.strptime(str(end_time_str), "%H:%M").time()
             now_time = now.time()
 
             if start_time <= end_time:  # Same day
