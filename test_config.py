@@ -5,7 +5,7 @@ from unittest import mock
 from datetime import datetime
 from io import StringIO
 
-from config import read_config, is_schedule_entry_visible
+from config import read_config, is_schedule_entry_visible, _coerce_time, find_device
 
 
 class TestReadConfig(unittest.TestCase):
@@ -227,6 +227,68 @@ class TestIsScheduleEntryVisible(unittest.TestCase):
         result = is_schedule_entry_visible(entry, now, self.mock_logger)
 
         self.assertFalse(result)
+
+    def test_integer_time_values(self):
+        """Test that YAML-parsed sexagesimal integers are handled correctly."""
+        entry = {
+            'dashboard': 'test',
+            'start_time': 540,   # 9*60 = 09:00
+            'end_time': 1020,    # 17*60 = 17:00
+        }
+        now = datetime(2025, 1, 15, 12, 0)
+
+        result = is_schedule_entry_visible(entry, now, self.mock_logger)
+
+        self.assertTrue(result)
+
+    def test_integer_time_values_outside_range(self):
+        """Test that integer times correctly exclude out-of-range times."""
+        entry = {
+            'dashboard': 'test',
+            'start_time': 540,   # 09:00
+            'end_time': 1020,    # 17:00
+        }
+        now = datetime(2025, 1, 15, 8, 0)
+
+        result = is_schedule_entry_visible(entry, now, self.mock_logger)
+
+        self.assertFalse(result)
+
+
+class TestCoerceTime(unittest.TestCase):
+    """Tests for _coerce_time helper."""
+
+    def test_integer_converts_to_hhmm(self):
+        self.assertEqual(_coerce_time(360), "06:00")   # 6*60
+
+    def test_integer_with_minutes(self):
+        self.assertEqual(_coerce_time(570), "09:30")   # 9*60+30
+
+    def test_midnight(self):
+        self.assertEqual(_coerce_time(0), "00:00")
+
+    def test_string_passthrough(self):
+        self.assertEqual(_coerce_time("09:00"), "09:00")
+
+    def test_string_with_leading_zero(self):
+        self.assertEqual(_coerce_time("06:00"), "06:00")
+
+
+class TestFindDevice(unittest.TestCase):
+    """Tests for find_device helper."""
+
+    def test_finds_matching_device(self):
+        devices = [{'id': 'AA:BB'}, {'id': 'CC:DD'}]
+        result = find_device(devices, 'CC:DD')
+        self.assertEqual(result, {'id': 'CC:DD'})
+
+    def test_returns_none_when_not_found(self):
+        devices = [{'id': 'AA:BB'}]
+        result = find_device(devices, 'ZZ:ZZ')
+        self.assertIsNone(result)
+
+    def test_returns_none_for_empty_list(self):
+        self.assertIsNone(find_device([], 'AA:BB'))
 
 
 if __name__ == '__main__':

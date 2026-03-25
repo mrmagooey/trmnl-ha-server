@@ -107,8 +107,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
             if device_config is None:
                 self.logger.warning("Device %s not found in devices config.", label)
-                out_filename = "device_not_found.png"
-                image_url = f"{SERVER_NAME}/static/{out_filename}"
+                image_url = f"{SERVER_NAME}/static/device_id/{device_id.replace(':', '-')}.png"
             else:
                 out_filename = "no_dashboard_visible.png"
                 image_url = f"{SERVER_NAME}/static/{out_filename}"
@@ -131,7 +130,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
                     dashboard_name: str = entry.get('dashboard', 'unknown')
                     out_filename = f"{dashboard_name}.png"
-                    image_url = f"{SERVER_NAME}/static/{out_filename}"
+                    encoded_id: str = device_id.replace(':', '-')
+                    image_url = f"{SERVER_NAME}/static/{encoded_id}/{out_filename}"
                     self.logger.info("Device %s → dashboard '%s'", label, dashboard_name)
 
                     entry_refresh_rate: int | None = entry.get('refresh_rate')
@@ -183,6 +183,28 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             self.logger.debug("display response: %s", pf(response))
         self.wfile.write(json.dumps(response).encode('utf-8'))
 
+    def _send_png(self, img_io: BytesIO) -> None:
+        """Send a PNG BytesIO as a 200 image/png response."""
+        img_io.seek(0, SEEK_END)
+        img_size: int = img_io.tell()
+        img_io.seek(0)
+        self.send_response(200)
+        self.send_header("Content-type", "image/png")
+        self.send_header("Content-length", str(img_size))
+        self.end_headers()
+        self.wfile.write(img_io.read())
+
+    def _serve_info_image(self, message: str) -> bool:
+        """Render and serve a plain text info image."""
+        from PIL import Image
+
+        img: Image.Image = _create_info_image(message, 800, 480, self.logger)
+        temp_io = BytesIO()
+        img.save(temp_io, 'PNG')
+        temp_io.seek(0)
+        self._send_png(eink_display(temp_io))
+        return True
+
     def _handle_static_png(self) -> bool:
         """Handle static PNG image requests.
         
@@ -190,10 +212,21 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             True if request was handled, False otherwise
         """
         from datetime import datetime
-        from PIL import Image
-        
+
         device_id: str | None = self._get_device_id()
-        dashboard_name: str = self.path.split('/')[-1][:-4]
+
+        # /static/device_id/<id>.png — show the device its own ID
+        if self.path.startswith('/static/device_id/'):
+            path_device_id: str = self.path[len('/static/device_id/'):-4].replace('-', ':')
+            return self._serve_info_image(f"Device ID: {path_device_id}")
+
+        # /static/<encoded_id>/<dashboard>.png — device ID embedded in path
+        path_parts = self.path[len('/static/'):].split('/')
+        if len(path_parts) == 2:
+            device_id = path_parts[0].replace('-', ':')
+            dashboard_name: str = path_parts[1][:-4]
+        else:
+            dashboard_name = self.path.split('/')[-1][:-4]
 
         self.logger.debug("static request: %s", dashboard_name)
         info_messages: dict[str, str] = {
@@ -201,26 +234,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             'device_not_found': f"Device {device_id or 'unknown'} not found.",
         }
         if dashboard_name in info_messages:
-            img: Image.Image = _create_info_image(
-                info_messages[dashboard_name],
-                800,
-                480,
-                self.logger,
-            )
-            temp_io = BytesIO()
-            img.save(temp_io, 'PNG')
-            temp_io.seek(0)
-            img_io: BytesIO = eink_display(temp_io)
-
-            img_io.seek(0, SEEK_END)
-            img_size: int = img_io.tell()
-            img_io.seek(0)
-            self.send_response(200)
-            self.send_header("Content-type", "image/png")
-            self.send_header("Content-length", str(img_size))
-            self.end_headers()
-            self.wfile.write(img_io.read())
-            return True
+            return self._serve_info_image(info_messages[dashboard_name])
 
         config = read_config(self.logger)
         dashboards = config.get('dashboards', [])
@@ -249,14 +263,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             img_io = render_dashboard_image(dashboard_to_render, self.logger, device_id)
             self.logger.info("rendered '%s' in %.2fs", dashboard_name, time.perf_counter() - t0)
             if img_io:
-                img_io.seek(0, SEEK_END)
-                img_size = img_io.tell()
-                img_io.seek(0)
-                self.send_response(200)
-                self.send_header("Content-type", "image/png")
-                self.send_header("Content-length", str(img_size))
-                self.end_headers()
-                self.wfile.write(img_io.read())
+                self._send_png(img_io)
                 return True
 
         return False

@@ -79,6 +79,107 @@ class TestAPISimple(unittest.TestCase):
 
         self.assertIsNone(device_id)
     
+    @mock.patch('api.read_config')
+    def test_api_display_no_id_header_returns_device_not_found(self, mock_read_config):
+        """Test that requests without an ID header get device_not_found image."""
+        handler = self.create_handler('/api/display')
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertIn('device_not_found.png', response['image_url'])
+        mock_read_config.assert_not_called()
+
+    @mock.patch('api.read_config')
+    def test_api_display_unknown_device_uses_device_id_url(self, mock_read_config):
+        """Test that an unknown device gets a personalised /static/device_id/ URL."""
+        mock_read_config.return_value = {'devices': [], 'dashboards': []}
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertIn('/static/device_id/AA-BB-CC-DD-EE-FF.png', response['image_url'])
+
+    @mock.patch('api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('api.read_config')
+    def test_api_display_known_device_returns_dashboard_url(self, mock_read_config, _):
+        """Test that a known device with an active schedule entry gets the correct dashboard URL."""
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [{'dashboard': 'morning', 'refresh_rate': 300}]}],
+            'dashboards': [],
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertIn('/static/AA-BB-CC-DD-EE-FF/morning.png', response['image_url'])
+        self.assertEqual(response['refresh_rate'], 300)
+
+    @mock.patch('api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('api.read_config')
+    def test_api_display_cycles_through_visible_entries(self, mock_read_config, _):
+        """Test that successive calls from the same device rotate through visible dashboards."""
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [
+                {'dashboard': 'first'},
+                {'dashboard': 'second'},
+            ]}],
+            'dashboards': [],
+        }
+        headers = {'ID': 'AA:BB:CC:DD:EE:FF'}
+
+        handler1 = self.create_handler('/api/display', headers)
+        handler1._handle_api_display()
+        handler1.wfile.seek(0)
+        response1 = json.loads(handler1.wfile.read().decode())
+
+        handler2 = self.create_handler('/api/display', headers)
+        handler2._handle_api_display()
+        handler2.wfile.seek(0)
+        response2 = json.loads(handler2.wfile.read().decode())
+
+        self.assertIn('first.png', response1['image_url'])
+        self.assertIn('second.png', response2['image_url'])
+
+    def test_static_device_id_url_restores_colons(self):
+        """Test that /static/device_id/ URL decodes hyphens back to colons in the image message."""
+        handler = self.create_handler('/static/device_id/AA-BB-CC-DD-EE-FF.png')
+        handler._serve_info_image = mock.Mock(return_value=True)
+
+        handler._handle_static_png()
+
+        handler._serve_info_image.assert_called_once_with('Device ID: AA:BB:CC:DD:EE:FF')
+
+    @mock.patch('api.read_config')
+    def test_static_png_device_not_in_schedule_returns_false(self, mock_read_config):
+        """Test that a device is denied access to a dashboard not in its schedule."""
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [{'dashboard': 'other'}]}],
+            'dashboards': [],
+        }
+        handler = self.create_handler('/static/morning.png', {'ID': 'AA:BB:CC:DD:EE:FF'})
+
+        result = handler._handle_static_png()
+
+        self.assertFalse(result)
+        handler.logger.warning.assert_called()
+
+    @mock.patch('api.read_config')
+    def test_static_png_unknown_device_returns_false(self, mock_read_config):
+        """Test that an unknown device is denied access to any dashboard."""
+        mock_read_config.return_value = {'devices': [], 'dashboards': []}
+        handler = self.create_handler('/static/morning.png', {'ID': 'AA:BB:CC:DD:EE:FF'})
+
+        result = handler._handle_static_png()
+
+        self.assertFalse(result)
+        handler.logger.warning.assert_called()
+
     @mock.patch.object(APICalls, '_handle_api_setup')
     def test_get_setup(self, mock_handle_setup):
         """Test GET request to /api/setup."""
