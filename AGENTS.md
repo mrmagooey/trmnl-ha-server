@@ -12,10 +12,10 @@ uv pip install -r requirements.txt
 python3 server.py
 
 # Run all tests
-python3 -m unittest test_server.py
+uv run pytest test_config.py test_api.py -v
 
 # Run a single test
-python3 -m unittest test_server.TestServer.test_render_dashboard_image
+uv run pytest test_api.py::TestAPISimple::test_api_setup -v
 
 # Type checking (if mypy is installed)
 mypy server.py
@@ -56,6 +56,7 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 - Check environment variables before use
 
 ### Testing
+- **Always run the full test suite after making any code changes** (`uv run pytest test_config.py test_api.py -v`) and fix any failures before considering the task complete
 - Use standard `unittest` framework
 - Use `@mock.patch` for mocking external dependencies
 - Test files: `test_<module>.py`

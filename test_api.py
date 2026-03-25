@@ -71,23 +71,13 @@ class TestAPISimple(unittest.TestCase):
 
         self.assertEqual(device_id, 'AA:BB:CC:DD:EE:FF')
 
-    def test_get_device_id_from_forwarded_for(self):
-        """Test getting device ID from X-Forwarded-For when no ID header."""
-        headers = {'X-Forwarded-For': '192.168.1.1, 10.0.0.1'}
-        handler = self.create_handler('/api/display', headers)
-
-        device_id = handler._get_device_id()
-
-        self.assertEqual(device_id, '192.168.1.1')
-
-    def test_get_device_id_fallback_to_client_address(self):
-        """Test falling back to client_address when no headers present."""
+    def test_get_device_id_returns_none_when_no_id_header(self):
+        """Test that None is returned when the ID header is absent."""
         handler = self.create_handler('/api/display')
-        handler.client_address = ('10.0.0.1', 12345)
 
         device_id = handler._get_device_id()
 
-        self.assertEqual(device_id, '10.0.0.1')
+        self.assertIsNone(device_id)
     
     @mock.patch.object(APICalls, '_handle_api_setup')
     def test_get_setup(self, mock_handle_setup):
