@@ -214,19 +214,20 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         from datetime import datetime
 
         device_id: str | None = self._get_device_id()
+        path: str = self.path.split('?')[0]
 
         # /static/device_id/<id>.png — show the device its own ID
-        if self.path.startswith('/static/device_id/'):
-            path_device_id: str = self.path[len('/static/device_id/'):-4].replace('-', ':')
+        if path.startswith('/static/device_id/'):
+            path_device_id: str = path[len('/static/device_id/'):-4].replace('-', ':')
             return self._serve_info_image(f"Device ID: {path_device_id}")
 
         # /static/<encoded_id>/<dashboard>.png — device ID embedded in path
-        path_parts = self.path[len('/static/'):].split('/')
+        path_parts = path[len('/static/'):].split('/')
         if len(path_parts) == 2:
             device_id = path_parts[0].replace('-', ':')
             dashboard_name: str = path_parts[1][:-4]
         else:
-            dashboard_name = self.path.split('/')[-1][:-4]
+            dashboard_name = path.split('/')[-1][:-4]
 
         self.logger.debug("static request: %s", dashboard_name)
         info_messages: dict[str, str] = {
@@ -272,15 +273,17 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         """Handle GET requests."""
         self.logger.debug("GET %s\nHeaders:\n%s", self.path, str(self.headers))
         try:
-            if self.path == '/api/setup':
+            path: str = self.path.split('?')[0]
+
+            if path == '/api/setup':
                 self._handle_api_setup()
                 return
 
-            if self.path == '/api/display':
+            if path == '/api/display':
                 self._handle_api_display()
                 return
 
-            if self.path.startswith('/static/') and self.path.endswith('.png'):
+            if path.startswith('/static/') and path.endswith('.png'):
                 if self._handle_static_png():
                     return
 
@@ -321,6 +324,11 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             )
 
             if self.path == '/api/log':
+                self.logger.info(
+                    "POST /api/log\nHeaders:\n%s\nBody:\n%s",
+                    str(self.headers),
+                    log_body,
+                )
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'OK')

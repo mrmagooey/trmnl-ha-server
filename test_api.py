@@ -194,12 +194,15 @@ class TestAPISimple(unittest.TestCase):
         self.assertEqual(handler._response_code, 404)
     
     def test_post_log(self):
-        """Test POST request to /api/log."""
+        """Test POST request to /api/log logs at INFO regardless of debug level."""
         handler = self.create_handler('/api/log')
-        handler.headers = {'Content-Length': '0'}
-        handler.rfile = BytesIO(b'')
+        handler.headers = {'Content-Length': '13', 'Content-Type': 'text/plain'}
+        handler.rfile = BytesIO(b'test log body')
         handler.do_POST()
         self.assertEqual(handler._response_code, 200)
+        handler.logger.info.assert_called_once()
+        log_call_args = handler.logger.info.call_args[0]
+        self.assertIn('test log body', log_call_args)
     
     def test_post_not_found(self):
         """Test POST request to unknown endpoint."""
