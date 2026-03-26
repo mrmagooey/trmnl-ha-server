@@ -65,6 +65,18 @@ jobs:
             # every push → sha-<short>
             type=sha,prefix=sha-
 
+      - name: Verify version sync
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${REF_NAME#v}"
+          MANIFEST_VERSION=$(grep '^version:' addon/config.yaml | awk '{print $2}' | tr -d '"')
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "Version mismatch: git tag=$TAG_VERSION, addon/config.yaml=$MANIFEST_VERSION"
+            exit 1
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

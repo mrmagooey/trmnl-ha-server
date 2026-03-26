@@ -23,9 +23,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 
 COPY *.py NotoSans-Regular.ttf ./
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 RUN mkdir /logs
 
 EXPOSE 8000
 
-CMD ["python", "server.py"]
+LABEL io.hass.type="addon"
+
+CMD ["/entrypoint.sh"]
