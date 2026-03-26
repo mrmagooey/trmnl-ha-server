@@ -10,6 +10,7 @@ import time
 from io import BytesIO, SEEK_END
 from os import environ
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from models import APIDisplayResponse, APISetupResponse, DashboardConfig, DeviceConfig, ScheduleEntry, RenderData
 from state import server_state
@@ -130,9 +131,9 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                         _device_indices[device_id] = (idx + 1) % len(visible_entries)
 
                     dashboard_name: str = entry.get('dashboard', 'unknown')
-                    out_filename = f"{dashboard_name}.png"
+                    out_filename = f"{quote(dashboard_name)}.png"
                     encoded_id: str = device_id.replace(':', '-')
-                    image_url = f"{SERVER_NAME}/static/{encoded_id}/{out_filename}"
+                    image_url = f"{SERVER_NAME}/static/{quote(encoded_id, safe='')}/{out_filename}"
                     self.logger.info("Device %s → dashboard '%s'", label, dashboard_name)
 
                     entry_refresh_rate: int | None = entry.get('refresh_rate')
@@ -215,9 +216,10 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             True if request was handled, False otherwise
         """
         from datetime import datetime
+        from urllib.parse import unquote
 
         device_id: str | None = self._get_device_id()
-        path: str = self._parse_path()
+        path: str = unquote(self._parse_path())
 
         # /static/device_id/<id>.png — show the device its own ID
         if path.startswith('/static/device_id/'):
@@ -281,8 +283,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         self.logger.warning("%s - " + format, self.client_address[0], *args)
 
     def _parse_path(self) -> str:
-        """Return the request path with query string and extra leading slashes stripped."""
-        return '/' + self.path.split('?')[0].lstrip('/')
+        """Return the request path with query string, extra leading slashes, and trailing slashes stripped."""
+        return ('/' + self.path.split('?')[0].lstrip('/')).rstrip('/')
 
     def do_GET(self) -> None:
         """Handle GET requests."""
