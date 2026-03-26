@@ -46,7 +46,10 @@ class TestAPISimple(unittest.TestCase):
         response = json.loads(handler.wfile.read().decode())
         
         self.assertEqual(handler._response_code, 200)
+        self.assertEqual(response['status'], 200)
         self.assertEqual(response['api_key'], 'test_token_123')
+        self.assertIn('filename', response)
+        self.assertNotIn('message', response)
     
     @mock.patch('config.read_config')
     def test_api_display_basic(self, mock_read_config):
@@ -59,8 +62,10 @@ class TestAPISimple(unittest.TestCase):
         response = json.loads(handler.wfile.read().decode())
         
         self.assertEqual(handler._response_code, 200)
+        self.assertEqual(response['status'], 0)
         self.assertIn('image_url', response)
-        self.assertIn('refresh_rate', response)
+        self.assertIsInstance(response['refresh_rate'], str)
+        self.assertIn('firmware_url', response)
     
     def test_get_device_id_from_id_header(self):
         """Test getting device ID from ID header (MAC address)."""
@@ -118,7 +123,7 @@ class TestAPISimple(unittest.TestCase):
         response = json.loads(handler.wfile.read().decode())
 
         self.assertIn('/static/AA-BB-CC-DD-EE-FF/morning.png', response['image_url'])
-        self.assertEqual(response['refresh_rate'], 300)
+        self.assertEqual(response['refresh_rate'], '300')
 
     @mock.patch('api.is_schedule_entry_visible', return_value=True)
     @mock.patch('api.read_config')

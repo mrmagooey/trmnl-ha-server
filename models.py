@@ -141,17 +141,20 @@ class RenderData(TypedDict):
 
 class APIDisplayResponse(TypedDict):
     """JSON response structure for /api/display endpoint."""
+    status: int
     filename: str
     image_url: str
     image_url_timeout: int
     reset_firmware: bool
     update_firmware: bool
-    refresh_rate: int
+    firmware_url: str | None
+    refresh_rate: str
 
 
 class APISetupResponse(TypedDict):
     """JSON response structure for /api/setup endpoint."""
+    status: int
     api_key: str
     friendly_id: str
     image_url: str
-    message: str
+    filename: str

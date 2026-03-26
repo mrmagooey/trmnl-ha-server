@@ -64,10 +64,11 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         response: APISetupResponse = {
+            "status": 200,
             "api_key": token_urlsafe(16),
             "friendly_id": "ABC123",
             "image_url": "static/homeassistant.png",
-            "message": "Setup successful",
+            "filename": "empty_state",
         }
         self.wfile.write(json.dumps(response).encode('utf-8'))
 
@@ -171,12 +172,14 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                         self.logger.error("Invalid time format in device config. Use HH:MM.")
 
         response: APIDisplayResponse = {
+            "status": 0,
             "filename": f"{time.time()}-{out_filename}",
             "image_url": image_url,
             "image_url_timeout": 0,
             "reset_firmware": False,
             "update_firmware": False,
-            "refresh_rate": refresh_rate,
+            "firmware_url": None,
+            "refresh_rate": str(refresh_rate),
         }
         if self.logger.isEnabledFor(10):  # DEBUG
             from pprint import pformat as pf
