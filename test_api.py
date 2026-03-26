@@ -181,10 +181,21 @@ class TestAPISimple(unittest.TestCase):
         handler.logger.warning.assert_called()
 
     @mock.patch.object(APICalls, '_handle_api_setup')
-    def test_get_setup(self, mock_handle_setup):
-        """Test GET request to /api/setup."""
+    def test_post_setup(self, mock_handle_setup):
+        """Test POST request to /api/setup (TRMNL firmware uses POST)."""
         handler = self.create_handler('/api/setup')
-        handler.do_GET()
+        handler.headers = {'Content-Length': '0'}
+        handler.rfile = BytesIO(b'')
+        handler.do_POST()
+        mock_handle_setup.assert_called_once()
+
+    @mock.patch.object(APICalls, '_handle_api_setup')
+    def test_post_setup_with_query_string(self, mock_handle_setup):
+        """Test POST to /api/setup with query parameters is routed correctly."""
+        handler = self.create_handler('/api/setup?token=abc&mac=AA:BB')
+        handler.headers = {'Content-Length': '0'}
+        handler.rfile = BytesIO(b'')
+        handler.do_POST()
         mock_handle_setup.assert_called_once()
     
     def test_get_not_found(self):

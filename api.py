@@ -323,7 +323,13 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 log_body,
             )
 
-            if self.path == '/api/log':
+            path: str = self.path.split('?')[0]
+
+            if path == '/api/setup':
+                self._handle_api_setup()
+                return
+
+            if path == '/api/log':
                 self.logger.info(
                     "POST /api/log\nHeaders:\n%s\nBody:\n%s",
                     str(self.headers),
