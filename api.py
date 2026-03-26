@@ -217,7 +217,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         from datetime import datetime
 
         device_id: str | None = self._get_device_id()
-        path: str = self.path.split('?')[0]
+        path: str = self._parse_path()
 
         # /static/device_id/<id>.png — show the device its own ID
         if path.startswith('/static/device_id/'):
@@ -272,11 +272,15 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
         return False
 
+    def _parse_path(self) -> str:
+        """Return the request path with query string and extra leading slashes stripped."""
+        return '/' + self.path.split('?')[0].lstrip('/')
+
     def do_GET(self) -> None:
         """Handle GET requests."""
         self.logger.debug("GET %s\nHeaders:\n%s", self.path, str(self.headers))
         try:
-            path: str = self.path.split('?')[0]
+            path: str = self._parse_path()
 
             if path == '/api/setup':
                 self._handle_api_setup()
@@ -290,6 +294,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 if self._handle_static_png():
                     return
 
+            self.logger.warning("GET 404: %s (raw: %s)", path, self.path)
             self.send_response(404)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
@@ -326,7 +331,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 log_body,
             )
 
-            path: str = self.path.split('?')[0]
+            path: str = self._parse_path()
 
             if path == '/api/setup':
                 self._handle_api_setup()
@@ -343,6 +348,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(b'OK')
                 return
 
+            self.logger.warning("POST 404: %s (raw: %s)", path, self.path)
             self.send_response(404)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
