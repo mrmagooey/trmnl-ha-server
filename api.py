@@ -272,6 +272,14 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
         return False
 
+    def log_message(self, format: str, *args: object) -> None:
+        """Route BaseHTTPRequestHandler access logs through our logger."""
+        self.logger.debug("%s - " + format, self.client_address[0], *args)
+
+    def log_error(self, format: str, *args: object) -> None:
+        """Route BaseHTTPRequestHandler error logs (including 400s) through our logger."""
+        self.logger.warning("%s - " + format, self.client_address[0], *args)
+
     def _parse_path(self) -> str:
         """Return the request path with query string and extra leading slashes stripped."""
         return '/' + self.path.split('?')[0].lstrip('/')
