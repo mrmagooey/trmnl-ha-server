@@ -971,10 +971,10 @@ def render_dashboard_image(
     rotate = dashboard.get('rotate')
     if rotate is None and dashboard.get('portrait'):
         rotate = 90
-    if rotate in (90, -90):
+    if rotate in (90, -90, 180):
         final_img = final_img.rotate(rotate, expand=True)
     elif rotate is not None:
-        logger.warning("Unsupported rotate value %r — must be 90 or -90. Skipping rotation.", rotate)
+        logger.warning("Unsupported rotate value %r — must be 90, -90, or 180. Skipping rotation.", rotate)
 
     # Save to memory
     img_io = BytesIO()
