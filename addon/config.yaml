@@ -1,5 +1,5 @@
 name: "TRMNL HA Server"
-version: "1.0.0"
+version: "1.1.0"
 slug: trmnl_ha_server
 description: "Renders Home Assistant dashboards for TRMNL e-ink devices"
 url: "https://github.com/mrmagooey/trmnl-ha-server"
