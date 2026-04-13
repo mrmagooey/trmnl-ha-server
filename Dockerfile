@@ -13,6 +13,9 @@ RUN uv pip install --no-cache-dir -r requirements.txt
 # Stage 2: Final image
 FROM python:3.12-slim
 
+ARG VERSION=dev
+ENV VERSION=${VERSION}
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fonts-noto-core && \
     rm -rf /var/lib/apt/lists/*
