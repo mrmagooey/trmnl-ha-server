@@ -266,7 +266,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
         if dashboard_to_render and 'components' in dashboard_to_render:
             t0 = time.perf_counter()
-            img_io = render_dashboard_image(dashboard_to_render, self.logger, device_id)
+            device_rotate = device_config.get('rotate') if device_config is not None else None
+            img_io = render_dashboard_image(dashboard_to_render, self.logger, device_id, device_rotate)
             self.logger.info("rendered '%s' in %.2fs", dashboard_name, time.perf_counter() - t0)
             if img_io:
                 self._send_png(img_io)

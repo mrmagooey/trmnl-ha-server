@@ -849,6 +849,7 @@ def render_dashboard_image(
     dashboard: DashboardConfig,
     logger: "Logger",
     device_id: str | None = None,
+    device_rotate: int | None = None,
 ) -> BytesIO:
     """Renders a dashboard with multiple components into a single image.
     
@@ -967,8 +968,8 @@ def render_dashboard_image(
 
         draw.line([(0, TOP_MARGIN - 1), (WIDTH, TOP_MARGIN - 1)], fill='black', width=1)
 
-    # Rotate image if requested
-    rotate = dashboard.get('rotate')
+    # Rotate image if requested (device-level overrides dashboard-level)
+    rotate = device_rotate if device_rotate is not None else dashboard.get('rotate')
     if rotate is None and dashboard.get('portrait'):
         rotate = 90
     if rotate in (90, -90, 180):

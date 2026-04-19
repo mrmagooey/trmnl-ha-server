@@ -64,6 +64,7 @@ class DeviceConfig(TypedDict, total=False):
     name: str
     sleep_start: str
     sleep_end: str
+    rotate: int
     schedule: list[ScheduleEntry]
 
 
