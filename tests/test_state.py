@@ -2,7 +2,7 @@
 
 import unittest
 
-from state import ServerState, server_state
+from trmnl_server.state import ServerState, server_state
 
 
 class TestServerState(unittest.TestCase):

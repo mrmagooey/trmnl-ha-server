@@ -5,7 +5,7 @@ from unittest import mock
 from datetime import datetime
 from io import StringIO
 
-from config import read_config, is_schedule_entry_visible, _coerce_time, find_device
+from trmnl_server.config import read_config, is_schedule_entry_visible, _coerce_time, find_device
 
 
 class TestReadConfig(unittest.TestCase):
@@ -14,8 +14,8 @@ class TestReadConfig(unittest.TestCase):
     def setUp(self):
         self.mock_logger = mock.Mock()
 
-    @mock.patch('config.open')
-    @mock.patch('config.yaml.safe_load')
+    @mock.patch('trmnl_server.config.open')
+    @mock.patch('trmnl_server.config.yaml.safe_load')
     @mock.patch.dict('os.environ', {}, clear=True)
     def test_read_config_success(self, mock_yaml_load, mock_open):
         """Test successful config reading."""
@@ -26,7 +26,7 @@ class TestReadConfig(unittest.TestCase):
         self.assertEqual(result, {'dashboards': []})
         mock_open.assert_called_once_with('config.yaml', 'r')
 
-    @mock.patch('config.open')
+    @mock.patch('trmnl_server.config.open')
     @mock.patch.dict('os.environ', {'CONFIG_PATH': '/custom/config.yaml'}, clear=True)
     def test_read_config_custom_path(self, mock_open):
         """Test reading config from custom path."""
@@ -36,7 +36,7 @@ class TestReadConfig(unittest.TestCase):
 
         mock_open.assert_called_once_with('/custom/config.yaml', 'r')
 
-    @mock.patch('config.open')
+    @mock.patch('trmnl_server.config.open')
     def test_read_config_file_not_found(self, mock_open):
         """Test handling of missing config file."""
         mock_open.side_effect = FileNotFoundError()
@@ -46,8 +46,8 @@ class TestReadConfig(unittest.TestCase):
         self.assertEqual(result, {})
         self.mock_logger.error.assert_called_once()
 
-    @mock.patch('config.open')
-    @mock.patch('config.yaml.safe_load')
+    @mock.patch('trmnl_server.config.open')
+    @mock.patch('trmnl_server.config.yaml.safe_load')
     def test_read_config_yaml_error(self, mock_yaml_load, mock_open):
         """Test handling of YAML parsing error."""
         import yaml
@@ -58,8 +58,8 @@ class TestReadConfig(unittest.TestCase):
         self.assertEqual(result, {})
         self.mock_logger.error.assert_called_once()
 
-    @mock.patch('config.open')
-    @mock.patch('config.yaml.safe_load')
+    @mock.patch('trmnl_server.config.open')
+    @mock.patch('trmnl_server.config.yaml.safe_load')
     def test_read_config_empty_file(self, mock_yaml_load, mock_open):
         """Test handling of empty config file."""
         mock_yaml_load.return_value = None

@@ -5,8 +5,8 @@ from unittest import mock
 from io import BytesIO
 import json
 
-import api
-from api import APICalls
+from trmnl_server import api
+from trmnl_server.api import APICalls
 
 
 class TestAPISimple(unittest.TestCase):
@@ -51,7 +51,7 @@ class TestAPISimple(unittest.TestCase):
         self.assertIn('filename', response)
         self.assertNotIn('message', response)
     
-    @mock.patch('config.read_config')
+    @mock.patch('trmnl_server.config.read_config')
     def test_api_display_basic(self, mock_read_config):
         """Test basic display endpoint functionality."""
         mock_read_config.return_value = {'dashboards': [], 'devices': []}
@@ -84,7 +84,7 @@ class TestAPISimple(unittest.TestCase):
 
         self.assertIsNone(device_id)
     
-    @mock.patch('api.read_config')
+    @mock.patch('trmnl_server.api.read_config')
     def test_api_display_no_id_header_returns_device_not_found(self, mock_read_config):
         """Test that requests without an ID header get device_not_found image."""
         handler = self.create_handler('/api/display')
@@ -96,7 +96,7 @@ class TestAPISimple(unittest.TestCase):
         self.assertIn('device_not_found.png', response['image_url'])
         mock_read_config.assert_not_called()
 
-    @mock.patch('api.read_config')
+    @mock.patch('trmnl_server.api.read_config')
     def test_api_display_unknown_device_uses_device_id_url(self, mock_read_config):
         """Test that an unknown device gets a personalised /static/device_id/ URL."""
         mock_read_config.return_value = {'devices': [], 'dashboards': []}
@@ -108,8 +108,8 @@ class TestAPISimple(unittest.TestCase):
 
         self.assertIn('/static/device_id/AA-BB-CC-DD-EE-FF.png', response['image_url'])
 
-    @mock.patch('api.is_schedule_entry_visible', return_value=True)
-    @mock.patch('api.read_config')
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('trmnl_server.api.read_config')
     def test_api_display_known_device_returns_dashboard_url(self, mock_read_config, _):
         """Test that a known device with an active schedule entry gets the correct dashboard URL."""
         mock_read_config.return_value = {
@@ -125,8 +125,8 @@ class TestAPISimple(unittest.TestCase):
         self.assertIn('/static/AA-BB-CC-DD-EE-FF/morning.png', response['image_url'])
         self.assertEqual(response['refresh_rate'], '300')
 
-    @mock.patch('api.is_schedule_entry_visible', return_value=True)
-    @mock.patch('api.read_config')
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('trmnl_server.api.read_config')
     def test_api_display_cycles_through_visible_entries(self, mock_read_config, _):
         """Test that successive calls from the same device rotate through visible dashboards."""
         mock_read_config.return_value = {
@@ -160,7 +160,7 @@ class TestAPISimple(unittest.TestCase):
 
         handler._serve_info_image.assert_called_once_with('Device ID: AA:BB:CC:DD:EE:FF')
 
-    @mock.patch('api.read_config')
+    @mock.patch('trmnl_server.api.read_config')
     def test_static_png_device_not_in_schedule_returns_false(self, mock_read_config):
         """Test that a device is denied access to a dashboard not in its schedule."""
         mock_read_config.return_value = {
@@ -174,7 +174,7 @@ class TestAPISimple(unittest.TestCase):
         self.assertFalse(result)
         handler.logger.warning.assert_called()
 
-    @mock.patch('api.read_config')
+    @mock.patch('trmnl_server.api.read_config')
     def test_static_png_unknown_device_returns_false(self, mock_read_config):
         """Test that an unknown device is denied access to any dashboard."""
         mock_read_config.return_value = {'devices': [], 'dashboards': []}

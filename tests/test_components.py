@@ -6,7 +6,7 @@ import io
 from PIL import Image
 import logging
 
-from components import (
+from trmnl_server.components import (
     render_dashboard_image,
     _create_info_image,
     tile_components,
@@ -34,8 +34,8 @@ class TestLoadFont(unittest.TestCase):
     def test_load_font_failure(self):
         """Test font loading falls back to default."""
         # This should succeed but if font file doesn't exist, it falls back
-        with mock.patch('components.ImageFont.truetype', side_effect=IOError()):
-            with mock.patch('components.ImageFont.load_default') as mock_default:
+        with mock.patch('trmnl_server.components.ImageFont.truetype', side_effect=IOError()):
+            with mock.patch('trmnl_server.components.ImageFont.load_default') as mock_default:
                 mock_default.return_value = mock.Mock()
                 font = _load_font(30, mock_logger)
                 self.assertIsNotNone(font)
@@ -409,7 +409,7 @@ class TestTileComponents(unittest.TestCase):
     
     def test_single_component(self):
         """Test tiling single component."""
-        from models import RenderData
+        from trmnl_server.models import RenderData
         
         render_data = {
             'type': 'entity',
@@ -418,7 +418,7 @@ class TestTileComponents(unittest.TestCase):
             'large_display': False
         }
         
-        with mock.patch('components._draw_entity_component') as mock_draw:
+        with mock.patch('trmnl_server.components._draw_entity_component') as mock_draw:
             mock_draw.return_value = Image.new('RGB', (400, 220), color='white')
             img = tile_components([render_data], 800, 480, 40, mock_logger)
         
@@ -441,7 +441,7 @@ class TestTileComponents(unittest.TestCase):
             }
         ]
         
-        with mock.patch('components._draw_entity_component') as mock_draw:
+        with mock.patch('trmnl_server.components._draw_entity_component') as mock_draw:
             mock_draw.return_value = Image.new('RGB', (400, 200), color='white')
             img = tile_components(render_data, 800, 480, 40, mock_logger)
         
@@ -476,7 +476,7 @@ class TestRenderDashboardImage(unittest.TestCase):
     def setUp(self):
         mock_logger.reset_mock()
 
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_empty_components(self, mock_get_entity_state):
         """Test rendering dashboard with no components."""
         dashboard = {
@@ -493,8 +493,8 @@ class TestRenderDashboardImage(unittest.TestCase):
             self.assertEqual(img.format, 'PNG')
             self.assertEqual(img.size, (800, 480))
     
-    @mock.patch('hass_client.get_entity_state')
-    @mock.patch('state.server_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.state.server_state')
     def test_render_with_battery(self, mock_server_state, mock_get_entity_state):
         """Test rendering with battery voltage."""
         mock_get_entity_state.return_value = {'state': 'On'}
@@ -512,7 +512,7 @@ class TestRenderDashboardImage(unittest.TestCase):
         self.assertIsInstance(img_io, io.BytesIO)
         mock_server_state.consume_battery_voltage.assert_called_once_with('AA:BB:CC:DD:EE:FF')
     
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_entity_component_no_data(self, mock_get_entity_state):
         """Test entity component with no data."""
         mock_get_entity_state.return_value = None
@@ -528,7 +528,7 @@ class TestRenderDashboardImage(unittest.TestCase):
         
         self.assertIsInstance(img_io, io.BytesIO)
     
-    @mock.patch('hass_client._fetch_history')
+    @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_history_component_no_data(self, mock_fetch_history):
         """Test history component with no data."""
         mock_fetch_history.return_value = None
@@ -544,7 +544,7 @@ class TestRenderDashboardImage(unittest.TestCase):
         
         self.assertIsInstance(img_io, io.BytesIO)
     
-    @mock.patch('hass_client._fetch_calendar_events')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
     def test_calendar_no_calendar_id(self, mock_fetch_calendar):
         """Test calendar component without calendar_id."""
         dashboard = {
@@ -564,7 +564,7 @@ class TestRenderDashboardImage(unittest.TestCase):
         mock_logger.warning.assert_called_once()
         mock_fetch_calendar.assert_not_called()
     
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_unknown_component_type(self, mock_get_entity_state):
         """Test handling unknown component type."""
         mock_get_entity_state.return_value = {'state': 'On'}
@@ -581,7 +581,7 @@ class TestRenderDashboardImage(unittest.TestCase):
         self.assertIsInstance(img_io, io.BytesIO)
         mock_logger.warning.assert_called_once()
     
-    @mock.patch('hass_client._fetch_todo_list')
+    @mock.patch('trmnl_server.hass_client._fetch_todo_list')
     def test_todo_list_component(self, mock_fetch_todo):
         """Test todo list component rendering."""
         mock_fetch_todo.return_value = [

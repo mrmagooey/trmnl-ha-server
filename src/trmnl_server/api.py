@@ -12,16 +12,16 @@ from os import environ
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from models import APIDisplayResponse, APISetupResponse, DashboardConfig, DeviceConfig, ScheduleEntry, RenderData
-from state import server_state
-from components import (
+from .models import APIDisplayResponse, APISetupResponse, DashboardConfig, DeviceConfig, ScheduleEntry, RenderData
+from .state import server_state
+from .components import (
     render_dashboard_image,
     _create_info_image,
     eink_display,
     tile_components,
 )
-from config import read_config, is_schedule_entry_visible, find_device, _coerce_time
-from hass_client import HASS_URL, HASS_TOKEN
+from .config import read_config, is_schedule_entry_visible, find_device, _coerce_time
+from .hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
     from logging import Logger

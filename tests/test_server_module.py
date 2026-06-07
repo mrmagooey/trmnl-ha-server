@@ -6,17 +6,17 @@ import os
 import tempfile
 from io import StringIO
 
-from server import setup_logging, create_handler_class, main
+from trmnl_server.server import setup_logging, create_handler_class, main
 
 
 class TestSetupLogging(unittest.TestCase):
     """Tests for setup_logging function."""
     
-    @mock.patch('server.makedirs')
-    @mock.patch('server.path.join')
-    @mock.patch('server.getLogger')
-    @mock.patch('server.StreamHandler')
-    @mock.patch('server.RotatingFileHandler')
+    @mock.patch('trmnl_server.server.makedirs')
+    @mock.patch('trmnl_server.server.path.join')
+    @mock.patch('trmnl_server.server.getLogger')
+    @mock.patch('trmnl_server.server.StreamHandler')
+    @mock.patch('trmnl_server.server.RotatingFileHandler')
     def test_setup_logging_success(self, mock_file_handler, mock_stream_handler,
                                    mock_get_logger, mock_path_join, mock_makedirs):
         """Test successful logging setup."""
@@ -31,11 +31,11 @@ class TestSetupLogging(unittest.TestCase):
         mock_logger.addHandler.assert_any_call(mock_stream_handler.return_value)
         mock_logger.addHandler.assert_any_call(mock_file_handler.return_value)
 
-    @mock.patch('server.makedirs')
-    @mock.patch('server.gettempdir')
-    @mock.patch('server.getLogger')
-    @mock.patch('server.StreamHandler')
-    @mock.patch('server.RotatingFileHandler')
+    @mock.patch('trmnl_server.server.makedirs')
+    @mock.patch('trmnl_server.server.gettempdir')
+    @mock.patch('trmnl_server.server.getLogger')
+    @mock.patch('trmnl_server.server.StreamHandler')
+    @mock.patch('trmnl_server.server.RotatingFileHandler')
     def test_setup_logging_fallback_to_temp(self, mock_file_handler, mock_stream_handler,
                                             mock_get_logger, mock_gettempdir, mock_makedirs):
         """Test fallback to temp directory when /logs is not accessible."""
@@ -65,10 +65,10 @@ class TestCreateHandlerClass(unittest.TestCase):
 class TestMain(unittest.TestCase):
     """Tests for main function."""
     
-    @mock.patch('server.setup_logging')
-    @mock.patch('server.ArgumentParser')
-    @mock.patch('server.socketserver.TCPServer')
-    @mock.patch('server.create_handler_class')
+    @mock.patch('trmnl_server.server.setup_logging')
+    @mock.patch('trmnl_server.server.ArgumentParser')
+    @mock.patch('trmnl_server.server.socketserver.TCPServer')
+    @mock.patch('trmnl_server.server.create_handler_class')
     def test_main_success(self, mock_create_handler, mock_tcp_server, 
                          mock_arg_parser, mock_setup_logging):
         """Test successful server startup."""
@@ -96,11 +96,11 @@ class TestMain(unittest.TestCase):
         mock_httpd.serve_forever.assert_called_once()
         mock_httpd.server_close.assert_called_once()
     
-    @mock.patch('server.setup_logging')
-    @mock.patch('server.ArgumentParser')
-    @mock.patch('server.socketserver.TCPServer')
-    @mock.patch('server.create_handler_class')
-    @mock.patch('server.time.sleep')
+    @mock.patch('trmnl_server.server.setup_logging')
+    @mock.patch('trmnl_server.server.ArgumentParser')
+    @mock.patch('trmnl_server.server.socketserver.TCPServer')
+    @mock.patch('trmnl_server.server.create_handler_class')
+    @mock.patch('trmnl_server.server.time.sleep')
     def test_main_retry_on_port_in_use(self, mock_sleep, mock_create_handler, 
                                        mock_tcp_server, mock_arg_parser, mock_setup_logging):
         """Test server retry when port is in use."""
@@ -132,11 +132,11 @@ class TestMain(unittest.TestCase):
         self.assertEqual(mock_tcp_server.call_count, 3)
         mock_logger.warning.assert_called()
     
-    @mock.patch('server.setup_logging')
-    @mock.patch('server.ArgumentParser')
-    @mock.patch('server.socketserver.TCPServer')
-    @mock.patch('server.create_handler_class')
-    @mock.patch('server.time.sleep')
+    @mock.patch('trmnl_server.server.setup_logging')
+    @mock.patch('trmnl_server.server.ArgumentParser')
+    @mock.patch('trmnl_server.server.socketserver.TCPServer')
+    @mock.patch('trmnl_server.server.create_handler_class')
+    @mock.patch('trmnl_server.server.time.sleep')
     def test_main_max_retries_exceeded(self, mock_sleep, mock_create_handler,
                                        mock_tcp_server, mock_arg_parser, mock_setup_logging):
         """Test server giving up after max retries."""

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from models import Config, DashboardConfig, DeviceConfig, ScheduleEntry
+from .models import Config, DashboardConfig, DeviceConfig, ScheduleEntry
 
 if TYPE_CHECKING:
     from logging import Logger

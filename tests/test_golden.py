@@ -18,7 +18,7 @@ from unittest import mock
 
 from PIL import Image, ImageChops
 
-from components import render_dashboard_image
+from trmnl_server.components import render_dashboard_image
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 UPDATE = os.environ.get("UPDATE_GOLDEN") == "1"
@@ -67,7 +67,7 @@ class TestGoldenImages(unittest.TestCase):
     def setUp(self):
         mock_logger.reset_mock()
 
-    @mock.patch('hass_client._fetch_history')
+    @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_history_graph_dashboard(self, mock_fetch_history):
         """Two history graph components side by side."""
         mock_fetch_history.side_effect = [
@@ -99,7 +99,7 @@ class TestGoldenImages(unittest.TestCase):
 
         assert_golden(img_io, 'history_graph_dashboard')
 
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_entity_dashboard(self, mock_get_entity_state):
         """Single entity value displayed large."""
         mock_get_entity_state.return_value = {'state': '21.4'}
@@ -115,8 +115,8 @@ class TestGoldenImages(unittest.TestCase):
 
         assert_golden(img_io, 'entity_dashboard')
 
-    @mock.patch('hass_client.get_entity_state')
-    @mock.patch('state.server_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.state.server_state')
     def test_entity_dashboard_with_battery(self, mock_state, mock_get_entity_state):
         """Entity dashboard with battery percentage in top-right."""
         mock_get_entity_state.return_value = {'state': '21.4'}
@@ -133,7 +133,7 @@ class TestGoldenImages(unittest.TestCase):
 
         assert_golden(img_io, 'entity_dashboard_with_battery')
 
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_rotated_dashboard(self, mock_get_entity_state):
         """Dashboard rotated -90 degrees produces portrait dimensions."""
         mock_get_entity_state.return_value = {'state': '21.4'}
