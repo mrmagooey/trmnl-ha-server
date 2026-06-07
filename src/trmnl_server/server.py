@@ -13,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 from os import makedirs, path, environ
 from tempfile import gettempdir
 
-from api import APICalls
+from .api import APICalls
 
 
 from logging import Logger

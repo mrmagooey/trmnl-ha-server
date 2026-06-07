@@ -12,7 +12,7 @@ A Python HTTP server that fetches data from Home Assistant and renders black-and
 - **Home Assistant integration**: Fetches entity state, history, calendar events, and todo lists from the Home Assistant API.
 - **E-ink optimized**: All images are rendered in black and white at double resolution then downscaled.
 - **Containerized**: Multi-stage `Dockerfile` using `uv` for efficient builds.
-- **Kubernetes ready**: `deployment.yaml` manifest with `ConfigMap` for configuration.
+- **Kubernetes ready**: `examples/deployment.yaml` manifest with `ConfigMap` for configuration.
 
 ## Configuration
 
@@ -124,7 +124,7 @@ Set `large_display: true` on one component to give it the top half of the screen
 
 3. **Run the server:**
    ```bash
-   python3 server.py
+   PYTHONPATH=src python3 -m trmnl_server.server
    ```
 
 ### Docker
@@ -137,7 +137,7 @@ Set `large_display: true` on one component to give it the top half of the screen
 2. **Run the container:**
    Create a `.env` file with your environment variables, then run:
    ```bash
-   docker run -p 8000:8000 --env-file .env -v "$(pwd)/config.yaml:/app/config.yaml" trmnl-ha-server
+   docker run -p 8000:8000 --env-file .env -v "$(pwd)/examples/config.yaml:/app/config.yaml" trmnl-ha-server
    ```
    The `-v` flag mounts your local `config.yaml` into the container so you can change it without rebuilding the image.
 
@@ -149,9 +149,9 @@ Set `large_display: true` on one component to give it the top half of the screen
    ```
 
 2. **Apply the deployment manifest:**
-   Customize `deployment.yaml` with your details and apply:
+   Customize `examples/deployment.yaml` with your details and apply:
    ```bash
-   kubectl apply -f deployment.yaml
+   kubectl apply -f examples/deployment.yaml
    ```
 
 3. **Access the service (e.g. via port-forwarding for testing):**

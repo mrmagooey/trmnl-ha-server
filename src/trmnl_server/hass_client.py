@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from models import EntityState, HistoryPoint, CalendarEvent
+from .models import EntityState, HistoryPoint, CalendarEvent
 
 if TYPE_CHECKING:
     from logging import Logger

@@ -7,18 +7,19 @@ This module contains all the rendering functions for different component types
 from datetime import datetime, timedelta
 from io import BytesIO
 from math import ceil, sqrt
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
-from models import CalendarEvent, DashboardConfig, RenderData
+from .models import CalendarEvent, DashboardConfig, RenderData
 
 if TYPE_CHECKING:
     from logging import Logger
 
 # Constants
 COMPONENT_TITLE_FONT_SIZE: int = 35
-NOTO_FONT: str = "NotoSans-Regular.ttf"
+NOTO_FONT: str = str(Path(__file__).parent / "assets" / "NotoSans-Regular.ttf")
 _font_warned: list[bool] = [False]  # logged once to avoid repetition per render
 
 
@@ -861,15 +862,15 @@ def render_dashboard_image(
         BytesIO containing the rendered PNG image
     """
     from datetime import datetime, timezone
-    from models import ComponentConfig
-    from hass_client import (
+    from .models import ComponentConfig
+    from .hass_client import (
         get_entity_state,
         _fetch_history,
         _fetch_calendar_events,
         _process_history_to_points,
         _cast_to_numbers,
     )
-    from state import server_state
+    from .state import server_state
     
     WIDTH: int = 800
     HEIGHT: int = 480
@@ -919,7 +920,7 @@ def render_dashboard_image(
                 })
             data = entity_states
         elif component_type == 'todo_list':
-            from hass_client import _fetch_todo_list
+            from .hass_client import _fetch_todo_list
             entity_name = component.get('entity_name', '')
             data = _fetch_todo_list(entity_name, logger)
         else:

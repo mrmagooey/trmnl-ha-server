@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime
 
-from hass_client import (
+from trmnl_server.hass_client import (
     _cast_to_numbers,
     _process_history_to_points,
 )

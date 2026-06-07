@@ -9,16 +9,16 @@ This project uses `uv` for Python dependency management and packaging.
 uv pip install -r requirements.txt
 
 # Run the server
-python3 server.py
+PYTHONPATH=src python3 -m trmnl_server.server
 
 # Run all tests
-uv run pytest test_config.py test_api.py -v
+uv run --with pytest --with pyyaml pytest tests/ -v
 
 # Run a single test
-uv run pytest test_api.py::TestAPISimple::test_api_setup -v
+uv run --with pytest --with pyyaml pytest tests/test_api.py::TestAPISimple::test_api_setup -v
 
 # Type checking (if mypy is installed)
-mypy server.py
+mypy src/trmnl_server/server.py
 
 # Run with Docker
 docker build -t trmnl-server .
@@ -56,7 +56,7 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 - Check environment variables before use
 
 ### Testing
-- **Always run the full test suite after making any code changes** (`uv run pytest test_config.py test_api.py -v`) and fix any failures before considering the task complete
+- **Always run the full test suite after making any code changes** (`uv run --with pytest --with pyyaml pytest tests/ -v`) and fix any failures before considering the task complete
 - Use standard `unittest` framework
 - Use `@mock.patch` for mocking external dependencies
 - Test files: `test_<module>.py`
@@ -77,19 +77,24 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 ## Project Structure
 
 ```
-├── server.py           # Entry point - sets up logging and starts server
-├── api.py              # HTTP request handlers (APICalls class)
-├── components.py       # Image rendering functions for all component types
-├── hass_client.py      # Home Assistant API client
-├── config.py           # Configuration loading and validation
-├── state.py            # Server state management
-├── models.py           # Type definitions (TypedDict, Protocol)
-├── test_server.py      # Unit tests
-├── config.yaml         # Dashboard configuration
-├── pyproject.toml      # Project metadata and dependencies
-├── requirements.txt    # Runtime dependencies
-├── Dockerfile          # Multi-stage container build
-└── deployment.yaml     # Kubernetes deployment manifest
+├── src/trmnl_server/
+│   ├── server.py        # Entry point - sets up logging and starts server
+│   ├── api.py           # HTTP request handlers (APICalls class)
+│   ├── components.py    # Image rendering functions for all component types
+│   ├── hass_client.py   # Home Assistant API client
+│   ├── config.py        # Configuration loading and validation
+│   ├── state.py         # Server state management
+│   ├── models.py        # Type definitions (TypedDict, Protocol)
+│   ├── __init__.py      # Package marker
+│   ├── __main__.py      # Enables `python -m trmnl_server`
+│   └── assets/NotoSans-Regular.ttf
+├── tests/               # Unit/integration tests (test_<module>.py)
+├── examples/
+│   ├── config.yaml      # Sample dashboard configuration
+│   └── deployment.yaml  # Kubernetes deployment manifest
+├── pyproject.toml       # Project metadata, dependencies, pytest config
+├── requirements.txt     # Runtime dependencies
+└── Dockerfile           # Multi-stage container build
 ```
 
 ## Key Dependencies

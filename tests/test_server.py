@@ -4,14 +4,14 @@ import io
 from PIL import Image
 import logging
 
-from components import render_dashboard_image
-from hass_client import _fetch_history, get_entity_state, _fetch_calendar_events
+from trmnl_server.components import render_dashboard_image
+from trmnl_server.hass_client import _fetch_history, get_entity_state, _fetch_calendar_events
 
 # Create a mock logger for testing
 mock_logger = mock.Mock(spec=logging.Logger)
 
 class TestServer(unittest.TestCase):
-    @mock.patch('hass_client._fetch_history')
+    @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_render_dashboard_image(self, mock_fetch_history):
         """
         Tests that render_dashboard_image returns a valid PNG image
@@ -61,7 +61,7 @@ class TestServer(unittest.TestCase):
         mock_fetch_history.assert_any_call(components[0]['entity_name'], mock_logger)
         mock_fetch_history.assert_any_call(components[1]['entity_name'], mock_logger)
 
-    @mock.patch('hass_client._fetch_history')
+    @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_render_dashboard_image_no_data(self, mock_fetch_history):
         """
         Tests that render_dashboard_image handles no data gracefully.
@@ -87,7 +87,7 @@ class TestServer(unittest.TestCase):
         except IOError:
             self.fail("The returned object is not a valid PNG image.")
 
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_render_dashboard_image_entity(self, mock_get_entity_state):
         """
         Tests that render_dashboard_image handles an entity component.
@@ -116,7 +116,7 @@ class TestServer(unittest.TestCase):
         
         mock_get_entity_state.assert_called_once_with('binary_sensor.test', mock_logger)
 
-    @mock.patch('hass_client._fetch_calendar_events')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
     def test_render_dashboard_image_calendar(self, mock_fetch_calendar_events):
         """
         Tests that render_dashboard_image handles a calendar component.
@@ -158,7 +158,7 @@ class TestServer(unittest.TestCase):
         
         mock_fetch_calendar_events.assert_called_once_with('calendar.test', days=2, logger=mock_logger)
 
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_render_dashboard_image_entities_list(self, mock_get_entity_state):
         """
         Tests that render_dashboard_image handles an entities list component.
@@ -199,7 +199,7 @@ class TestServer(unittest.TestCase):
         mock_get_entity_state.assert_any_call('sensor.temp', mock_logger)
         mock_get_entity_state.assert_any_call('binary_sensor.door', mock_logger)
 
-    @mock.patch('hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_render_dashboard_image_portrait_mode(self, mock_get_entity_state):
         """
         Tests that render_dashboard_image rotates the image 90 degrees when portrait=True.
