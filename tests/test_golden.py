@@ -100,6 +100,49 @@ class TestGoldenImages(unittest.TestCase):
 
         assert_golden(img_io, 'history_graph_dashboard')
 
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_stale_tail(self, mock_fetch_history):
+        """Entity stopped reporting 12h before now -> long dotted hold tail."""
+        mock_fetch_history.return_value = [[
+            {'state': '18.0', 'last_changed': '2024-01-15T06:00:00+00:00'},
+            {'state': '19.5', 'last_changed': '2024-01-15T08:00:00+00:00'},
+            {'state': '21.0', 'last_changed': '2024-01-15T10:00:00+00:00'},
+        ]]
+        dashboard = {
+            'name': 'stale',
+            'title': 'Stale Sensor',
+            'components': [
+                {'entity_name': 'sensor.temperature', 'friendly_name': 'Temperature',
+                 'type': 'history_graph', 'hours': 24},
+            ],
+        }
+        # Last reading 10:00; now 22:00 -> 12h dotted tail inside a 24h window.
+        fixed_now = datetime(2024, 1, 15, 22, 0, tzinfo=timezone.utc)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+        assert_golden(img_io, 'history_graph_stale_tail')
+
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_custom_hours(self, mock_fetch_history):
+        """A 6h window with a recent reading renders a short tail."""
+        mock_fetch_history.return_value = [[
+            {'state': '60', 'last_changed': '2024-01-15T17:00:00+00:00'},
+            {'state': '62', 'last_changed': '2024-01-15T18:30:00+00:00'},
+            {'state': '59', 'last_changed': '2024-01-15T20:00:00+00:00'},
+        ]]
+        dashboard = {
+            'name': 'recent',
+            'title': 'Recent',
+            'components': [
+                {'entity_name': 'sensor.humidity', 'friendly_name': 'Humidity',
+                 'type': 'history_graph', 'hours': 6},
+            ],
+        }
+        fixed_now = datetime(2024, 1, 15, 20, 30, tzinfo=timezone.utc)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+        assert_golden(img_io, 'history_graph_custom_hours')
+
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_entity_dashboard(self, mock_get_entity_state):
         """Single entity value displayed large."""
