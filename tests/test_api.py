@@ -51,7 +51,7 @@ class TestAPISimple(unittest.TestCase):
         self.assertIn('filename', response)
         self.assertNotIn('message', response)
     
-    @mock.patch('trmnl_server.config.read_config')
+    @mock.patch('trmnl_server.api.read_config')
     def test_api_display_basic(self, mock_read_config):
         """Test basic display endpoint functionality."""
         mock_read_config.return_value = {'dashboards': [], 'devices': []}
