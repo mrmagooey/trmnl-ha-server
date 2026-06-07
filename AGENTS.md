@@ -12,7 +12,7 @@ uv pip install -r requirements.txt
 PYTHONPATH=src python3 -m trmnl_server.server
 
 # Run all tests
-uv run --with pytest --with pyyaml pytest tests/test_config.py tests/test_api.py -v
+uv run --with pytest --with pyyaml pytest tests/ -v
 
 # Run a single test
 uv run --with pytest --with pyyaml pytest tests/test_api.py::TestAPISimple::test_api_setup -v
@@ -56,7 +56,7 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 - Check environment variables before use
 
 ### Testing
-- **Always run the full test suite after making any code changes** (`uv run --with pytest --with pyyaml pytest tests/test_config.py tests/test_api.py -v`) and fix any failures before considering the task complete
+- **Always run the full test suite after making any code changes** (`uv run --with pytest --with pyyaml pytest tests/ -v`) and fix any failures before considering the task complete
 - Use standard `unittest` framework
 - Use `@mock.patch` for mocking external dependencies
 - Test files: `test_<module>.py`
@@ -85,6 +85,8 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 │   ├── config.py        # Configuration loading and validation
 │   ├── state.py         # Server state management
 │   ├── models.py        # Type definitions (TypedDict, Protocol)
+│   ├── __init__.py      # Package marker
+│   ├── __main__.py      # Enables `python -m trmnl_server`
 │   └── assets/NotoSans-Regular.ttf
 ├── tests/               # Unit/integration tests (test_<module>.py)
 ├── examples/
