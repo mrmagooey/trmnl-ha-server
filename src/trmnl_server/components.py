@@ -157,6 +157,9 @@ def _draw_graph_component(
     width: int,
     height: int,
     logger: "Logger",
+    *,
+    window_start: datetime,
+    window_end: datetime,
 ) -> Image.Image:
     """Draws a single history graph component.
     
@@ -232,8 +235,8 @@ def _draw_graph_component(
     times: tuple[datetime, ...]
     values: tuple[float, ...]
     times, values = zip(*data_points)
-    min_time: datetime = min(times)
-    max_time: datetime = max(times)
+    min_time: datetime = window_start
+    max_time: datetime = window_end
     min_val: float = min(values)
     max_val: float = max(values)
 
@@ -301,6 +304,7 @@ def _draw_graph_component(
     # Helper to convert data to pixel coordinates
     def to_coords(t: datetime, v: float) -> tuple[float, float]:
         x: float = margin + ((t - min_time) / time_delta) * graph_width
+        x = max(float(margin), min(x, float(margin + graph_width)))
         y: float = (large_height - margin) - ((v - min_val) / (max_val - min_val)) * graph_height
         return x, y
 
@@ -318,6 +322,20 @@ def _draw_graph_component(
     points_coords: list[tuple[float, float]] = [to_coords(t, v) for t, v in data_points]
     if len(points_coords) > 1:
         d.line(points_coords, fill='black', width=4 * scale)
+
+    # Hold the last received value forward to the right edge (now) as a dotted line.
+    last_point_x, last_point_y = to_coords(times[-1], last_value)
+    right_edge_x, _ = to_coords(max_time, last_value)
+    if right_edge_x > last_point_x:
+        _draw_dashed_line(
+            d,
+            (last_point_x, last_point_y),
+            (right_edge_x, last_point_y),
+            fill='black',
+            width=4 * scale,
+            dash_on=12 * scale,
+            dash_off=8 * scale,
+        )
 
     return img.resize((width, height), Image.LANCZOS)
 
@@ -800,12 +818,19 @@ def tile_components(
         if data is None:
             return _create_info_image(f"No data for\n{friendly_name}", tile_width, tile_height, logger)
         elif component_type == 'history_graph':
+            window_end_val = render_data.get('window_end')
+            window_start_val = render_data.get('window_start')
+            if window_start_val is None or window_end_val is None:
+                window_end_val = datetime.now().astimezone()
+                window_start_val = window_end_val - timedelta(hours=24)
             return _draw_graph_component(
                 friendly_name,
                 data,  # type: ignore[arg-type]
                 tile_width,
                 tile_height,
                 logger,
+                window_start=window_start_val,
+                window_end=window_end_val,
             )
         elif component_type == 'entity':
             return _draw_entity_component(

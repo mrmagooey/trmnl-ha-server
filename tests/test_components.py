@@ -79,79 +79,96 @@ class TestCreateInfoImage(unittest.TestCase):
 
 class TestDrawGraphComponent(unittest.TestCase):
     """Tests for _draw_graph_component function."""
-    
+
     def test_draw_graph_no_data(self):
         """Test drawing graph with no data points."""
         from datetime import datetime
-        
         img = _draw_graph_component(
-            "Test Sensor",
-            [],  # Empty data
-            400,
-            300,
-            mock_logger
+            "Test Sensor", [], 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
     def test_draw_graph_single_value(self):
         """Test drawing graph with single value (edge case for min/max)."""
         from datetime import datetime
-        
-        data_points = [
-            (datetime(2025, 1, 15, 10, 0), 25.0),
-        ]
-        
+        data_points = [(datetime(2025, 1, 15, 10, 0), 25.0)]
         img = _draw_graph_component(
-            "Test Sensor",
-            data_points,
-            400,
-            300,
-            mock_logger
+            "Test Sensor", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
     def test_draw_graph_same_time(self):
         """Test drawing graph with same timestamp (edge case for time delta)."""
         from datetime import datetime
-        
         data_points = [
             (datetime(2025, 1, 15, 10, 0), 25.0),
             (datetime(2025, 1, 15, 10, 0), 26.0),
         ]
-        
         img = _draw_graph_component(
-            "Test Sensor",
-            data_points,
-            400,
-            300,
-            mock_logger
+            "Test Sensor", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
     def test_draw_graph_long_title(self):
         """Test drawing graph with very long title."""
         from datetime import datetime
-        
         data_points = [
             (datetime(2025, 1, 15, 10, 0), 25.0),
             (datetime(2025, 1, 15, 11, 0), 26.0),
         ]
-        
         img = _draw_graph_component(
-            "A" * 100,  # Very long title
-            data_points,
-            400,
-            300,
-            mock_logger
+            "A" * 100, data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 12, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
+
+    def test_dotted_tail_drawn_when_last_point_before_window_end(self):
+        """A stale entity gets a dashed hold line in the right portion of the plot."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 20.0),
+            (datetime(2025, 1, 15, 10, 0), 20.0),
+        ]
+        img = _draw_graph_component(
+            "Stale", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 16, 0),
+        )
+        img_no_gap = _draw_graph_component(
+            "Stale", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 16, 0), 20.0),
+            ], 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 16, 0),
+        )
+        from PIL import ImageChops
+        self.assertIsNotNone(
+            ImageChops.difference(img, img_no_gap).getbbox(),
+            "expected the dotted hold tail to change the image",
+        )
+
+    def test_fully_stale_only_boundary_point(self):
+        """A single point well before window_end still renders (flat dotted hold)."""
+        from datetime import datetime
+        data_points = [(datetime(2025, 1, 15, 8, 0), 42.0)]
+        img = _draw_graph_component(
+            "Dead", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 16, 0),
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
 
 
 class TestDrawEntityComponent(unittest.TestCase):
