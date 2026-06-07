@@ -17,8 +17,8 @@ print(f\"export PORT={d.get('port', 8000)}\")
 if d.get('debug'):
     print('export DEBUG=1')
 ")"
-    exec python3 server.py --port "${PORT:-8000}"
+    exec python3 -m trmnl_server.server --port "${PORT:-8000}"
 else
     # Standalone Docker — use environment variables as-is
-    exec python3 server.py "$@"
+    exec python3 -m trmnl_server.server "$@"
 fi

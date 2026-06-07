@@ -7,7 +7,7 @@ __pycache__/
 *.pyo
 
 # Test files and fixtures
-test_*.py
+tests/
 golden/
 
 # User config — mounted as a volume at runtime
