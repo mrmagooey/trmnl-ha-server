@@ -101,6 +101,10 @@ dashboards:
       - entity_name: "sensor.asdf"
         friendly_name: "friend name"
         type: history_graph
+        # Optional: width of the rolling time window in hours (default: 24).
+        # The graph's right edge is always "now"; once an entity stops
+        # reporting, its last value is held forward as a dotted line.
+        hours: 12
 
       - entity_name: "sensor.sensor_name"
         friendly_name: "friendly name"

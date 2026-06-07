@@ -112,3 +112,6 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 - `GET /api/display`: Returns next dashboard image URL (JSON)
 - `GET /static/<name>.png`: Serves generated PNG images
 - `POST /api/logs`: Debug endpoint for logging requests
+
+## Component Notes
+- `history_graph` components accept an optional `hours` field (default 24) controlling the rolling window width; stale entities hold their last value as a dotted line to "now".

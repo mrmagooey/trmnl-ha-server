@@ -86,13 +86,18 @@ def get_entity_state(
 def _fetch_history(
     entity_name: str,
     logger: "Logger",
+    *,
+    start: datetime,
+    end: datetime,
 ) -> list[list[HistoryPoint]] | None:
     """Fetches history for an entity from Home Assistant.
-    
+
     Args:
         entity_name: Home Assistant entity ID
         logger: Logger instance for errors
-        
+        start: Start of the time window (keyword-only)
+        end: End of the time window (keyword-only)
+
     Returns:
         List of history point lists or None if request fails
     """
@@ -100,7 +105,12 @@ def _fetch_history(
         logger.error("HASS_URL and HASS_TOKEN environment variables must be set.")
         return None
 
-    url: str = f"{HASS_URL}/api/history/period?filter_entity_id={entity_name}"
+    start_iso: str = start.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    end_iso: str = end.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    url: str = (
+        f"{HASS_URL}/api/history/period/{start_iso}"
+        f"?filter_entity_id={entity_name}&end_time={end_iso}"
+    )
     req = Request(
         url,
         headers={

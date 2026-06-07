@@ -58,8 +58,12 @@ class TestServer(unittest.TestCase):
         
         # 3. Check if _fetch_history was called with the correct entity names
         self.assertEqual(mock_fetch_history.call_count, 2)
-        mock_fetch_history.assert_any_call(components[0]['entity_name'], mock_logger)
-        mock_fetch_history.assert_any_call(components[1]['entity_name'], mock_logger)
+        mock_fetch_history.assert_any_call(
+            components[0]['entity_name'], mock_logger, start=mock.ANY, end=mock.ANY
+        )
+        mock_fetch_history.assert_any_call(
+            components[1]['entity_name'], mock_logger, start=mock.ANY, end=mock.ANY
+        )
 
     @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_render_dashboard_image_no_data(self, mock_fetch_history):

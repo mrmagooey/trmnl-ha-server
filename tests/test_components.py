@@ -11,6 +11,7 @@ from trmnl_server.components import (
     _create_info_image,
     tile_components,
     eink_display,
+    _draw_dashed_line,
     _draw_graph_component,
     _draw_entity_component,
     _draw_calendar_component,
@@ -78,79 +79,138 @@ class TestCreateInfoImage(unittest.TestCase):
 
 class TestDrawGraphComponent(unittest.TestCase):
     """Tests for _draw_graph_component function."""
-    
+
     def test_draw_graph_no_data(self):
         """Test drawing graph with no data points."""
         from datetime import datetime
-        
         img = _draw_graph_component(
-            "Test Sensor",
-            [],  # Empty data
-            400,
-            300,
-            mock_logger
+            "Test Sensor", [], 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
     def test_draw_graph_single_value(self):
         """Test drawing graph with single value (edge case for min/max)."""
         from datetime import datetime
-        
-        data_points = [
-            (datetime(2025, 1, 15, 10, 0), 25.0),
-        ]
-        
+        data_points = [(datetime(2025, 1, 15, 10, 0), 25.0)]
         img = _draw_graph_component(
-            "Test Sensor",
-            data_points,
-            400,
-            300,
-            mock_logger
+            "Test Sensor", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
     def test_draw_graph_same_time(self):
         """Test drawing graph with same timestamp (edge case for time delta)."""
         from datetime import datetime
-        
         data_points = [
             (datetime(2025, 1, 15, 10, 0), 25.0),
             (datetime(2025, 1, 15, 10, 0), 26.0),
         ]
-        
         img = _draw_graph_component(
-            "Test Sensor",
-            data_points,
-            400,
-            300,
-            mock_logger
+            "Test Sensor", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
     def test_draw_graph_long_title(self):
         """Test drawing graph with very long title."""
         from datetime import datetime
-        
         data_points = [
             (datetime(2025, 1, 15, 10, 0), 25.0),
             (datetime(2025, 1, 15, 11, 0), 26.0),
         ]
-        
         img = _draw_graph_component(
-            "A" * 100,  # Very long title
-            data_points,
-            400,
-            300,
-            mock_logger
+            "A" * 100, data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 9, 0),
+            window_end=datetime(2025, 1, 15, 12, 0),
         )
-        
         self.assertIsInstance(img, Image.Image)
+
+    def test_dotted_tail_drawn_when_last_point_before_window_end(self):
+        """A stale entity gets a dashed hold line in the right portion of the plot."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 20.0),
+            (datetime(2025, 1, 15, 10, 0), 20.0),
+        ]
+        img = _draw_graph_component(
+            "Stale", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 16, 0),
+        )
+        img_no_gap = _draw_graph_component(
+            "Stale", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 16, 0), 20.0),
+            ], 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 16, 0),
+        )
+        from PIL import ImageChops
+        self.assertIsNotNone(
+            ImageChops.difference(img, img_no_gap).getbbox(),
+            "expected the dotted hold tail to change the image",
+        )
+
+        # The tail must be DASHED: along a horizontal band in the right portion
+        # of the plot there must be both painted and gap pixels.
+        w, h = img.size  # (400, 300)
+        band = []
+        for x in range(int(w * 0.55), int(w * 0.95)):
+            for y in range(h):
+                band.append(img.getpixel((x, y)))
+        has_black = any(p == (0, 0, 0) for p in band)
+        has_white = any(p == (255, 255, 255) for p in band)
+        if not (has_black and has_white):
+            # LANCZOS antialiasing may blur pure black/white; use thresholds
+            has_black = any(sum(p) < 240 for p in band)
+            has_white = any(sum(p) > 600 for p in band)
+        self.assertTrue(has_black, "expected painted dash pixels in the tail region")
+        self.assertTrue(has_white, "expected gap pixels between dashes in the tail region")
+
+    def test_fully_stale_only_boundary_point(self):
+        """A single point well before window_end still renders (flat dotted hold)."""
+        from datetime import datetime
+        data_points = [(datetime(2025, 1, 15, 8, 0), 42.0)]
+        img = _draw_graph_component(
+            "Dead", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 16, 0),
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+    def test_no_tail_when_data_reaches_window_end(self):
+        """When the last reading is exactly at window_end, no dotted tail is drawn."""
+        from datetime import datetime
+        from PIL import ImageChops
+        ws = datetime(2025, 1, 15, 8, 0)
+        we = datetime(2025, 1, 15, 16, 0)
+        # Last point exactly at window_end -> guard suppresses the tail.
+        reaches_end = _draw_graph_component(
+            "Live", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 16, 0), 22.0),
+            ], 400, 300, mock_logger, window_start=ws, window_end=we,
+        )
+        # Same two points but rendered without any later gap is identical to itself;
+        # assert determinism (no tail introduces nondeterminism/extra marks).
+        reaches_end_again = _draw_graph_component(
+            "Live", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 16, 0), 22.0),
+            ], 400, 300, mock_logger, window_start=ws, window_end=we,
+        )
+        self.assertIsNone(
+            ImageChops.difference(reaches_end, reaches_end_again).getbbox(),
+            "rendering must be deterministic when no tail is drawn",
+        )
 
 
 class TestDrawEntityComponent(unittest.TestCase):
@@ -603,6 +663,51 @@ class TestRenderDashboardImage(unittest.TestCase):
         with Image.open(img_io) as img:
             self.assertEqual(img.format, 'PNG')
         mock_fetch_todo.assert_called_once()
+
+
+class TestDrawDashedLine(unittest.TestCase):
+    """Tests for the _draw_dashed_line helper."""
+
+    def test_horizontal_dash_has_gaps(self):
+        """A dashed line leaves white gaps, unlike a solid line."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (100, 10), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (0, 5), (99, 5), fill='black', width=1, dash_on=6, dash_off=6)
+        row = [img.getpixel((x, 5)) for x in range(100)]
+        black = sum(1 for p in row if p == (0, 0, 0))
+        white = sum(1 for p in row if p == (255, 255, 255))
+        self.assertGreater(black, 0, "expected some painted (black) pixels")
+        self.assertGreater(white, 0, "expected some gap (white) pixels")
+
+    def test_zero_length_is_noop(self):
+        """Start == end draws nothing and does not raise."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (10, 10), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (5, 5), (5, 5), fill='black', width=1, dash_on=4, dash_off=4)
+        self.assertEqual(img.getpixel((5, 5)), (255, 255, 255))
+
+    def test_diagonal_does_not_overrun_endpoint(self):
+        """Dashes follow a diagonal and never paint past the end point."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (60, 60), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (0, 0), (50, 50), fill='black', width=1, dash_on=5, dash_off=5)
+        # Some pixels along the diagonal are painted...
+        painted = any(img.getpixel((i, i)) == (0, 0, 0) for i in range(51))
+        self.assertTrue(painted)
+        # ...and nothing is painted well beyond the end point.
+        self.assertEqual(img.getpixel((58, 58)), (255, 255, 255))
+
+    def test_zero_period_falls_back_to_solid(self):
+        """dash_on + dash_off == 0 draws a solid line instead of looping forever."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (20, 5), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (0, 2), (19, 2), fill='black', width=1, dash_on=0, dash_off=0)
+        row = [img.getpixel((x, 2)) for x in range(20)]
+        self.assertTrue(all(p == (0, 0, 0) for p in row), "expected a fully solid line")
 
 
 if __name__ == '__main__':

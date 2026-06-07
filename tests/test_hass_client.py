@@ -1,12 +1,17 @@
 """Tests for hass_client module."""
 
+import logging
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
+from unittest import mock
 
 from trmnl_server.hass_client import (
     _cast_to_numbers,
+    _fetch_history,
     _process_history_to_points,
 )
+
+mock_logger = mock.Mock(spec=logging.Logger)
 
 
 class TestCastToNumbers(unittest.TestCase):
@@ -85,6 +90,25 @@ class TestProcessHistoryToPoints(unittest.TestCase):
         
         self.assertEqual(result[0][1], 21.5)  # Earlier value first
         self.assertEqual(result[1][1], 22.0)
+
+
+class TestFetchHistoryWindow(unittest.TestCase):
+    """Tests that _fetch_history requests the exact time window."""
+
+    @mock.patch('trmnl_server.hass_client.urlopen')
+    def test_builds_windowed_url(self, mock_urlopen):
+        cm = mock.MagicMock()
+        cm.__enter__.return_value.read.return_value = b'[[]]'
+        mock_urlopen.return_value = cm
+        start = datetime(2024, 1, 15, 8, 0, tzinfo=timezone.utc)
+        end = datetime(2024, 1, 15, 16, 0, tzinfo=timezone.utc)
+        with mock.patch('trmnl_server.hass_client.HASS_URL', 'http://hass'), \
+             mock.patch('trmnl_server.hass_client.HASS_TOKEN', 'token'):
+            _fetch_history('sensor.x', mock_logger, start=start, end=end)
+        url = mock_urlopen.call_args[0][0].full_url
+        self.assertIn('/api/history/period/2024-01-15T08:00:00Z', url)
+        self.assertIn('filter_entity_id=sensor.x', url)
+        self.assertIn('end_time=2024-01-15T16:00:00Z', url)
 
 
 if __name__ == '__main__':

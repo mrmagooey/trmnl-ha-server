@@ -102,22 +102,76 @@ def _create_info_image(
     return img
 
 
+def _draw_dashed_line(
+    draw: ImageDraw.ImageDraw,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    *,
+    fill: str,
+    width: int,
+    dash_on: int,
+    dash_off: int,
+) -> None:
+    """Draw a dashed straight line between two points.
+
+    PIL has no native dashed line, so we step along the segment drawing
+    `dash_on`-long marks separated by `dash_off`-long gaps. A non-positive
+    period (dash_on + dash_off) falls back to a solid line.
+
+    Args:
+        draw: Pillow ImageDraw to paint onto
+        start: (x, y) start point
+        end: (x, y) end point
+        fill: line colour
+        width: line width in pixels
+        dash_on: painted dash length in pixels
+        dash_off: gap length in pixels
+    """
+    x0, y0 = start
+    x1, y1 = end
+    dx = x1 - x0
+    dy = y1 - y0
+    length = (dx * dx + dy * dy) ** 0.5
+    if length == 0:
+        return
+    period = dash_on + dash_off
+    if period <= 0:
+        draw.line([start, end], fill=fill, width=width)
+        return
+    ux = dx / length
+    uy = dy / length
+    pos = 0.0
+    while pos < length:
+        seg = min(float(dash_on), length - pos)
+        sx = x0 + ux * pos
+        sy = y0 + uy * pos
+        ex = x0 + ux * (pos + seg)
+        ey = y0 + uy * (pos + seg)
+        draw.line([(sx, sy), (ex, ey)], fill=fill, width=width)
+        pos += period
+
+
 def _draw_graph_component(
     friendly_name: str,
     data_points: list[tuple[datetime, float]],
     width: int,
     height: int,
     logger: "Logger",
+    *,
+    window_start: datetime,
+    window_end: datetime,
 ) -> Image.Image:
     """Draws a single history graph component.
-    
+
     Args:
         friendly_name: Display name for the component
         data_points: List of (timestamp, value) tuples
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
-        
+        window_start: Start of the fixed time window (x-axis left bound).
+        window_end: End of the fixed time window (x-axis right bound, typically "now").
+
     Returns:
         Rendered PIL Image
     """
@@ -183,8 +237,8 @@ def _draw_graph_component(
     times: tuple[datetime, ...]
     values: tuple[float, ...]
     times, values = zip(*data_points)
-    min_time: datetime = min(times)
-    max_time: datetime = max(times)
+    min_time: datetime = window_start
+    max_time: datetime = window_end
     min_val: float = min(values)
     max_val: float = max(values)
 
@@ -252,6 +306,7 @@ def _draw_graph_component(
     # Helper to convert data to pixel coordinates
     def to_coords(t: datetime, v: float) -> tuple[float, float]:
         x: float = margin + ((t - min_time) / time_delta) * graph_width
+        x = max(float(margin), min(x, float(margin + graph_width)))
         y: float = (large_height - margin) - ((v - min_val) / (max_val - min_val)) * graph_height
         return x, y
 
@@ -269,6 +324,20 @@ def _draw_graph_component(
     points_coords: list[tuple[float, float]] = [to_coords(t, v) for t, v in data_points]
     if len(points_coords) > 1:
         d.line(points_coords, fill='black', width=4 * scale)
+
+    # Hold the last received value forward to the right edge (now) as a dotted line.
+    last_point_x, last_point_y = to_coords(times[-1], last_value)
+    right_edge_x, _ = to_coords(max_time, last_value)
+    if right_edge_x > last_point_x:
+        _draw_dashed_line(
+            d,
+            (last_point_x, last_point_y),
+            (right_edge_x, last_point_y),
+            fill='black',
+            width=4 * scale,
+            dash_on=12 * scale,
+            dash_off=8 * scale,
+        )
 
     return img.resize((width, height), Image.LANCZOS)
 
@@ -751,12 +820,19 @@ def tile_components(
         if data is None:
             return _create_info_image(f"No data for\n{friendly_name}", tile_width, tile_height, logger)
         elif component_type == 'history_graph':
+            window_end_val = render_data.get('window_end')
+            window_start_val = render_data.get('window_start')
+            if window_start_val is None or window_end_val is None:
+                window_end_val = datetime.now().astimezone()
+                window_start_val = window_end_val - timedelta(hours=24)
             return _draw_graph_component(
                 friendly_name,
                 data,  # type: ignore[arg-type]
                 tile_width,
                 tile_height,
                 logger,
+                window_start=window_start_val,
+                window_end=window_end_val,
             )
         elif component_type == 'entity':
             return _draw_entity_component(
@@ -851,6 +927,8 @@ def render_dashboard_image(
     logger: "Logger",
     device_id: str | None = None,
     device_rotate: int | None = None,
+    *,
+    now: datetime | None = None,
 ) -> BytesIO:
     """Renders a dashboard with multiple components into a single image.
     
@@ -879,14 +957,26 @@ def render_dashboard_image(
     components: list[ComponentConfig] = dashboard.get('components', [])
     title: str = dashboard.get('title', '')
 
+    render_now: datetime = now if now is not None else datetime.now().astimezone()
     component_render_data: list[RenderData] = []
     for component in components:
         component_type: str | None = component.get('type')
         data: object = None
-        
+        graph_window: tuple[datetime, datetime] | None = None
+
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
-            history = _fetch_history(entity_name, logger)
+            hours = component.get('hours', 24)
+            if isinstance(hours, bool) or not isinstance(hours, int) or hours <= 0:
+                logger.warning(
+                    "Invalid 'hours' (%r) for %s; defaulting to 24.",
+                    hours, component.get('friendly_name'),
+                )
+                hours = 24
+            window_start: datetime = render_now - timedelta(hours=hours)
+            window_end: datetime = render_now
+            graph_window = (window_start, window_end)
+            history = _fetch_history(entity_name, logger, start=window_start, end=window_end)
             data = _process_history_to_points(history)
         elif component_type == 'entity':
             entity_name = component.get('entity_name', '')
@@ -926,12 +1016,16 @@ def render_dashboard_image(
         else:
             logger.warning("Unknown component type %r — component will be skipped.", component_type)
 
-        component_render_data.append({
+        render_entry: RenderData = {
             'type': component_type or 'unknown',
             'friendly_name': component.get('friendly_name', ''),
             'data': data,
             'large_display': component.get('large_display', False),
-        })
+        }
+        if graph_window is not None:
+            render_entry['window_start'] = graph_window[0]
+            render_entry['window_end'] = graph_window[1]
+        component_render_data.append(render_entry)
 
     if not component_render_data:
         final_img: Image.Image = _create_info_image("Dashboard has no components", WIDTH, HEIGHT, logger)

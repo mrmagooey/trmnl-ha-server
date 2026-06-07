@@ -47,6 +47,7 @@ class ComponentConfig(TypedDict, total=False):
     arguments: CalendarArguments
     entities: list[EntityItem]
     large_display: bool
+    hours: int
 
 
 class DashboardConfig(TypedDict, total=False):
@@ -132,12 +133,14 @@ class ComponentRenderer(Protocol):
         ...
 
 
-class RenderData(TypedDict):
+class RenderData(TypedDict, total=False):
     """Data structure for component rendering pipeline."""
-    type: str
-    friendly_name: str
-    data: object
-    large_display: bool
+    type: Required[str]
+    friendly_name: Required[str]
+    data: Required[object]
+    large_display: Required[bool]
+    window_start: NotRequired[datetime]
+    window_end: NotRequired[datetime]
 
 
 class APIDisplayResponse(TypedDict):

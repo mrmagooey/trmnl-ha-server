@@ -98,13 +98,15 @@ dashboards:
 
 | Type | Description | Required fields |
 |------|-------------|-----------------|
-| `history_graph` | Line graph of a numeric entity's history over the last 24 hours | `entity_name`, `friendly_name` |
+| `history_graph` | Line graph of a numeric entity's history over a rolling time window | `entity_name`, `friendly_name` |
 | `entity` | Single current state value for an entity | `entity_name`, `friendly_name` |
 | `entities` | List of current state values for multiple entities | `friendly_name`, `entities` (list of `entity_name`/`friendly_name`) |
 | `calendar` | Upcoming calendar events | `friendly_name`, `arguments.calendar_id`, `arguments.days` |
 | `todo_list` | Incomplete items from a Home Assistant todo list | `entity_name`, `friendly_name` |
 
 Set `large_display: true` on one component to give it the top half of the screen; remaining components are tiled along the bottom.
+
+- `hours` (history_graph only, optional): width of the rolling time window in hours. Default `24`. The x-axis always ends at the current time; when an entity stops reporting, its last value is held forward as a dotted line.
 
 ## Usage
 
