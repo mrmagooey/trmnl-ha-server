@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0] - 2026-06-07
+
+### Added
+- Per-device display rotation via a `rotate` field on each device, allowing a different orientation per TRMNL device.
+- Configurable history-graph time window via a per-component `hours` field (default 24). The graph's x-axis now always ends at the current time, and when an entity stops reporting its last value is held forward as a dotted line.
+
+### Changed
+- Restructured the codebase into a `src/trmnl_server` package; the server now runs as `python -m trmnl_server.server`. Sample `config.yaml` and `deployment.yaml` moved to `examples/`. No change to add-on behaviour or configuration.
+
 ## [1.1.0] - 2026-04-13
 
 ### Added
