@@ -102,6 +102,42 @@ def _create_info_image(
     return img
 
 
+def _draw_dashed_line(
+    draw: "ImageDraw.ImageDraw",
+    start: tuple[float, float],
+    end: tuple[float, float],
+    *,
+    fill: str,
+    width: int,
+    dash_on: int,
+    dash_off: int,
+) -> None:
+    """Draw a dashed straight line between two points.
+
+    PIL has no native dashed line, so we step along the segment drawing
+    `dash_on`-long marks separated by `dash_off`-long gaps.
+    """
+    x0, y0 = start
+    x1, y1 = end
+    dx = x1 - x0
+    dy = y1 - y0
+    length = (dx * dx + dy * dy) ** 0.5
+    if length == 0:
+        return
+    ux = dx / length
+    uy = dy / length
+    pos = 0.0
+    period = dash_on + dash_off
+    while pos < length:
+        seg = min(float(dash_on), length - pos)
+        sx = x0 + ux * pos
+        sy = y0 + uy * pos
+        ex = x0 + ux * (pos + seg)
+        ey = y0 + uy * (pos + seg)
+        draw.line([(sx, sy), (ex, ey)], fill=fill, width=width)
+        pos += period
+
+
 def _draw_graph_component(
     friendly_name: str,
     data_points: list[tuple[datetime, float]],

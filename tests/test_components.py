@@ -11,6 +11,7 @@ from trmnl_server.components import (
     _create_info_image,
     tile_components,
     eink_display,
+    _draw_dashed_line,
     _draw_graph_component,
     _draw_entity_component,
     _draw_calendar_component,
@@ -603,6 +604,30 @@ class TestRenderDashboardImage(unittest.TestCase):
         with Image.open(img_io) as img:
             self.assertEqual(img.format, 'PNG')
         mock_fetch_todo.assert_called_once()
+
+
+class TestDrawDashedLine(unittest.TestCase):
+    """Tests for the _draw_dashed_line helper."""
+
+    def test_horizontal_dash_has_gaps(self):
+        """A dashed line leaves white gaps, unlike a solid line."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (100, 10), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (0, 5), (99, 5), fill='black', width=1, dash_on=6, dash_off=6)
+        row = [img.getpixel((x, 5)) for x in range(100)]
+        black = sum(1 for p in row if p == (0, 0, 0))
+        white = sum(1 for p in row if p == (255, 255, 255))
+        self.assertGreater(black, 0, "expected some painted (black) pixels")
+        self.assertGreater(white, 0, "expected some gap (white) pixels")
+
+    def test_zero_length_is_noop(self):
+        """Start == end draws nothing and does not raise."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (10, 10), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (5, 5), (5, 5), fill='black', width=1, dash_on=4, dash_off=4)
+        self.assertEqual(img.getpixel((5, 5)), (255, 255, 255))
 
 
 if __name__ == '__main__':
