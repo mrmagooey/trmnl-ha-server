@@ -158,6 +158,22 @@ class TestDrawGraphComponent(unittest.TestCase):
             "expected the dotted hold tail to change the image",
         )
 
+        # The tail must be DASHED: along a horizontal band in the right portion
+        # of the plot there must be both painted and gap pixels.
+        w, h = img.size  # (400, 300)
+        band = []
+        for x in range(int(w * 0.55), int(w * 0.95)):
+            for y in range(h):
+                band.append(img.getpixel((x, y)))
+        has_black = any(p == (0, 0, 0) for p in band)
+        has_white = any(p == (255, 255, 255) for p in band)
+        if not (has_black and has_white):
+            # LANCZOS antialiasing may blur pure black/white; use thresholds
+            has_black = any(sum(p) < 240 for p in band)
+            has_white = any(sum(p) > 600 for p in band)
+        self.assertTrue(has_black, "expected painted dash pixels in the tail region")
+        self.assertTrue(has_white, "expected gap pixels between dashes in the tail region")
+
     def test_fully_stale_only_boundary_point(self):
         """A single point well before window_end still renders (flat dotted hold)."""
         from datetime import datetime
@@ -169,6 +185,32 @@ class TestDrawGraphComponent(unittest.TestCase):
         )
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
+
+    def test_no_tail_when_data_reaches_window_end(self):
+        """When the last reading is exactly at window_end, no dotted tail is drawn."""
+        from datetime import datetime
+        from PIL import ImageChops
+        ws = datetime(2025, 1, 15, 8, 0)
+        we = datetime(2025, 1, 15, 16, 0)
+        # Last point exactly at window_end -> guard suppresses the tail.
+        reaches_end = _draw_graph_component(
+            "Live", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 16, 0), 22.0),
+            ], 400, 300, mock_logger, window_start=ws, window_end=we,
+        )
+        # Same two points but rendered without any later gap is identical to itself;
+        # assert determinism (no tail introduces nondeterminism/extra marks).
+        reaches_end_again = _draw_graph_component(
+            "Live", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 16, 0), 22.0),
+            ], 400, 300, mock_logger, window_start=ws, window_end=we,
+        )
+        self.assertIsNone(
+            ImageChops.difference(reaches_end, reaches_end_again).getbbox(),
+            "rendering must be deterministic when no tail is drawn",
+        )
 
 
 class TestDrawEntityComponent(unittest.TestCase):

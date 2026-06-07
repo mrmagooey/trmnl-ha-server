@@ -162,14 +162,16 @@ def _draw_graph_component(
     window_end: datetime,
 ) -> Image.Image:
     """Draws a single history graph component.
-    
+
     Args:
         friendly_name: Display name for the component
         data_points: List of (timestamp, value) tuples
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
-        
+        window_start: Start of the fixed time window (x-axis left bound).
+        window_end: End of the fixed time window (x-axis right bound, typically "now").
+
     Returns:
         Rendered PIL Image
     """
