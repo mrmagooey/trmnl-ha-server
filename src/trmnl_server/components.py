@@ -103,7 +103,7 @@ def _create_info_image(
 
 
 def _draw_dashed_line(
-    draw: "ImageDraw.ImageDraw",
+    draw: ImageDraw.ImageDraw,
     start: tuple[float, float],
     end: tuple[float, float],
     *,
@@ -115,7 +115,17 @@ def _draw_dashed_line(
     """Draw a dashed straight line between two points.
 
     PIL has no native dashed line, so we step along the segment drawing
-    `dash_on`-long marks separated by `dash_off`-long gaps.
+    `dash_on`-long marks separated by `dash_off`-long gaps. A non-positive
+    period (dash_on + dash_off) falls back to a solid line.
+
+    Args:
+        draw: Pillow ImageDraw to paint onto
+        start: (x, y) start point
+        end: (x, y) end point
+        fill: line colour
+        width: line width in pixels
+        dash_on: painted dash length in pixels
+        dash_off: gap length in pixels
     """
     x0, y0 = start
     x1, y1 = end
@@ -124,10 +134,13 @@ def _draw_dashed_line(
     length = (dx * dx + dy * dy) ** 0.5
     if length == 0:
         return
+    period = dash_on + dash_off
+    if period <= 0:
+        draw.line([start, end], fill=fill, width=width)
+        return
     ux = dx / length
     uy = dy / length
     pos = 0.0
-    period = dash_on + dash_off
     while pos < length:
         seg = min(float(dash_on), length - pos)
         sx = x0 + ux * pos

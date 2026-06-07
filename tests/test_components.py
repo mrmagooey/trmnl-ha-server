@@ -629,6 +629,27 @@ class TestDrawDashedLine(unittest.TestCase):
         _draw_dashed_line(d, (5, 5), (5, 5), fill='black', width=1, dash_on=4, dash_off=4)
         self.assertEqual(img.getpixel((5, 5)), (255, 255, 255))
 
+    def test_diagonal_does_not_overrun_endpoint(self):
+        """Dashes follow a diagonal and never paint past the end point."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (60, 60), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (0, 0), (50, 50), fill='black', width=1, dash_on=5, dash_off=5)
+        # Some pixels along the diagonal are painted...
+        painted = any(img.getpixel((i, i)) == (0, 0, 0) for i in range(51))
+        self.assertTrue(painted)
+        # ...and nothing is painted well beyond the end point.
+        self.assertEqual(img.getpixel((58, 58)), (255, 255, 255))
+
+    def test_zero_period_falls_back_to_solid(self):
+        """dash_on + dash_off == 0 draws a solid line instead of looping forever."""
+        from PIL import ImageDraw
+        img = Image.new('RGB', (20, 5), color='white')
+        d = ImageDraw.Draw(img)
+        _draw_dashed_line(d, (0, 2), (19, 2), fill='black', width=1, dash_on=0, dash_off=0)
+        row = [img.getpixel((x, 2)) for x in range(20)]
+        self.assertTrue(all(p == (0, 0, 0) for p in row), "expected a fully solid line")
+
 
 if __name__ == '__main__':
     unittest.main()
