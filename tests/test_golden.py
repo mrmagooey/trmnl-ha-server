@@ -94,8 +94,9 @@ class TestGoldenImages(unittest.TestCase):
                 {'entity_name': 'sensor.humidity', 'friendly_name': 'Humidity', 'type': 'history_graph'},
             ],
         }
+        fixed_now = datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc)
         with mock.patch('datetime.datetime', mock_datetime()):
-            img_io = render_dashboard_image(dashboard, mock_logger)
+            img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
 
         assert_golden(img_io, 'history_graph_dashboard')
 

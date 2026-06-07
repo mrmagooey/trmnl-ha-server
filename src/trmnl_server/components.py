@@ -900,6 +900,8 @@ def render_dashboard_image(
     logger: "Logger",
     device_id: str | None = None,
     device_rotate: int | None = None,
+    *,
+    now: datetime | None = None,
 ) -> BytesIO:
     """Renders a dashboard with multiple components into a single image.
     
@@ -928,14 +930,26 @@ def render_dashboard_image(
     components: list[ComponentConfig] = dashboard.get('components', [])
     title: str = dashboard.get('title', '')
 
+    render_now: datetime = now if now is not None else datetime.now().astimezone()
     component_render_data: list[RenderData] = []
     for component in components:
         component_type: str | None = component.get('type')
         data: object = None
-        
+        graph_window: tuple[datetime, datetime] | None = None
+
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
-            history = _fetch_history(entity_name, logger)
+            hours = component.get('hours', 24)
+            if isinstance(hours, bool) or not isinstance(hours, int) or hours <= 0:
+                logger.warning(
+                    "Invalid 'hours' (%r) for %s; defaulting to 24.",
+                    hours, component.get('friendly_name'),
+                )
+                hours = 24
+            window_start: datetime = render_now - timedelta(hours=hours)
+            window_end: datetime = render_now
+            graph_window = (window_start, window_end)
+            history = _fetch_history(entity_name, logger, start=window_start, end=window_end)
             data = _process_history_to_points(history)
         elif component_type == 'entity':
             entity_name = component.get('entity_name', '')
@@ -975,12 +989,16 @@ def render_dashboard_image(
         else:
             logger.warning("Unknown component type %r — component will be skipped.", component_type)
 
-        component_render_data.append({
+        render_entry: RenderData = {
             'type': component_type or 'unknown',
             'friendly_name': component.get('friendly_name', ''),
             'data': data,
             'large_display': component.get('large_display', False),
-        })
+        }
+        if graph_window is not None:
+            render_entry['window_start'] = graph_window[0]
+            render_entry['window_end'] = graph_window[1]
+        component_render_data.append(render_entry)
 
     if not component_render_data:
         final_img: Image.Image = _create_info_image("Dashboard has no components", WIDTH, HEIGHT, logger)
