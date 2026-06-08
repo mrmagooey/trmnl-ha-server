@@ -26,6 +26,50 @@ def _coerce_time(value: object) -> str:
     return str(value)
 
 
+# Floor for an aligned refresh so the device never gets a near-zero sleep when
+# a grid point is imminent (it targets the next grid point instead).
+MIN_REFRESH_SECONDS = 5
+
+
+def _aligned_refresh_rate(
+    now: datetime,
+    start_time_str: object | None,
+    refresh_rate: int,
+) -> int:
+    """Seconds until the next point on the refresh cadence grid.
+
+    The grid is anchored at the schedule entry's ``start_time`` today — or local
+    midnight when the entry has no ``start_time`` — and steps by ``refresh_rate``.
+    Returning the time until the next *absolute* grid point, rather than a fixed
+    interval, keeps successive displays aligned to wall-clock: the per-cycle
+    render/e-ink/network delay no longer accumulates, because each cycle the
+    device sleeps slightly less to catch back up to the grid.
+
+    Args:
+        now: Current local time.
+        start_time_str: The entry's ``start_time`` (``HH:MM``, possibly parsed by
+            PyYAML as a sexagesimal int), or None.
+        refresh_rate: The configured cadence in seconds (must be > 0).
+
+    Returns:
+        Seconds to sleep until the next grid point (>= ``MIN_REFRESH_SECONDS``).
+    """
+    if refresh_rate <= 0:
+        return refresh_rate
+    anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if start_time_str:
+        try:
+            start = datetime.strptime(_coerce_time(start_time_str), "%H:%M").time()
+            anchor = now.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+        except ValueError:
+            pass  # fall back to the midnight anchor
+    elapsed = (now - anchor).total_seconds()
+    remaining = refresh_rate - (elapsed % refresh_rate)
+    while remaining < MIN_REFRESH_SECONDS:
+        remaining += refresh_rate
+    return int(remaining)
+
+
 VALID_COMPONENT_TYPES = {"history_graph", "entity", "calendar", "entities", "todo_list"}
 VALID_DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 DAYS_MAP: dict[str, int] = {

@@ -2,10 +2,16 @@
 
 import unittest
 from unittest import mock
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 
-from trmnl_server.config import read_config, is_schedule_entry_visible, _coerce_time, find_device
+from trmnl_server.config import (
+    read_config,
+    is_schedule_entry_visible,
+    _coerce_time,
+    find_device,
+    _aligned_refresh_rate,
+)
 
 
 class TestReadConfig(unittest.TestCase):
@@ -289,6 +295,51 @@ class TestFindDevice(unittest.TestCase):
 
     def test_returns_none_for_empty_list(self):
         self.assertIsNone(find_device([], 'AA:BB'))
+
+
+class TestAlignedRefreshRate(unittest.TestCase):
+    """Tests for _aligned_refresh_rate (drift-free schedule alignment)."""
+
+    def test_on_grid_returns_full_interval(self):
+        # 07:05:00 is exactly on the 07:00 + k*60 grid -> next point is a full R away.
+        now = datetime(2025, 1, 1, 7, 5, 0)
+        self.assertEqual(_aligned_refresh_rate(now, "07:00", 60), 60)
+
+    def test_just_past_grid_returns_remaining(self):
+        # 3s past a grid point -> 57s until the next one.
+        now = datetime(2025, 1, 1, 7, 5, 3)
+        self.assertEqual(_aligned_refresh_rate(now, "07:00", 60), 57)
+
+    def test_imminent_grid_is_floored_by_one_interval(self):
+        # 1s before the next grid point is below MIN -> skip to the following one.
+        now = datetime(2025, 1, 1, 7, 5, 59)
+        self.assertEqual(_aligned_refresh_rate(now, "07:00", 60), 61)
+
+    def test_no_start_time_anchors_to_midnight(self):
+        # 250s after midnight, R=300 -> 50s until the next 300s grid point.
+        now = datetime(2025, 1, 1, 0, 4, 10)
+        self.assertEqual(_aligned_refresh_rate(now, None, 300), 50)
+
+    def test_invalid_start_time_falls_back_to_midnight(self):
+        now = datetime(2025, 1, 1, 0, 4, 10)
+        self.assertEqual(_aligned_refresh_rate(now, "not-a-time", 300), 50)
+
+    def test_alignment_is_drift_free_across_cycles(self):
+        # Device wakes `delay` seconds late each cycle (render + e-ink + network).
+        # Aligned sleeps keep wake times pinned to the grid: the offset stays at
+        # `delay` instead of growing every refresh.
+        R = 60
+        delay = 3
+        anchor = datetime(2025, 1, 1, 7, 0, 0)
+        now = anchor
+        for _ in range(10):
+            sleep = _aligned_refresh_rate(now, "07:00", R)
+            now = now + timedelta(seconds=sleep + delay)
+            offset = (now - anchor).total_seconds() % R
+            self.assertLessEqual(
+                offset, delay,
+                f"wake drifted to offset {offset}s (should stay <= {delay}s)",
+            )
 
 
 if __name__ == '__main__':
