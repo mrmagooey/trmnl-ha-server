@@ -85,6 +85,9 @@ dashboards:
       # - friendly_name: "Shopping List"
       #   type: "todo_list"
       #   entity_name: "todo.shopping_list"
+      #   columns: 2   # optional, default 1; lay items into N columns.
+      #   # When items overflow the card, it pages through them on each
+      #   # refresh, showing the count and a page indicator (e.g. 2/3).
 
   - name: daytime
     title: "Daytime"

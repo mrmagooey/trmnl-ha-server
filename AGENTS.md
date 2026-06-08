@@ -115,3 +115,4 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 
 ## Component Notes
 - `history_graph` components accept an optional `hours` field (default 24) controlling the rolling window width; stale entities hold their last value as a dotted line to "now".
+- `todo_list` components accept an optional `columns` field (default 1). Overflowing lists paginate across refreshes (page state held in `ServerState`, in-memory) and show a count + page indicator.

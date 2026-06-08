@@ -66,6 +66,8 @@ class TestGoldenImages(unittest.TestCase):
 
     def setUp(self):
         mock_logger.reset_mock()
+        from trmnl_server.state import server_state
+        server_state.reset_todo_pages()
 
     @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_history_graph_dashboard(self, mock_fetch_history):
@@ -197,6 +199,24 @@ class TestGoldenImages(unittest.TestCase):
             self.assertEqual(img.size, (480, 800))
 
         assert_golden(img_io, 'rotated_dashboard')
+
+    @mock.patch('trmnl_server.hass_client._fetch_todo_list')
+    def test_todo_two_column_overflow(self, mock_fetch_todo):
+        """A two-column todo list that overflows to multiple pages (page 0)."""
+        mock_fetch_todo.return_value = [
+            {'summary': f'Task {i}', 'status': 'needs_action'} for i in range(40)
+        ]
+        dashboard = {
+            'name': 'tasks',
+            'title': 'Tasks',
+            'components': [
+                {'entity_name': 'todo.tasks', 'friendly_name': 'Tasks',
+                 'type': 'todo_list', 'columns': 2},
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'todo_two_column_overflow')
 
 
 if __name__ == '__main__':
