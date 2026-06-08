@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 # Constants
 COMPONENT_TITLE_FONT_SIZE: int = 35
+TODO_HEADER_H: int = 50
+TODO_ROW_H: int = 36
+TODO_BOTTOM_PAD: int = 15
 NOTO_FONT: str = str(Path(__file__).parent / "assets" / "NotoSans-Regular.ttf")
 _font_warned: list[bool] = [False]  # logged once to avoid repetition per render
 
@@ -651,25 +654,55 @@ def _draw_entities_component(
     return img.resize((width, height), Image.LANCZOS)
 
 
+def _todo_capacity(height: int, columns: int) -> tuple[int, int]:
+    """Compute todo-list page capacity for a component of the given height.
+
+    Works in unscaled pixels (the draw function applies its own scale). The
+    row count is scale-invariant, so this and the draw function agree.
+
+    Args:
+        height: Component (tile) height in unscaled pixels.
+        columns: Number of columns (>= 1).
+
+    Returns:
+        (rows_per_column, capacity) where capacity = rows_per_column * columns.
+    """
+    cols = columns if isinstance(columns, int) and columns > 0 else 1
+    body = height - TODO_HEADER_H - TODO_BOTTOM_PAD
+    rows_per_column = max(1, body // TODO_ROW_H)
+    return rows_per_column, rows_per_column * cols
+
+
 def _draw_todo_list_component(
     friendly_name: str,
     items: list[dict[str, str]],
     width: int,
     height: int,
     logger: "Logger",
+    *,
+    columns: int = 1,
+    page: int = 0,
 ) -> Image.Image:
-    """Draws a todo list component with checkboxes.
-    
+    """Draws a todo list with checkboxes, columns, and pagination.
+
+    Incomplete items are laid out column-major across `columns` columns. When
+    they overflow one screenful, the list paginates: `page` selects which
+    screenful to show (wrapping), and a page indicator is drawn. The title
+    shows the total incomplete count.
+
     Args:
         friendly_name: Display name for the component
         items: List of todo items with 'summary' and 'status' keys
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
-        
+        columns: Number of columns (>= 1; invalid coerced to 1)
+        page: Page index to render (wrapped modulo the page count)
+
     Returns:
         Rendered PIL Image
     """
+    cols: int = columns if isinstance(columns, int) and columns > 0 else 1
     scale: int = 2
     large_width: int = width * scale
     large_height: int = height * scale
@@ -678,79 +711,97 @@ def _draw_todo_list_component(
 
     try:
         font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
-        font_item = ImageFont.truetype(NOTO_FONT, 28 * scale)
+        font_indicator = ImageFont.truetype(NOTO_FONT, 18 * scale)
     except IOError:
         if not _font_warned[0]:
             logger.warning("%s not found. Using default font.", NOTO_FONT)
             _font_warned[0] = True
         font_title = ImageFont.load_default()
-        font_item = ImageFont.load_default()
+        font_indicator = ImageFont.load_default()
 
-    # Draw title
-    text_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
-    text_width: int = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 5 * scale), friendly_name, font=font_title, fill='black')
+    incomplete: list[dict[str, str]] = [
+        it for it in items
+        if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
+    ]
+    total: int = len(incomplete)
 
-    y_pos: int = 50 * scale
-    line_spacing: int = 12 * scale
-    checkbox_size: int = 24 * scale
-    text_offset: int = 10 * scale
+    # Title with count.
+    title_text: str = f"{friendly_name} ({total})"
+    title_bbox = d.textbbox((0, 0), title_text, font=font_title)
+    title_width: int = title_bbox[2] - title_bbox[0]
+    d.text(((large_width - title_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
 
-    if not items:
+    if total == 0:
         msg: str = "No items to display"
-        text_bbox = d.textbbox((0, 0), msg, font=font_item)
-        text_width = text_bbox[2] - text_bbox[0]
-        d.text(((large_width - text_width) / 2, y_pos), msg, font=font_item, fill='black')
-    else:
-        for item in items:
-            summary: str = item.get('summary', '')
-            status: str = item.get('status', 'needs_action')
-            
-            # Skip completed items by default
-            if status == 'completed':
-                continue
-            
-            # Draw checkbox
-            checkbox_x: int = 20 * scale
-            checkbox_y: int = y_pos
-            # Draw empty checkbox
-            d.rectangle(
-                [(checkbox_x, checkbox_y), (checkbox_x + checkbox_size, checkbox_y + checkbox_size)],
-                outline='black',
-                width=2,
-            )
-            
-            # Adjust font size to fit remaining width
-            font_size: int = 28 * scale
-            padding: int = 60 * scale  # Space for checkbox + margins
-            available_width: int = large_width - padding
-            
-            dynamic_font_item = ImageFont.load_default()
-            item_bbox = (0, 0, 0, 0)
-            
-            try:
-                dynamic_font_item = ImageFont.truetype(NOTO_FONT, font_size)
-                item_bbox = d.textbbox((0, 0), summary, font=dynamic_font_item)
-                item_width: int = item_bbox[2] - item_bbox[0]
-                
-                while item_width > available_width and font_size > 16:
-                    font_size -= 2
-                    dynamic_font_item = ImageFont.truetype(NOTO_FONT, font_size)
-                    item_bbox = d.textbbox((0, 0), summary, font=dynamic_font_item)
-                    item_width = item_bbox[2] - item_bbox[0]
-            except IOError:
-                dynamic_font_item = ImageFont.load_default()
-                item_bbox = d.textbbox((0, 0), summary, font=dynamic_font_item)
-            
-            # Draw item text
-            text_x: int = checkbox_x + checkbox_size + text_offset
-            text_y: int = checkbox_y + (checkbox_size - item_bbox[3] + item_bbox[1]) // 2
-            d.text((text_x, text_y), summary, font=dynamic_font_item, fill='black')
-            
-            y_pos += max(checkbox_size + line_spacing, item_bbox[3] - item_bbox[1] + line_spacing)
-            
-            if y_pos > large_height - 30 * scale:
-                break
+        font_item = font_indicator
+        try:
+            font_item = ImageFont.truetype(NOTO_FONT, 28 * scale)
+        except IOError:
+            pass
+        msg_bbox = d.textbbox((0, 0), msg, font=font_item)
+        msg_width: int = msg_bbox[2] - msg_bbox[0]
+        d.text(((large_width - msg_width) / 2, TODO_HEADER_H * scale), msg, font=font_item, fill='black')
+        return img.resize((width, height), Image.LANCZOS)
+
+    rows_per_column, capacity = _todo_capacity(height, cols)
+    num_pages: int = max(1, ceil(total / capacity))
+    page_idx: int = page % num_pages
+    page_items: list[dict[str, str]] = incomplete[page_idx * capacity:(page_idx + 1) * capacity]
+
+    # Page indicator (top-right) only when paginating.
+    if num_pages > 1:
+        indicator: str = f"{page_idx + 1}/{num_pages}"
+        ind_bbox = d.textbbox((0, 0), indicator, font=font_indicator)
+        ind_width: int = ind_bbox[2] - ind_bbox[0]
+        d.text((large_width - ind_width - 10 * scale, 12 * scale), indicator, font=font_indicator, fill='black')
+
+    header_y: int = TODO_HEADER_H * scale
+    row_h: int = TODO_ROW_H * scale
+    checkbox_size: int = 24 * scale
+    col_width: int = large_width // cols
+
+    for i, item in enumerate(page_items):
+        col: int = i // rows_per_column
+        row: int = i % rows_per_column
+        col_x: int = col * col_width
+        y: int = header_y + row * row_h
+
+        checkbox_x: int = col_x + 15 * scale
+        d.rectangle(
+            [(checkbox_x, y), (checkbox_x + checkbox_size, y + checkbox_size)],
+            outline='black',
+            width=2,
+        )
+
+        text_x: int = checkbox_x + checkbox_size + 8 * scale
+        available_width: int = col_width - (text_x - col_x) - 8 * scale
+        summary: str = item.get('summary', '')
+
+        # Shrink to fit the column width; ellipsis-truncate at the floor.
+        font_size: int = 28 * scale
+        try:
+            dyn_font = ImageFont.truetype(NOTO_FONT, font_size)
+            text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
+            while (text_bbox[2] - text_bbox[0]) > available_width and font_size > 16:
+                font_size -= 2
+                dyn_font = ImageFont.truetype(NOTO_FONT, font_size)
+                text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
+            # Still too wide at the floor -> ellipsis-truncate.
+            if (text_bbox[2] - text_bbox[0]) > available_width:
+                truncated = summary
+                while truncated:
+                    trunc_bbox = d.textbbox((0, 0), truncated + '…', font=dyn_font)
+                    if (trunc_bbox[2] - trunc_bbox[0]) <= available_width:
+                        break
+                    truncated = truncated[:-1]
+                summary = (truncated + '…') if truncated else '…'
+                text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
+        except IOError:
+            dyn_font = ImageFont.load_default()
+            text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
+
+        text_y: int = y + (checkbox_size - (text_bbox[3] - text_bbox[1])) // 2
+        d.text((text_x, text_y), summary, font=dyn_font, fill='black')
 
     return img.resize((width, height), Image.LANCZOS)
 
@@ -793,6 +844,8 @@ def tile_components(
     Returns:
         Tiled PIL Image
     """
+    from .state import server_state
+
     if not component_render_data:
         return Image.new('RGB', (width, height), color='white')
 
@@ -859,12 +912,24 @@ def tile_components(
                 logger,
             )
         elif component_type == 'todo_list':
+            todo_columns = render_data.get('columns', 1)
+            todo_key = render_data.get('todo_key')
+            items_list = data if isinstance(data, list) else []
+            total_incomplete = sum(
+                1 for it in items_list
+                if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
+            )
+            _, capacity = _todo_capacity(tile_height, todo_columns)
+            num_pages = max(1, ceil(total_incomplete / capacity))
+            page = server_state.next_todo_page(todo_key, num_pages) if todo_key else 0
             return _draw_todo_list_component(
                 friendly_name,
                 data,  # type: ignore[arg-type]
                 tile_width,
                 tile_height,
                 logger,
+                columns=todo_columns,
+                page=page,
             )
         else:
             logger.warning("Unknown component type: %s", component_type)
@@ -959,10 +1024,11 @@ def render_dashboard_image(
 
     render_now: datetime = now if now is not None else datetime.now().astimezone()
     component_render_data: list[RenderData] = []
-    for component in components:
+    for component_index, component in enumerate(components):
         component_type: str | None = component.get('type')
         data: object = None
         graph_window: tuple[datetime, datetime] | None = None
+        todo_meta: tuple[int, str] | None = None
 
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
@@ -1013,6 +1079,16 @@ def render_dashboard_image(
             from .hass_client import _fetch_todo_list
             entity_name = component.get('entity_name', '')
             data = _fetch_todo_list(entity_name, logger)
+            todo_columns = component.get('columns', 1)
+            if isinstance(todo_columns, bool) or not isinstance(todo_columns, int) or todo_columns <= 0:
+                logger.warning(
+                    "Invalid 'columns' (%r) for %s; defaulting to 1.",
+                    todo_columns, component.get('friendly_name'),
+                )
+                todo_columns = 1
+            dashboard_name: str = dashboard.get('name', '')
+            todo_key: str = f"{device_id}:{dashboard_name}:{entity_name}:{component_index}"
+            todo_meta = (todo_columns, todo_key)
         else:
             logger.warning("Unknown component type %r — component will be skipped.", component_type)
 
@@ -1025,6 +1101,9 @@ def render_dashboard_image(
         if graph_window is not None:
             render_entry['window_start'] = graph_window[0]
             render_entry['window_end'] = graph_window[1]
+        if todo_meta is not None:
+            render_entry['columns'] = todo_meta[0]
+            render_entry['todo_key'] = todo_meta[1]
         component_render_data.append(render_entry)
 
     if not component_render_data:

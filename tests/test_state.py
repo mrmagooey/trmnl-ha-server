@@ -58,5 +58,40 @@ class TestGlobalServerState(unittest.TestCase):
         self.assertIsInstance(server_state, ServerState)
 
 
+class TestTodoPagination(unittest.TestCase):
+    """Tests for todo-list page rotation state."""
+
+    def test_first_call_returns_zero(self):
+        s = ServerState()
+        self.assertEqual(s.next_todo_page("k", 3), 0)
+
+    def test_advances_and_wraps(self):
+        s = ServerState()
+        seen = [s.next_todo_page("k", 3) for _ in range(4)]
+        self.assertEqual(seen, [0, 1, 2, 0])
+
+    def test_isolated_by_key(self):
+        s = ServerState()
+        self.assertEqual(s.next_todo_page("a", 2), 0)
+        self.assertEqual(s.next_todo_page("a", 2), 1)
+        # Different key has its own counter.
+        self.assertEqual(s.next_todo_page("b", 2), 0)
+
+    def test_single_page_never_rotates(self):
+        s = ServerState()
+        self.assertEqual(s.next_todo_page("k", 1), 0)
+        self.assertEqual(s.next_todo_page("k", 1), 0)
+
+    def test_reset_clears(self):
+        s = ServerState()
+        s.next_todo_page("k", 3)
+        s.reset_todo_pages()
+        self.assertEqual(s.next_todo_page("k", 3), 0)
+
+    def test_zero_pages_returns_zero(self):
+        s = ServerState()
+        self.assertEqual(s.next_todo_page("k", 0), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
