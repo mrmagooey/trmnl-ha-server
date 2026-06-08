@@ -20,7 +20,7 @@ from .components import (
     eink_display,
     tile_components,
 )
-from .config import read_config, is_schedule_entry_visible, find_device, _coerce_time
+from .config import read_config, is_schedule_entry_visible, find_device, _coerce_time, _aligned_refresh_rate
 from .hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
@@ -137,8 +137,13 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                     self.logger.info("Device %s → dashboard '%s'", label, dashboard_name)
 
                     entry_refresh_rate: int | None = entry.get('refresh_rate')
+                    effective_rate: int = refresh_rate
                     if isinstance(entry_refresh_rate, int) and entry_refresh_rate > 0:
-                        refresh_rate = entry_refresh_rate
+                        effective_rate = entry_refresh_rate
+                    # Align the next wake to the absolute cadence grid (anchored at
+                    # the entry's start_time) so the per-refresh display delay does
+                    # not accumulate.
+                    refresh_rate = _aligned_refresh_rate(now, entry.get('start_time'), effective_rate)
 
                 sleep_start_str: str | None = device_config.get('sleep_start')
                 sleep_end_str: str | None = device_config.get('sleep_end')

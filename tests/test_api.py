@@ -108,10 +108,11 @@ class TestAPISimple(unittest.TestCase):
 
         self.assertIn('/static/device_id/AA-BB-CC-DD-EE-FF.png', response['image_url'])
 
+    @mock.patch('trmnl_server.api._aligned_refresh_rate', return_value=288)
     @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
     @mock.patch('trmnl_server.api.read_config')
-    def test_api_display_known_device_returns_dashboard_url(self, mock_read_config, _):
-        """Test that a known device with an active schedule entry gets the correct dashboard URL."""
+    def test_api_display_known_device_returns_dashboard_url(self, mock_read_config, _, mock_aligned):
+        """A known device with an active entry gets the dashboard URL and a grid-aligned refresh rate."""
         mock_read_config.return_value = {
             'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [{'dashboard': 'morning', 'refresh_rate': 300}]}],
             'dashboards': [],
@@ -123,7 +124,13 @@ class TestAPISimple(unittest.TestCase):
         response = json.loads(handler.wfile.read().decode())
 
         self.assertIn('/static/AA-BB-CC-DD-EE-FF/morning.png', response['image_url'])
-        self.assertEqual(response['refresh_rate'], '300')
+        # The response carries the grid-aligned refresh, not the raw interval.
+        self.assertEqual(response['refresh_rate'], '288')
+        # Alignment is applied using the entry's refresh_rate (300) as the cadence
+        # and the entry's start_time (None here) as the grid anchor.
+        _now_arg, start_time_arg, effective_rate_arg = mock_aligned.call_args.args
+        self.assertIsNone(start_time_arg)
+        self.assertEqual(effective_rate_arg, 300)
 
     @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
     @mock.patch('trmnl_server.api.read_config')
