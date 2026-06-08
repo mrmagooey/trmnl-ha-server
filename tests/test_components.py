@@ -18,6 +18,7 @@ from trmnl_server.components import (
     _draw_entities_component,
     _draw_todo_list_component,
     _load_font,
+    _todo_capacity,
 )
 
 # Create a mock logger for testing
@@ -708,6 +709,27 @@ class TestDrawDashedLine(unittest.TestCase):
         _draw_dashed_line(d, (0, 2), (19, 2), fill='black', width=1, dash_on=0, dash_off=0)
         row = [img.getpixel((x, 2)) for x in range(20)]
         self.assertTrue(all(p == (0, 0, 0) for p in row), "expected a fully solid line")
+
+
+class TestTodoCapacity(unittest.TestCase):
+    """Tests for todo-list page capacity math."""
+
+    def test_single_column(self):
+        # height 480 -> body = 480 - 50 - 15 = 415; 415 // 36 = 11 rows.
+        rows, cap = _todo_capacity(480, 1)
+        self.assertEqual(rows, 11)
+        self.assertEqual(cap, 11)
+
+    def test_multi_column_multiplies(self):
+        rows, cap = _todo_capacity(480, 3)
+        self.assertEqual(rows, 11)
+        self.assertEqual(cap, 33)
+
+    def test_minimum_one_row(self):
+        # A tiny card still yields at least one row.
+        rows, cap = _todo_capacity(10, 2)
+        self.assertEqual(rows, 1)
+        self.assertEqual(cap, 2)
 
 
 if __name__ == '__main__':

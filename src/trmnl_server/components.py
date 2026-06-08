@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 # Constants
 COMPONENT_TITLE_FONT_SIZE: int = 35
+TODO_HEADER_H: int = 50
+TODO_ROW_H: int = 36
+TODO_BOTTOM_PAD: int = 15
 NOTO_FONT: str = str(Path(__file__).parent / "assets" / "NotoSans-Regular.ttf")
 _font_warned: list[bool] = [False]  # logged once to avoid repetition per render
 
@@ -649,6 +652,25 @@ def _draw_entities_component(
                 break
 
     return img.resize((width, height), Image.LANCZOS)
+
+
+def _todo_capacity(height: int, columns: int) -> tuple[int, int]:
+    """Compute todo-list page capacity for a component of the given height.
+
+    Works in unscaled pixels (the draw function applies its own scale). The
+    row count is scale-invariant, so this and the draw function agree.
+
+    Args:
+        height: Component (tile) height in unscaled pixels.
+        columns: Number of columns (>= 1).
+
+    Returns:
+        (rows_per_column, capacity) where capacity = rows_per_column * columns.
+    """
+    cols = columns if isinstance(columns, int) and columns > 0 else 1
+    body = height - TODO_HEADER_H - TODO_BOTTOM_PAD
+    rows_per_column = max(1, body // TODO_ROW_H)
+    return rows_per_column, rows_per_column * cols
 
 
 def _draw_todo_list_component(
