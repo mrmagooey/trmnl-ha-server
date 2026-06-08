@@ -536,6 +536,8 @@ class TestRenderDashboardImage(unittest.TestCase):
 
     def setUp(self):
         mock_logger.reset_mock()
+        from trmnl_server.state import server_state
+        server_state.reset_todo_pages()
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_empty_components(self, mock_get_entity_state):
@@ -664,6 +666,22 @@ class TestRenderDashboardImage(unittest.TestCase):
         with Image.open(img_io) as img:
             self.assertEqual(img.format, 'PNG')
         mock_fetch_todo.assert_called_once()
+
+    @mock.patch('trmnl_server.hass_client._fetch_todo_list')
+    def test_todo_overflow_renders_first_page(self, mock_fetch_todo):
+        """A todo_list with more items than fit renders (page 0 on first render)."""
+        mock_fetch_todo.return_value = [
+            {'summary': f'Item {i}', 'status': 'needs_action'} for i in range(50)
+        ]
+        dashboard = {
+            'name': 'chores',
+            'components': [
+                {'entity_name': 'todo.chores', 'friendly_name': 'Chores',
+                 'type': 'todo_list', 'columns': 2},
+            ],
+        }
+        img_io = render_dashboard_image(dashboard, mock_logger)
+        self.assertIsInstance(img_io, io.BytesIO)
 
 
 class TestDrawDashedLine(unittest.TestCase):

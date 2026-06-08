@@ -843,6 +843,8 @@ def tile_components(
     Returns:
         Tiled PIL Image
     """
+    from .state import server_state
+
     if not component_render_data:
         return Image.new('RGB', (width, height), color='white')
 
@@ -909,12 +911,24 @@ def tile_components(
                 logger,
             )
         elif component_type == 'todo_list':
+            todo_columns = render_data.get('columns', 1)
+            todo_key = render_data.get('todo_key')
+            items_list = data if isinstance(data, list) else []
+            total_incomplete = sum(
+                1 for it in items_list
+                if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
+            )
+            _, capacity = _todo_capacity(tile_height, todo_columns)
+            num_pages = max(1, ceil(total_incomplete / capacity))
+            page = server_state.next_todo_page(todo_key, num_pages) if todo_key else 0
             return _draw_todo_list_component(
                 friendly_name,
                 data,  # type: ignore[arg-type]
                 tile_width,
                 tile_height,
                 logger,
+                columns=todo_columns,
+                page=page,
             )
         else:
             logger.warning("Unknown component type: %s", component_type)
@@ -1009,10 +1023,11 @@ def render_dashboard_image(
 
     render_now: datetime = now if now is not None else datetime.now().astimezone()
     component_render_data: list[RenderData] = []
-    for component in components:
+    for component_index, component in enumerate(components):
         component_type: str | None = component.get('type')
         data: object = None
         graph_window: tuple[datetime, datetime] | None = None
+        todo_meta: tuple[int, str] | None = None
 
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
@@ -1063,6 +1078,16 @@ def render_dashboard_image(
             from .hass_client import _fetch_todo_list
             entity_name = component.get('entity_name', '')
             data = _fetch_todo_list(entity_name, logger)
+            todo_columns = component.get('columns', 1)
+            if isinstance(todo_columns, bool) or not isinstance(todo_columns, int) or todo_columns <= 0:
+                logger.warning(
+                    "Invalid 'columns' (%r) for %s; defaulting to 1.",
+                    todo_columns, component.get('friendly_name'),
+                )
+                todo_columns = 1
+            dashboard_name: str = dashboard.get('name', '')
+            todo_key: str = f"{device_id}:{dashboard_name}:{entity_name}:{component_index}"
+            todo_meta = (todo_columns, todo_key)
         else:
             logger.warning("Unknown component type %r — component will be skipped.", component_type)
 
@@ -1075,6 +1100,9 @@ def render_dashboard_image(
         if graph_window is not None:
             render_entry['window_start'] = graph_window[0]
             render_entry['window_end'] = graph_window[1]
+        if todo_meta is not None:
+            render_entry['columns'] = todo_meta[0]
+            render_entry['todo_key'] = todo_meta[1]
         component_render_data.append(render_entry)
 
     if not component_render_data:

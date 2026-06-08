@@ -47,6 +47,7 @@ class ComponentConfig(TypedDict, total=False):
     arguments: CalendarArguments
     entities: list[EntityItem]
     large_display: bool
+    columns: int
     hours: int
 
 
@@ -141,6 +142,8 @@ class RenderData(TypedDict, total=False):
     large_display: Required[bool]
     window_start: NotRequired[datetime]
     window_end: NotRequired[datetime]
+    columns: NotRequired[int]
+    todo_key: NotRequired[str]
 
 
 class APIDisplayResponse(TypedDict):
