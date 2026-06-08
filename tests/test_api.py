@@ -252,6 +252,49 @@ class TestAPISimple(unittest.TestCase):
         self.assertEqual(handler._response_code, 500)
         handler.logger.exception.assert_called_once()
 
+    @mock.patch('trmnl_server.api._seconds_until_next_visible', return_value=4242)
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=False)
+    @mock.patch('trmnl_server.api.read_config')
+    def test_api_display_no_visible_sleeps_until_next(self, mock_read_config, _vis, mock_next):
+        """When nothing is scheduled for now, refresh_rate is the time until the next entry."""
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [
+                {'dashboard': 'morning', 'start_time': '07:00', 'end_time': '08:00'},
+            ]}],
+            'dashboards': [],
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+        handler._handle_api_display()
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+        self.assertIn('no_dashboard_visible.png', response['image_url'])
+        self.assertEqual(response['refresh_rate'], '4242')
+        mock_next.assert_called_once()
+        # The helper must receive the device's own schedule (first positional arg).
+        called_schedule = mock_next.call_args.args[0]
+        self.assertEqual(called_schedule, [
+            {'dashboard': 'morning', 'start_time': '07:00', 'end_time': '08:00'},
+        ])
+
+    @mock.patch('trmnl_server.api._seconds_until_next_visible', return_value=None)
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=False)
+    @mock.patch('trmnl_server.api.read_config')
+    def test_api_display_no_visible_none_falls_back_to_default(self, mock_read_config, _vis, mock_next):
+        """When nothing becomes visible within the horizon, fall back to the 600s default."""
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [
+                {'dashboard': 'morning', 'start_time': '07:00', 'end_time': '08:00'},
+            ]}],
+            'dashboards': [],
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+        handler._handle_api_display()
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+        self.assertIn('no_dashboard_visible.png', response['image_url'])
+        self.assertEqual(response['refresh_rate'], '600')
+        mock_next.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

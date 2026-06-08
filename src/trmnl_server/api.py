@@ -20,7 +20,7 @@ from .components import (
     eink_display,
     tile_components,
 )
-from .config import read_config, is_schedule_entry_visible, find_device, _coerce_time, _aligned_refresh_rate
+from .config import read_config, is_schedule_entry_visible, find_device, _coerce_time, _aligned_refresh_rate, _seconds_until_next_visible
 from .hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
@@ -144,6 +144,12 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                     # the entry's start_time) so the per-refresh display delay does
                     # not accumulate.
                     refresh_rate = _aligned_refresh_rate(now, entry.get('start_time'), effective_rate)
+                else:
+                    # No dashboard scheduled for now: sleep until the next one opens
+                    # (uncapped), falling back to the default if none is upcoming.
+                    next_visible = _seconds_until_next_visible(schedule, now, self.logger)
+                    if next_visible is not None:
+                        refresh_rate = next_visible
 
                 sleep_start_str: str | None = device_config.get('sleep_start')
                 sleep_end_str: str | None = device_config.get('sleep_end')

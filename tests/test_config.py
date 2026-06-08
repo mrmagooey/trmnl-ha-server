@@ -1,5 +1,6 @@
 """Tests for config module."""
 
+import random
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta
@@ -11,6 +12,7 @@ from trmnl_server.config import (
     _coerce_time,
     find_device,
     _aligned_refresh_rate,
+    _seconds_until_next_visible,
 )
 
 
@@ -355,6 +357,125 @@ class TestAlignedRefreshRate(unittest.TestCase):
                 offset, delay,
                 f"wake drifted to offset {offset}s (should stay <= {delay}s)",
             )
+
+
+# --- Brute-force oracle for the parity sweep (test-only reference) ---
+from trmnl_server.config import MIN_REFRESH_SECONDS, is_schedule_entry_visible as _vis
+
+_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _next_visible_probe(schedule, now, logger, horizon_days=8):
+    """Minute-by-minute brute force: the correctness oracle for the helper."""
+    now_minute = now.replace(second=0, microsecond=0)
+    horizon_end = now_minute + timedelta(days=horizon_days)
+    t = now_minute + timedelta(minutes=1)
+    while t <= horizon_end:
+        if any(_vis(e, t, logger) for e in schedule):
+            return max(MIN_REFRESH_SECONDS, int((t - now_minute).total_seconds()))
+        t += timedelta(minutes=1)
+    return None
+
+
+def _random_entry(rng):
+    entry = {"dashboard": "d"}
+    if rng.random() < 0.75:
+        sh, eh = rng.randrange(24), rng.randrange(24)
+        sm, em = rng.choice([0, 15, 30, 45]), rng.choice([0, 15, 30, 45])
+        entry["start_time"] = f"{sh:02d}:{sm:02d}"
+        entry["end_time"] = f"{eh:02d}:{em:02d}"
+    if rng.random() < 0.6:
+        if rng.random() < 0.5:
+            entry["days_of_the_week"] = rng.choice(_DAY_NAMES)
+        else:
+            entry["days_of_the_week"] = f"{rng.choice(_DAY_NAMES)}-{rng.choice(_DAY_NAMES)}"
+    return entry
+
+
+class TestSecondsUntilNextVisible(unittest.TestCase):
+    """Tests for _seconds_until_next_visible."""
+
+    def setUp(self):
+        self.logger = mock.Mock()
+
+    def test_next_visible_later_today(self):
+        sched = [{"dashboard": "d", "start_time": "09:00", "end_time": "17:00",
+                  "days_of_the_week": "Monday-Sunday"}]
+        now = datetime(2025, 1, 6, 8, 0)  # Monday
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 3600)
+
+    def test_next_visible_across_midnight(self):
+        sched = [{"dashboard": "d", "start_time": "07:00", "end_time": "08:00",
+                  "days_of_the_week": "Monday-Sunday"}]
+        now = datetime(2025, 1, 6, 9, 0)  # Monday
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 22 * 3600)
+
+    def test_day_restricted_no_window_next_allowed_midnight(self):
+        sched = [{"dashboard": "d", "days_of_the_week": "Wednesday"}]
+        now = datetime(2025, 1, 6, 10, 0)  # Monday 10:00
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 38 * 3600)
+
+    def test_overnight_window_with_weekday_restriction(self):
+        sched = [{"dashboard": "d", "start_time": "22:00", "end_time": "06:00",
+                  "days_of_the_week": "Monday-Friday"}]
+        now = datetime(2025, 1, 11, 12, 0)  # Saturday 12:00
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 36 * 3600)
+
+    def test_start_time_without_end_time_is_all_day(self):
+        sched = [{"dashboard": "d", "start_time": "09:00", "days_of_the_week": "Wednesday"}]
+        now = datetime(2025, 1, 6, 10, 0)  # Monday 10:00
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 38 * 3600)
+
+    def test_never_visible_returns_none(self):
+        sched = [{"dashboard": "d", "days_of_the_week": "Friday-Monday"}]
+        now = datetime(2025, 1, 6, 10, 0)
+        self.assertIsNone(_seconds_until_next_visible(sched, now, self.logger))
+
+    def test_empty_schedule_returns_none(self):
+        now = datetime(2025, 1, 6, 10, 0)
+        self.assertIsNone(_seconds_until_next_visible([], now, self.logger))
+
+    def test_integer_time_values(self):
+        # PyYAML parses unquoted HH:MM as sexagesimal ints; the helper must coerce them.
+        sched = [{"dashboard": "d", "start_time": 540, "end_time": 1020}]  # 09:00-17:00
+        now = datetime(2025, 1, 6, 8, 0)  # Monday
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 3600)
+
+    def test_parity_with_minute_probe_full_horizon(self):
+        # Smaller sweep over the real 8-day horizon (the 2-day sweep doesn't reach
+        # multi-day / weekly waits). Slower oracle, so fewer iterations.
+        rng = random.Random(42)
+        compared = 0
+        base = datetime(2025, 1, 6, 0, 0)  # Monday
+        for _ in range(20):
+            sched = [_random_entry(rng) for _ in range(rng.randint(0, 3))]
+            now = base + timedelta(minutes=rng.randrange(2 * 1440))
+            if any(_vis(e, now, self.logger) for e in sched):
+                continue
+            compared += 1
+            self.assertEqual(
+                _seconds_until_next_visible(sched, now, self.logger),
+                _next_visible_probe(sched, now, self.logger),
+                f"mismatch: now={now} schedule={sched}",
+            )
+        self.assertGreater(compared, 5, "full-horizon sweep compared too few cases")
+
+    def test_parity_with_minute_probe(self):
+        rng = random.Random(20260608)
+        compared = 0
+        base = datetime(2025, 1, 6, 0, 0)  # Monday 00:00
+        for _ in range(80):
+            sched = [_random_entry(rng) for _ in range(rng.randint(0, 3))]
+            now = base + timedelta(minutes=rng.randrange(2 * 1440))
+            if any(_vis(e, now, self.logger) for e in sched):
+                continue  # outside the function's domain (something visible now)
+            compared += 1
+            self.assertEqual(
+                _seconds_until_next_visible(sched, now, self.logger, horizon_days=2),
+                _next_visible_probe(sched, now, self.logger, horizon_days=2),
+                f"mismatch: now={now} schedule={sched}",
+            )
+        self.assertGreater(compared, 10, "parity sweep compared too few cases to be meaningful")
 
 
 if __name__ == '__main__':

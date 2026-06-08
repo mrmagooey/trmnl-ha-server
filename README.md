@@ -58,6 +58,8 @@ devices:
 
 During the `sleep_start`/`sleep_end` window the server overrides `refresh_rate` to the number of seconds until `sleep_end`, so the device wakes up at the right time.
 
+When no schedule entry is active for the current time, the device is told to sleep until the next entry's window opens (rather than polling on a fixed timer), so scheduled dashboards appear on time. If no entry will become active within about a week, it falls back to a 600-second refresh.
+
 #### `dashboards`
 
 Each dashboard defines content only — scheduling is configured per-device above.

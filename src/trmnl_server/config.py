@@ -4,7 +4,7 @@ This module handles loading and validating configuration from YAML files,
 as well as dashboard visibility calculations.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from os import environ
 from typing import TYPE_CHECKING
 
@@ -220,3 +220,69 @@ def is_schedule_entry_visible(
             return False
 
     return True
+
+
+def _seconds_until_next_visible(
+    schedule: list[ScheduleEntry],
+    now: datetime,
+    logger: "Logger",
+    horizon_days: int = 8,
+) -> int | None:
+    """Seconds until the next moment any schedule entry becomes visible.
+
+    Used when no entry is visible now, to sleep the device until the next
+    scheduled dashboard opens. Visibility can only turn on at an entry's
+    ``start_time`` minute boundary or at midnight (day change / overnight wrap),
+    so this enumerates those candidate datetimes over ``horizon_days`` and
+    validates each with ``is_schedule_entry_visible`` (the single source of truth
+    for visibility), returning the seconds to the earliest validating candidate.
+    Returns None when nothing becomes visible within the horizon (empty or
+    never-matching schedule), so the caller can fall back to its default.
+
+    Args:
+        schedule: The device's schedule entries.
+        now: Current local time.
+        logger: Logger passed through to is_schedule_entry_visible.
+        horizon_days: How far ahead to look (8 covers a weekly schedule).
+
+    Returns:
+        Seconds until the next visible moment, or None if none within horizon.
+    """
+    if not schedule:
+        return None
+
+    now_minute = now.replace(second=0, microsecond=0)
+    horizon_end = now_minute + timedelta(days=horizon_days)
+
+    # Times-of-day at which visibility can turn on: midnight always, plus each
+    # entry's start_time (only when it has a full start/end window, mirroring
+    # is_schedule_entry_visible). Over-generation is harmless — non-matching
+    # candidates are rejected by the validator below.
+    candidate_times: set[time] = {time(0, 0)}
+    for entry in schedule:
+        start_str = entry.get('start_time')
+        end_str = entry.get('end_time')
+        if start_str and end_str:
+            try:
+                candidate_times.add(
+                    datetime.strptime(_coerce_time(start_str), "%H:%M").time()
+                )
+            except ValueError:
+                pass  # unparseable -> entry behaves all-day; only midnight applies
+
+    # Enumerate candidate datetimes across the horizon, earliest first.
+    candidates: list[datetime] = []
+    day = now_minute.date()
+    while datetime.combine(day, time(0, 0), tzinfo=now_minute.tzinfo) <= horizon_end:
+        for tod in candidate_times:
+            candidate = datetime.combine(day, tod, tzinfo=now_minute.tzinfo)
+            if now_minute < candidate <= horizon_end:
+                candidates.append(candidate)
+        day += timedelta(days=1)
+    candidates.sort()
+
+    for candidate in candidates:
+        if any(is_schedule_entry_visible(e, candidate, logger) for e in schedule):
+            # Candidates are always >= 60s away; the floor is a defensive net only.
+            return max(MIN_REFRESH_SECONDS, int((candidate - now_minute).total_seconds()))
+    return None
