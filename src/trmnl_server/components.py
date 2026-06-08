@@ -720,7 +720,8 @@ def _draw_todo_list_component(
         font_indicator = ImageFont.load_default()
 
     incomplete: list[dict[str, str]] = [
-        it for it in items if it.get('status', 'needs_action') != 'completed'
+        it for it in items
+        if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
     ]
     total: int = len(incomplete)
 
