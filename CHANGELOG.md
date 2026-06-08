@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.0] - 2026-06-08
+
+### Added
+- `todo_list` components support multiple columns via an optional `columns` field (default 1). When incomplete items overflow the card, the list paginates — cycling to the next page on each refresh — and shows the incomplete-item count plus a page indicator (e.g. `2/3`).
+
 ## [1.2.0] - 2026-06-07
 
 ### Added
