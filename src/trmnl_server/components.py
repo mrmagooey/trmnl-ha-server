@@ -786,9 +786,12 @@ def _draw_todo_list_component(
                 dyn_font = ImageFont.truetype(NOTO_FONT, font_size)
                 text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
             # Still too wide at the floor -> ellipsis-truncate.
-            if (text_bbox[2] - text_bbox[0]) > available_width and len(summary) > 1:
+            if (text_bbox[2] - text_bbox[0]) > available_width:
                 truncated = summary
-                while truncated and (d.textbbox((0, 0), truncated + '…', font=dyn_font)[2]) > available_width:
+                while truncated:
+                    trunc_bbox = d.textbbox((0, 0), truncated + '…', font=dyn_font)
+                    if (trunc_bbox[2] - trunc_bbox[0]) <= available_width:
+                        break
                     truncated = truncated[:-1]
                 summary = (truncated + '…') if truncated else '…'
                 text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
