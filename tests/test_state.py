@@ -88,6 +88,10 @@ class TestTodoPagination(unittest.TestCase):
         s.reset_todo_pages()
         self.assertEqual(s.next_todo_page("k", 3), 0)
 
+    def test_zero_pages_returns_zero(self):
+        s = ServerState()
+        self.assertEqual(s.next_todo_page("k", 0), 0)
+
 
 if __name__ == '__main__':
     unittest.main()
