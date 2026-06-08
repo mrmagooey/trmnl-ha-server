@@ -235,10 +235,9 @@ def _seconds_until_next_visible(
     ``start_time`` minute boundary or at midnight (day change / overnight wrap),
     so this enumerates those candidate datetimes over ``horizon_days`` and
     validates each with ``is_schedule_entry_visible`` (the single source of truth
-    for visibility), returning the seconds to the earliest validating candidate,
-    floored to ``MIN_REFRESH_SECONDS``. Returns None when nothing becomes visible
-    within the horizon (empty or never-matching schedule), so the caller can fall
-    back to its default.
+    for visibility), returning the seconds to the earliest validating candidate.
+    Returns None when nothing becomes visible within the horizon (empty or
+    never-matching schedule), so the caller can fall back to its default.
 
     Args:
         schedule: The device's schedule entries.
@@ -284,5 +283,6 @@ def _seconds_until_next_visible(
 
     for candidate in candidates:
         if any(is_schedule_entry_visible(e, candidate, logger) for e in schedule):
+            # Candidates are always >= 60s away; the floor is a defensive net only.
             return max(MIN_REFRESH_SECONDS, int((candidate - now_minute).total_seconds()))
     return None

@@ -435,6 +435,31 @@ class TestSecondsUntilNextVisible(unittest.TestCase):
         now = datetime(2025, 1, 6, 10, 0)
         self.assertIsNone(_seconds_until_next_visible([], now, self.logger))
 
+    def test_integer_time_values(self):
+        # PyYAML parses unquoted HH:MM as sexagesimal ints; the helper must coerce them.
+        sched = [{"dashboard": "d", "start_time": 540, "end_time": 1020}]  # 09:00-17:00
+        now = datetime(2025, 1, 6, 8, 0)  # Monday
+        self.assertEqual(_seconds_until_next_visible(sched, now, self.logger), 3600)
+
+    def test_parity_with_minute_probe_full_horizon(self):
+        # Smaller sweep over the real 8-day horizon (the 2-day sweep doesn't reach
+        # multi-day / weekly waits). Slower oracle, so fewer iterations.
+        rng = random.Random(42)
+        compared = 0
+        base = datetime(2025, 1, 6, 0, 0)  # Monday
+        for _ in range(20):
+            sched = [_random_entry(rng) for _ in range(rng.randint(0, 3))]
+            now = base + timedelta(minutes=rng.randrange(2 * 1440))
+            if any(_vis(e, now, self.logger) for e in sched):
+                continue
+            compared += 1
+            self.assertEqual(
+                _seconds_until_next_visible(sched, now, self.logger),
+                _next_visible_probe(sched, now, self.logger),
+                f"mismatch: now={now} schedule={sched}",
+            )
+        self.assertGreater(compared, 5, "full-horizon sweep compared too few cases")
+
     def test_parity_with_minute_probe(self):
         rng = random.Random(20260608)
         compared = 0
