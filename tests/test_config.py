@@ -324,6 +324,21 @@ class TestAlignedRefreshRate(unittest.TestCase):
         now = datetime(2025, 1, 1, 0, 4, 10)
         self.assertEqual(_aligned_refresh_rate(now, "not-a-time", 300), 50)
 
+    def test_overnight_window_anchors_to_window_start(self):
+        # start 23:00, now 00:32 next day, R=210 (does not divide a day): the grid
+        # is anchored to the window start (yesterday 23:00), giving 150s remaining.
+        now = datetime(2025, 1, 2, 0, 32, 0)
+        self.assertEqual(_aligned_refresh_rate(now, "23:00", 210), 150)
+
+    def test_non_positive_rate_returns_unchanged(self):
+        now = datetime(2025, 1, 1, 7, 0, 0)
+        self.assertEqual(_aligned_refresh_rate(now, None, 0), 0)
+
+    def test_tiny_rate_loops_up_to_floor(self):
+        # R=1, 0.5s past midnight -> remaining 0.5 -> loops to >= MIN_REFRESH_SECONDS.
+        now = datetime(2025, 1, 1, 0, 0, 0, 500000)
+        self.assertEqual(_aligned_refresh_rate(now, None, 1), 5)
+
     def test_alignment_is_drift_free_across_cycles(self):
         # Device wakes `delay` seconds late each cycle (render + e-ink + network).
         # Aligned sleeps keep wake times pinned to the grid: the offset stays at

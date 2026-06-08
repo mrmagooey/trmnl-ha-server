@@ -4,7 +4,7 @@ This module handles loading and validating configuration from YAML files,
 as well as dashboard visibility calculations.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from os import environ
 from typing import TYPE_CHECKING
 
@@ -52,7 +52,8 @@ def _aligned_refresh_rate(
         refresh_rate: The configured cadence in seconds (must be > 0).
 
     Returns:
-        Seconds to sleep until the next grid point (>= ``MIN_REFRESH_SECONDS``).
+        Seconds to sleep until the next grid point (>= ``MIN_REFRESH_SECONDS``),
+        or ``refresh_rate`` unchanged if it is <= 0.
     """
     if refresh_rate <= 0:
         return refresh_rate
@@ -63,6 +64,11 @@ def _aligned_refresh_rate(
             anchor = now.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
         except ValueError:
             pass  # fall back to the midnight anchor
+    # For an overnight window the start_time is later "today" than `now`; step the
+    # anchor back a day so the grid is anchored at the actual window start. This
+    # keeps the grid correct even for refresh rates that don't divide a day.
+    if anchor > now:
+        anchor -= timedelta(days=1)
     elapsed = (now - anchor).total_seconds()
     remaining = refresh_rate - (elapsed % refresh_rate)
     while remaining < MIN_REFRESH_SECONDS:
