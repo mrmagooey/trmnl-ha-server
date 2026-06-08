@@ -731,6 +731,12 @@ class TestTodoCapacity(unittest.TestCase):
         self.assertEqual(rows, 1)
         self.assertEqual(cap, 2)
 
+    def test_invalid_columns_coerces_to_one(self):
+        # columns <= 0 is coerced to a single column.
+        rows, cap = _todo_capacity(480, 0)
+        self.assertEqual(rows, 11)
+        self.assertEqual(cap, 11)
+
 
 if __name__ == '__main__':
     unittest.main()
