@@ -738,5 +738,65 @@ class TestTodoCapacity(unittest.TestCase):
         self.assertEqual(cap, 11)
 
 
+class TestTodoListPaginationRender(unittest.TestCase):
+    """Tests for columns + pagination in _draw_todo_list_component."""
+
+    @staticmethod
+    def _items(n):
+        return [{'summary': f'Item {i}', 'status': 'needs_action'} for i in range(n)]
+
+    def test_count_in_title(self):
+        # 5 incomplete items -> title contains "(5)".
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_todo_list_component("Shopping", self._items(5), 400, 300, mock_logger)
+        drawn = " ".join(str(c.args[1]) for c in mock_text.call_args_list)
+        self.assertIn("Shopping (5)", drawn)
+
+    def test_page_indicator_only_when_multipage(self):
+        # One page (few items): no "/" indicator.
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_todo_list_component("L", self._items(3), 400, 300, mock_logger, columns=1, page=0)
+        single = " ".join(str(c.args[1]) for c in mock_text.call_args_list)
+        self.assertNotIn("/", single)
+        # Many items at 1 column on a short card -> multiple pages -> "1/N".
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_todo_list_component("L", self._items(60), 400, 300, mock_logger, columns=1, page=0)
+        multi = " ".join(str(c.args[1]) for c in mock_text.call_args_list)
+        self.assertRegex(multi, r"1/\d+")
+
+    def test_pagination_shows_different_items_per_page(self):
+        from PIL import ImageChops
+        items = self._items(60)
+        page0 = _draw_todo_list_component("L", items, 400, 300, mock_logger, columns=1, page=0)
+        page1 = _draw_todo_list_component("L", items, 400, 300, mock_logger, columns=1, page=1)
+        self.assertIsNotNone(
+            ImageChops.difference(page0, page1).getbbox(),
+            "different pages must render different items",
+        )
+
+    def test_columns_fit_more_than_single_column(self):
+        # With 2 columns a card holds more items on one page than with 1 column,
+        # so a count that paginates at 1 column may fit on a single 2-col page.
+        # Card height 480 -> 11 rows/column; 2 columns -> capacity 22.
+        items = self._items(20)
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_todo_list_component("L", items, 400, 480, mock_logger, columns=2, page=0)
+        two_col = " ".join(str(c.args[1]) for c in mock_text.call_args_list)
+        # 20 items <= 22 capacity -> single page, no indicator.
+        self.assertNotIn("/", two_col)
+
+    def test_long_item_is_truncated_with_ellipsis(self):
+        long_item = [{'summary': 'X' * 200, 'status': 'needs_action'}]
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_todo_list_component("L", long_item, 400, 300, mock_logger, columns=2, page=0)
+        drawn = " ".join(str(c.args[1]) for c in mock_text.call_args_list)
+        self.assertIn("…", drawn)  # ellipsis character
+
+    def test_empty_list_message_unchanged(self):
+        img = _draw_todo_list_component("L", [], 400, 300, mock_logger)
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+
 if __name__ == '__main__':
     unittest.main()
