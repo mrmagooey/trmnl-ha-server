@@ -270,6 +270,11 @@ class TestAPISimple(unittest.TestCase):
         self.assertIn('no_dashboard_visible.png', response['image_url'])
         self.assertEqual(response['refresh_rate'], '4242')
         mock_next.assert_called_once()
+        # The helper must receive the device's own schedule (first positional arg).
+        called_schedule = mock_next.call_args.args[0]
+        self.assertEqual(called_schedule, [
+            {'dashboard': 'morning', 'start_time': '07:00', 'end_time': '08:00'},
+        ])
 
     @mock.patch('trmnl_server.api._seconds_until_next_visible', return_value=None)
     @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=False)
@@ -288,6 +293,7 @@ class TestAPISimple(unittest.TestCase):
         response = json.loads(handler.wfile.read().decode())
         self.assertIn('no_dashboard_visible.png', response['image_url'])
         self.assertEqual(response['refresh_rate'], '600')
+        mock_next.assert_called_once()
 
 
 if __name__ == '__main__':
