@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0] - 2026-06-09
+
+### Added
+- When no dashboard is scheduled for the current time, the device now sleeps until the next scheduled entry's window opens instead of polling on a fixed timer, so scheduled dashboards appear on time. Falls back to a 600-second refresh if nothing is upcoming within about a week.
+
+### Fixed
+- Timed dashboard displays no longer drift forward by the per-refresh processing delay. The `/api/display` refresh rate is aligned to an absolute cadence grid (anchored at the schedule entry's start time, with correct overnight handling) rather than a fixed relative interval.
+
 ## [1.3.0] - 2026-06-08
 
 ### Added
