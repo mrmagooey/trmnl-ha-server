@@ -1012,6 +1012,7 @@ def render_dashboard_image(
         _fetch_calendar_events,
         _process_history_to_points,
         _cast_to_numbers,
+        _select_entity_value,
     )
     from .state import server_state
     
@@ -1046,8 +1047,9 @@ def render_dashboard_image(
             data = _process_history_to_points(history)
         elif component_type == 'entity':
             entity_name = component.get('entity_name', '')
+            attribute = component.get('attribute')
             state_data = get_entity_state(entity_name, logger)
-            data = state_data.get('state') if state_data else None
+            data = _select_entity_value(state_data, attribute, entity_name, logger)
             if data:
                 data = _cast_to_numbers(data)
         elif component_type == 'calendar':

@@ -233,6 +233,34 @@ class TestServer(unittest.TestCase):
         except IOError:
             self.fail("The returned object is not a valid PNG image.")
 
+    @mock.patch('trmnl_server.components._draw_entity_component')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_render_dashboard_image_entity_attribute(
+        self, mock_get_entity_state, mock_draw_entity,
+    ):
+        """An entity component with `attribute` renders that attribute's value."""
+        mock_get_entity_state.return_value = {
+            'state': 'cool',
+            'attributes': {'current_temperature': 21.5},
+        }
+        mock_draw_entity.return_value = Image.new('RGB', (10, 10), 'white')
+        dashboard = {
+            'name': 'test',
+            'components': [
+                {
+                    'type': 'entity',
+                    'entity_name': 'climate.living_room',
+                    'attribute': 'current_temperature',
+                    'friendly_name': 'Temp',
+                },
+            ],
+        }
+
+        render_dashboard_image(dashboard, mock_logger)
+
+        called_data = mock_draw_entity.call_args.args[1]
+        self.assertEqual(called_data, 21.5)  # '21.5' -> _cast_to_numbers -> float
+
 
 if __name__ == '__main__':
     unittest.main()
