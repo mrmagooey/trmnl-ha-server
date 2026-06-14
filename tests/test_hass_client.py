@@ -9,6 +9,7 @@ from trmnl_server.hass_client import (
     _cast_to_numbers,
     _fetch_history,
     _process_history_to_points,
+    _select_entity_value,
 )
 
 mock_logger = mock.Mock(spec=logging.Logger)
@@ -109,6 +110,47 @@ class TestFetchHistoryWindow(unittest.TestCase):
         self.assertIn('/api/history/period/2024-01-15T08:00:00Z', url)
         self.assertIn('filter_entity_id=sensor.x', url)
         self.assertIn('end_time=2024-01-15T16:00:00Z', url)
+
+
+class TestSelectEntityValue(unittest.TestCase):
+    def setUp(self):
+        self.logger = mock.Mock(spec=logging.Logger)
+
+    def test_no_attribute_returns_state(self):
+        state_data = {'state': 'cool', 'attributes': {'current_temperature': 21.5}}
+        result = _select_entity_value(state_data, None, 'climate.lr', self.logger)
+        self.assertEqual(result, 'cool')
+
+    def test_empty_attribute_returns_state(self):
+        state_data = {'state': 'cool', 'attributes': {'current_temperature': 21.5}}
+        result = _select_entity_value(state_data, '', 'climate.lr', self.logger)
+        self.assertEqual(result, 'cool')
+
+    def test_attribute_present_returns_stringified_value(self):
+        state_data = {'state': 'cool', 'attributes': {'current_temperature': 21.5}}
+        result = _select_entity_value(state_data, 'current_temperature', 'climate.lr', self.logger)
+        self.assertEqual(result, '21.5')
+
+    def test_attribute_missing_warns_and_returns_none(self):
+        state_data = {'state': 'cool', 'attributes': {}}
+        result = _select_entity_value(state_data, 'current_temperature', 'climate.lr', self.logger)
+        self.assertIsNone(result)
+        self.logger.warning.assert_called_once_with(mock.ANY, 'current_temperature', 'climate.lr')
+
+    def test_non_scalar_attribute_is_stringified(self):
+        forecast = [{'temp': 1}]
+        state_data = {'state': 'sunny', 'attributes': {'forecast': forecast}}
+        result = _select_entity_value(state_data, 'forecast', 'weather.home', self.logger)
+        self.assertEqual(result, str(forecast))
+
+    def test_none_state_data_returns_none(self):
+        result = _select_entity_value(None, 'current_temperature', 'climate.lr', self.logger)
+        self.assertIsNone(result)
+
+    def test_no_attribute_missing_state_returns_none(self):
+        state_data = {'attributes': {}}  # entity present but no 'state' key
+        result = _select_entity_value(state_data, None, 'sensor.x', self.logger)
+        self.assertIsNone(result)
 
 
 if __name__ == '__main__':

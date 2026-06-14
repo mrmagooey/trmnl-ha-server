@@ -110,6 +110,15 @@ Set `large_display: true` on one component to give it the top half of the screen
 
 - `hours` (history_graph only, optional): width of the rolling time window in hours. Default `24`. The x-axis always ends at the current time; when an entity stops reporting, its last value is held forward as a dotted line.
 - `columns` (todo_list only, optional): number of columns to lay items into. Default `1`. When incomplete items overflow the card, it paginates — cycling to the next page on each refresh — and shows the item count plus a page indicator.
+- **`attribute`** (`entity` and `entities`, optional): display a specific Home Assistant entity *attribute* instead of the entity state. Omit it to show the state (the default). For `entities`, set `attribute` per row. A missing attribute renders blank.
+
+  Example — display the `current_temperature` attribute of a climate entity:
+  ```yaml
+  - entity_name: "climate.living_room"
+    attribute: "current_temperature"
+    friendly_name: "Living Room Temp"
+    type: entity
+  ```
 
 ## Usage
 

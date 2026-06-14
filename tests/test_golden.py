@@ -200,6 +200,28 @@ class TestGoldenImages(unittest.TestCase):
 
         assert_golden(img_io, 'rotated_dashboard')
 
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_entity_attribute_dashboard(self, mock_get_entity_state):
+        """Climate entity displaying current_temperature attribute instead of state."""
+        mock_get_entity_state.return_value = {
+            'state': 'cool',
+            'attributes': {'current_temperature': 21.5},
+        }
+        dashboard = {
+            'name': 'attr',
+            'components': [
+                {
+                    'type': 'entity',
+                    'entity_name': 'climate.living_room',
+                    'attribute': 'current_temperature',
+                    'friendly_name': 'Living Room Temp',
+                },
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'entity_attribute_dashboard')
+
     @mock.patch('trmnl_server.hass_client._fetch_todo_list')
     def test_todo_two_column_overflow(self, mock_fetch_todo):
         """A two-column todo list that overflows to multiple pages (page 0)."""
