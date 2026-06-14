@@ -43,6 +43,33 @@ def _cast_to_numbers(input_value: str) -> str | int | float:
     return input_value
 
 
+def _select_entity_value(
+    state_data: "EntityState | None",
+    attribute: str | None,
+    entity_name: str,
+    logger: "Logger",
+) -> str | None:
+    """Select the display value for an entity: its state, or a named attribute.
+
+    Returns the entity state when no attribute is requested. When an attribute
+    is requested, returns its value as a string (non-scalars are stringified).
+    A missing attribute logs a warning and returns None, mirroring the
+    behavior when an entity has no state.
+    """
+    if state_data is None:
+        return None
+    if not attribute:
+        return state_data.get('state')
+    attributes = state_data.get('attributes', {})
+    if attribute not in attributes:
+        logger.warning(
+            "Attribute %r not found on %s; rendering blank.",
+            attribute, entity_name,
+        )
+        return None
+    return str(attributes[attribute])
+
+
 def get_entity_state(
     entity_name: str,
     logger: "Logger",
