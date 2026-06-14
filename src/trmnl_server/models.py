@@ -29,6 +29,7 @@ class EntityItem(TypedDict):
     """Single entity entry in an entities list."""
     entity_name: str
     friendly_name: str
+    attribute: NotRequired[str]
 
 
 class TodoItem(TypedDict, total=False):
@@ -42,6 +43,7 @@ class TodoItem(TypedDict, total=False):
 class ComponentConfig(TypedDict, total=False):
     """Configuration for a single dashboard component."""
     entity_name: str
+    attribute: str
     friendly_name: str
     type: Literal["history_graph", "entity", "calendar", "entities", "todo_list"]
     arguments: CalendarArguments
