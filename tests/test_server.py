@@ -261,6 +261,46 @@ class TestServer(unittest.TestCase):
         called_data = mock_draw_entity.call_args.args[1]
         self.assertEqual(called_data, 21.5)  # '21.5' -> _cast_to_numbers -> float
 
+    @mock.patch('trmnl_server.components._draw_entities_component')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_render_dashboard_image_entities_attribute_mixed(
+        self, mock_get_entity_state, mock_draw_entities,
+    ):
+        """An entities list mixes an attribute row and a plain state row."""
+        mock_get_entity_state.side_effect = [
+            {'state': 'cool', 'attributes': {'current_temperature': 21.5}},
+            {'state': '55', 'attributes': {}},
+        ]
+        mock_draw_entities.return_value = Image.new('RGB', (10, 10), 'white')
+        dashboard = {
+            'name': 'test',
+            'components': [
+                {
+                    'type': 'entities',
+                    'friendly_name': 'Climate',
+                    'entities': [
+                        {
+                            'entity_name': 'climate.living_room',
+                            'attribute': 'current_temperature',
+                            'friendly_name': 'Temp',
+                        },
+                        {
+                            'entity_name': 'sensor.humidity',
+                            'friendly_name': 'Humidity',
+                        },
+                    ],
+                },
+            ],
+        }
+
+        render_dashboard_image(dashboard, mock_logger)
+
+        entity_states = mock_draw_entities.call_args.args[1]
+        self.assertEqual(entity_states, [
+            {'friendly_name': 'Temp', 'state': 21.5},
+            {'friendly_name': 'Humidity', 'state': 55},
+        ])
+
 
 if __name__ == '__main__':
     unittest.main()

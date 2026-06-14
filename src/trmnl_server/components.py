@@ -1068,8 +1068,11 @@ def render_dashboard_image(
             entity_states: list[dict[str, str | float | None]] = []
             for item in entity_list:
                 entity_name = item.get('entity_name', '')
+                attribute = item.get('attribute')
                 state_data = get_entity_state(entity_name, logger)
-                state: str | float | None = state_data.get('state') if state_data else None
+                state: str | float | None = _select_entity_value(
+                    state_data, attribute, entity_name, logger,
+                )
                 if state:
                     state = _cast_to_numbers(state)
                 entity_states.append({
