@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.5.0] - 2026-06-14
+
+### Added
+- `entity` and `entities` components support an optional `attribute` field to display a specific Home Assistant entity attribute (e.g. a `climate.*` entity's `current_temperature`) instead of the entity state. Omit it to show the state, as before; for `entities` it is set per row. A missing attribute renders blank.
+
 ## [1.4.0] - 2026-06-09
 
 ### Added
