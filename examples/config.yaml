@@ -69,6 +69,12 @@ dashboards:
         friendly_name: "UV Forecast"
         type: entity
 
+      # Show a specific attribute instead of the entity state
+      - entity_name: "climate.living_room"
+        attribute: "current_temperature"
+        friendly_name: "Living Room Temp"
+        type: entity
+
       - friendly_name: "Today's Weather"
         type: "entities"
         entities:
