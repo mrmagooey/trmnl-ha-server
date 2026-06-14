@@ -217,7 +217,8 @@ class TestGoldenImages(unittest.TestCase):
                 },
             ],
         }
-        img_io = render_dashboard_image(dashboard, mock_logger)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
         assert_golden(img_io, 'entity_attribute_dashboard')
 
     @mock.patch('trmnl_server.hass_client._fetch_todo_list')
