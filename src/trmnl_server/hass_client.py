@@ -51,10 +51,16 @@ def _select_entity_value(
 ) -> str | None:
     """Select the display value for an entity: its state, or a named attribute.
 
-    Returns the entity state when no attribute is requested. When an attribute
-    is requested, returns its value as a string (non-scalars are stringified).
-    A missing attribute logs a warning and returns None, mirroring the
-    behavior when an entity has no state.
+    Args:
+        state_data: The fetched entity state, or None if the fetch failed.
+        attribute: Name of the attribute to display; falsy means use the state.
+        entity_name: Entity id, used only for log context.
+        logger: Logger for the missing-attribute warning.
+
+    Returns:
+        The state or attribute value as a string (non-scalars are stringified),
+        or None if state_data is None or the requested attribute is absent.
+        A missing attribute also logs a warning.
     """
     if state_data is None:
         return None

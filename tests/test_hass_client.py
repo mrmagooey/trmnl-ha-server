@@ -135,7 +135,7 @@ class TestSelectEntityValue(unittest.TestCase):
         state_data = {'state': 'cool', 'attributes': {}}
         result = _select_entity_value(state_data, 'current_temperature', 'climate.lr', self.logger)
         self.assertIsNone(result)
-        self.logger.warning.assert_called_once()
+        self.logger.warning.assert_called_once_with(mock.ANY, 'current_temperature', 'climate.lr')
 
     def test_non_scalar_attribute_is_stringified(self):
         forecast = [{'temp': 1}]
@@ -145,6 +145,11 @@ class TestSelectEntityValue(unittest.TestCase):
 
     def test_none_state_data_returns_none(self):
         result = _select_entity_value(None, 'current_temperature', 'climate.lr', self.logger)
+        self.assertIsNone(result)
+
+    def test_no_attribute_missing_state_returns_none(self):
+        state_data = {'attributes': {}}  # entity present but no 'state' key
+        result = _select_entity_value(state_data, None, 'sensor.x', self.logger)
         self.assertIsNone(result)
 
 
