@@ -202,6 +202,7 @@ class TestGoldenImages(unittest.TestCase):
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_entity_attribute_dashboard(self, mock_get_entity_state):
+        """Climate entity displaying current_temperature attribute instead of state."""
         mock_get_entity_state.return_value = {
             'state': 'cool',
             'attributes': {'current_temperature': 21.5},
