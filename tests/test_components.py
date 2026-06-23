@@ -939,5 +939,73 @@ class TestTodoListPaginationRender(unittest.TestCase):
         self.assertEqual(img.size, (400, 300))
 
 
+class TestZeroBaselineDispatch(unittest.TestCase):
+    """Integration: zero_baseline flows from config through dispatch to render."""
+
+    def test_zero_baseline_flows_from_config_to_render(self):
+        """A history_graph config with zero_baseline=True reaches the renderer."""
+        from datetime import datetime, timezone
+        with mock.patch(
+            'trmnl_server.components._draw_graph_component'
+        ) as mock_draw:
+            mock_draw.return_value = Image.new('RGB', (10, 10), 'white')
+            with mock.patch(
+                'trmnl_server.hass_client._fetch_history'
+            ) as mock_fetch:
+                mock_fetch.return_value = [[
+                    {'state': '-5', 'last_changed': '2024-01-15T09:00:00+00:00'},
+                    {'state': '5', 'last_changed': '2024-01-15T10:00:00+00:00'},
+                ]]
+                dashboard = {
+                    'name': 'bp',
+                    'components': [{
+                        'entity_name': 'sensor.net_power',
+                        'friendly_name': 'Net Power',
+                        'type': 'history_graph',
+                        'zero_baseline': True,
+                    }],
+                }
+                fixed_now = datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+                render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+
+        self.assertTrue(mock_draw.called, "_draw_graph_component should be called")
+        _, kwargs = mock_draw.call_args
+        self.assertTrue(
+            kwargs.get('zero_baseline'),
+            "zero_baseline=True must be forwarded to the renderer",
+        )
+
+    def test_zero_baseline_defaults_false_when_absent(self):
+        """Without the flag, the renderer receives zero_baseline False/absent."""
+        from datetime import datetime, timezone
+        with mock.patch(
+            'trmnl_server.components._draw_graph_component'
+        ) as mock_draw:
+            mock_draw.return_value = Image.new('RGB', (10, 10), 'white')
+            with mock.patch(
+                'trmnl_server.hass_client._fetch_history'
+            ) as mock_fetch:
+                mock_fetch.return_value = [[
+                    {'state': '1', 'last_changed': '2024-01-15T09:00:00+00:00'},
+                    {'state': '2', 'last_changed': '2024-01-15T10:00:00+00:00'},
+                ]]
+                dashboard = {
+                    'name': 'bp',
+                    'components': [{
+                        'entity_name': 'sensor.temp',
+                        'friendly_name': 'Temp',
+                        'type': 'history_graph',
+                    }],
+                }
+                fixed_now = datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+                render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+
+        _, kwargs = mock_draw.call_args
+        self.assertFalse(
+            kwargs.get('zero_baseline', False),
+            "zero_baseline must default to False when not configured",
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

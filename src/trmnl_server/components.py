@@ -931,6 +931,7 @@ def tile_components(
                 logger,
                 window_start=window_start_val,
                 window_end=window_end_val,
+                zero_baseline=bool(render_data.get('zero_baseline', False)),
             )
         elif component_type == 'entity':
             return _draw_entity_component(
@@ -1075,6 +1076,7 @@ def render_dashboard_image(
         data: object = None
         graph_window: tuple[datetime, datetime] | None = None
         todo_meta: tuple[int, str] | None = None
+        graph_zero_baseline: bool = False
 
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
@@ -1090,6 +1092,7 @@ def render_dashboard_image(
             graph_window = (window_start, window_end)
             history = _fetch_history(entity_name, logger, start=window_start, end=window_end)
             data = _process_history_to_points(history)
+            graph_zero_baseline = bool(component.get('zero_baseline', False))
         elif component_type == 'entity':
             entity_name = component.get('entity_name', '')
             attribute = component.get('attribute')
@@ -1151,6 +1154,8 @@ def render_dashboard_image(
         if graph_window is not None:
             render_entry['window_start'] = graph_window[0]
             render_entry['window_end'] = graph_window[1]
+        if graph_zero_baseline:
+            render_entry['zero_baseline'] = True
         if todo_meta is not None:
             render_entry['columns'] = todo_meta[0]
             render_entry['todo_key'] = todo_meta[1]
