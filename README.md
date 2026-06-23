@@ -125,21 +125,26 @@ Set `large_display: true` on one component to give it the top half of the screen
 
 ### Local Development
 
-1. **Install dependencies:**
+1. **Install dependencies** (creates a `.venv` with the runtime and test dependencies):
    ```bash
-   uv pip install -r requirements.txt
+   uv sync
    ```
 
-2. **Set environment variables:**
+2. **Run the tests:**
+   ```bash
+   uv run pytest
+   ```
+
+3. **Set environment variables:**
    ```bash
    export HASS_URL="http://your-hass-url:8123"
    export HASS_TOKEN="your-long-lived-token"
    export SERVER_NAME="http://localhost:8000"
    ```
 
-3. **Run the server:**
+4. **Run the server:**
    ```bash
-   PYTHONPATH=src python3 -m trmnl_server.server
+   PYTHONPATH=src uv run python -m trmnl_server.server
    ```
 
 ### Docker
