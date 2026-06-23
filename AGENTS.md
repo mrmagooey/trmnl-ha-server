@@ -5,17 +5,17 @@
 This project uses `uv` for Python dependency management and packaging.
 
 ```bash
-# Install dependencies
-uv pip install -r requirements.txt
+# Install dependencies (runtime + dev group, into .venv)
+uv sync
 
 # Run the server
-PYTHONPATH=src python3 -m trmnl_server.server
+PYTHONPATH=src uv run python -m trmnl_server.server
 
 # Run all tests
-uv run --with pytest --with pyyaml pytest tests/ -v
+uv run pytest tests/ -v
 
 # Run a single test
-uv run --with pytest --with pyyaml pytest tests/test_api.py::TestAPISimple::test_api_setup -v
+uv run pytest tests/test_api.py::TestAPISimple::test_api_setup -v
 
 # Type checking (if mypy is installed)
 mypy src/trmnl_server/server.py
@@ -92,9 +92,9 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 ├── examples/
 │   ├── config.yaml      # Sample dashboard configuration
 │   └── deployment.yaml  # Kubernetes deployment manifest
-├── pyproject.toml       # Project metadata, dependencies, pytest config
-├── requirements.txt     # Runtime dependencies
-└── Dockerfile           # Multi-stage container build
+├── pyproject.toml       # Project metadata, dependencies (runtime + dev), pytest config
+├── uv.lock              # Pinned dependency lockfile (source of truth)
+└── Dockerfile           # Multi-stage container build (installs from uv.lock)
 ```
 
 ## Key Dependencies

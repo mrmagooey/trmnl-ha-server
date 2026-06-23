@@ -15,4 +15,3 @@ examples/config.yaml
 
 # Dev files
 examples/deployment.yaml
-pyproject.toml
