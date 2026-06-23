@@ -1,13 +1,21 @@
-# Stage 1: Build virtual environment
+# Stage 1: Build the runtime virtual environment with uv
 FROM python:3.12-slim AS builder
 
-RUN pip install uv
+# uv binary for fast, lockfile-based dependency installs
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-RUN uv venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 
-COPY requirements.txt .
-RUN uv pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
+
+# Install only runtime dependencies (no dev group, no project itself) from the
+# lockfile. Copying just the manifests keeps this layer cached across source
+# changes.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 
 # Stage 2: Final image
