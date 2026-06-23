@@ -213,6 +213,129 @@ class TestDrawGraphComponent(unittest.TestCase):
             "rendering must be deterministic when no tail is drawn",
         )
 
+    def test_zero_baseline_default_off_unchanged(self):
+        """Omitting zero_baseline renders identically to passing it False."""
+        from datetime import datetime
+        from PIL import ImageChops
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 5.0),
+            (datetime(2025, 1, 15, 10, 0), 8.0),
+        ]
+        kwargs = dict(
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+        )
+        default = _draw_graph_component("S", data_points, 400, 300, mock_logger, **kwargs)
+        explicit_off = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger, zero_baseline=False, **kwargs
+        )
+        self.assertIsNone(
+            ImageChops.difference(default, explicit_off).getbbox(),
+            "default path must equal zero_baseline=False",
+        )
+
+    def test_zero_baseline_changes_bipolar_rendering(self):
+        """For data crossing zero, the flag changes the rendered image."""
+        from datetime import datetime
+        from PIL import ImageChops
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), -10.0),
+            (datetime(2025, 1, 15, 10, 0), 10.0),
+        ]
+        kwargs = dict(
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+        )
+        off = _draw_graph_component("S", data_points, 400, 300, mock_logger, **kwargs)
+        on = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger, zero_baseline=True, **kwargs
+        )
+        self.assertIsNotNone(
+            ImageChops.difference(off, on).getbbox(),
+            "zero_baseline must change rendering for bipolar data",
+        )
+
+    def test_zero_baseline_draws_horizontal_line_near_mid(self):
+        """Symmetric data (-10..+10) puts the zero line near vertical centre,
+        spanning most of the plot width as a near-continuous black row."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), -10.0),
+            (datetime(2025, 1, 15, 9, 30), 0.0),
+            (datetime(2025, 1, 15, 10, 0), 10.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        w, h = img.size  # (400, 300)
+        # Scan the central horizontal band for a row that is mostly black across
+        # the plot width (the zero line spans the full graph width).
+        def black(px):
+            return sum(px) < 240
+        best = 0
+        for y in range(int(h * 0.35), int(h * 0.65)):
+            count = sum(
+                1 for x in range(int(w * 0.15), int(w * 0.80))
+                if black(img.getpixel((x, y)))
+            )
+            best = max(best, count)
+        span = int(w * 0.80) - int(w * 0.15)
+        self.assertGreater(
+            best, span * 0.6,
+            "expected a near-continuous horizontal zero line in the central band",
+        )
+
+    def test_zero_baseline_all_positive_includes_zero(self):
+        """All-positive data with the flag on still renders (floor pulled to 0)."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 5.0),
+            (datetime(2025, 1, 15, 10, 0), 9.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+    def test_zero_baseline_all_negative_includes_zero(self):
+        """All-negative data with the flag on still renders (ceiling pulled to 0)."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), -5.0),
+            (datetime(2025, 1, 15, 10, 0), -9.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+    def test_zero_baseline_flat_at_zero(self):
+        """A flat line at exactly 0 with the flag on renders without error."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 0.0),
+            (datetime(2025, 1, 15, 10, 0), 0.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
 
 class TestDrawEntityComponent(unittest.TestCase):
     """Tests for _draw_entity_component function."""
@@ -814,6 +937,74 @@ class TestTodoListPaginationRender(unittest.TestCase):
         img = _draw_todo_list_component("L", [], 400, 300, mock_logger)
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
+
+
+class TestZeroBaselineDispatch(unittest.TestCase):
+    """Integration: zero_baseline flows from config through dispatch to render."""
+
+    def test_zero_baseline_flows_from_config_to_render(self):
+        """A history_graph config with zero_baseline=True reaches the renderer."""
+        from datetime import datetime, timezone
+        with mock.patch(
+            'trmnl_server.components._draw_graph_component'
+        ) as mock_draw:
+            mock_draw.return_value = Image.new('RGB', (10, 10), 'white')
+            with mock.patch(
+                'trmnl_server.hass_client._fetch_history'
+            ) as mock_fetch:
+                mock_fetch.return_value = [[
+                    {'state': '-5', 'last_changed': '2024-01-15T09:00:00+00:00'},
+                    {'state': '5', 'last_changed': '2024-01-15T10:00:00+00:00'},
+                ]]
+                dashboard = {
+                    'name': 'bp',
+                    'components': [{
+                        'entity_name': 'sensor.net_power',
+                        'friendly_name': 'Net Power',
+                        'type': 'history_graph',
+                        'zero_baseline': True,
+                    }],
+                }
+                fixed_now = datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+                render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+
+        self.assertTrue(mock_draw.called, "_draw_graph_component should be called")
+        _, kwargs = mock_draw.call_args
+        self.assertTrue(
+            kwargs.get('zero_baseline'),
+            "zero_baseline=True must be forwarded to the renderer",
+        )
+
+    def test_zero_baseline_defaults_false_when_absent(self):
+        """Without the flag, the renderer receives zero_baseline False/absent."""
+        from datetime import datetime, timezone
+        with mock.patch(
+            'trmnl_server.components._draw_graph_component'
+        ) as mock_draw:
+            mock_draw.return_value = Image.new('RGB', (10, 10), 'white')
+            with mock.patch(
+                'trmnl_server.hass_client._fetch_history'
+            ) as mock_fetch:
+                mock_fetch.return_value = [[
+                    {'state': '1', 'last_changed': '2024-01-15T09:00:00+00:00'},
+                    {'state': '2', 'last_changed': '2024-01-15T10:00:00+00:00'},
+                ]]
+                dashboard = {
+                    'name': 'bp',
+                    'components': [{
+                        'entity_name': 'sensor.temp',
+                        'friendly_name': 'Temp',
+                        'type': 'history_graph',
+                    }],
+                }
+                fixed_now = datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+                render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+
+        _, kwargs = mock_draw.call_args
+        self.assertFalse(
+            kwargs.get('zero_baseline', False),
+            "zero_baseline must default to False when not configured",
+        )
 
 
 if __name__ == '__main__':

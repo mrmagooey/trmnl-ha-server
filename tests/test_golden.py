@@ -145,6 +145,29 @@ class TestGoldenImages(unittest.TestCase):
             img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
         assert_golden(img_io, 'history_graph_custom_hours')
 
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_bipolar(self, mock_fetch_history):
+        """A zero_baseline graph for data spanning negative to positive values."""
+        mock_fetch_history.return_value = [[
+            {'state': '-8.0', 'last_changed': '2024-01-15T08:00:00+00:00'},
+            {'state': '-3.0', 'last_changed': '2024-01-15T10:00:00+00:00'},
+            {'state': '2.0', 'last_changed': '2024-01-15T12:00:00+00:00'},
+            {'state': '6.0', 'last_changed': '2024-01-15T14:00:00+00:00'},
+            {'state': '-1.0', 'last_changed': '2024-01-15T16:00:00+00:00'},
+        ]]
+        dashboard = {
+            'name': 'netpower',
+            'title': 'Net Power',
+            'components': [
+                {'entity_name': 'sensor.net_power', 'friendly_name': 'Net Power',
+                 'type': 'history_graph', 'zero_baseline': True, 'hours': 24},
+            ],
+        }
+        fixed_now = datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+        assert_golden(img_io, 'history_graph_bipolar')
+
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_entity_dashboard(self, mock_get_entity_state):
         """Single entity value displayed large."""

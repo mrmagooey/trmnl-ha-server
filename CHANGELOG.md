@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- history_graph: optional `zero_baseline` flag draws an in-graph zero reference line for values that span positive and negative.
+
 ## [1.5.0] - 2026-06-14
 
 ### Added

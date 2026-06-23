@@ -51,6 +51,7 @@ class ComponentConfig(TypedDict, total=False):
     large_display: bool
     columns: int
     hours: int
+    zero_baseline: bool
 
 
 class DashboardConfig(TypedDict, total=False):
@@ -146,6 +147,7 @@ class RenderData(TypedDict, total=False):
     window_end: NotRequired[datetime]
     columns: NotRequired[int]
     todo_key: NotRequired[str]
+    zero_baseline: NotRequired[bool]
 
 
 class APIDisplayResponse(TypedDict):
