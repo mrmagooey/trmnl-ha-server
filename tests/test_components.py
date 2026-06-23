@@ -213,6 +213,129 @@ class TestDrawGraphComponent(unittest.TestCase):
             "rendering must be deterministic when no tail is drawn",
         )
 
+    def test_zero_baseline_default_off_unchanged(self):
+        """Omitting zero_baseline renders identically to passing it False."""
+        from datetime import datetime
+        from PIL import ImageChops
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 5.0),
+            (datetime(2025, 1, 15, 10, 0), 8.0),
+        ]
+        kwargs = dict(
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+        )
+        default = _draw_graph_component("S", data_points, 400, 300, mock_logger, **kwargs)
+        explicit_off = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger, zero_baseline=False, **kwargs
+        )
+        self.assertIsNone(
+            ImageChops.difference(default, explicit_off).getbbox(),
+            "default path must equal zero_baseline=False",
+        )
+
+    def test_zero_baseline_changes_bipolar_rendering(self):
+        """For data crossing zero, the flag changes the rendered image."""
+        from datetime import datetime
+        from PIL import ImageChops
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), -10.0),
+            (datetime(2025, 1, 15, 10, 0), 10.0),
+        ]
+        kwargs = dict(
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+        )
+        off = _draw_graph_component("S", data_points, 400, 300, mock_logger, **kwargs)
+        on = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger, zero_baseline=True, **kwargs
+        )
+        self.assertIsNotNone(
+            ImageChops.difference(off, on).getbbox(),
+            "zero_baseline must change rendering for bipolar data",
+        )
+
+    def test_zero_baseline_draws_horizontal_line_near_mid(self):
+        """Symmetric data (-10..+10) puts the zero line near vertical centre,
+        spanning most of the plot width as a near-continuous black row."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), -10.0),
+            (datetime(2025, 1, 15, 9, 30), 0.0),
+            (datetime(2025, 1, 15, 10, 0), 10.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        w, h = img.size  # (400, 300)
+        # Scan the central horizontal band for a row that is mostly black across
+        # the plot width (the zero line spans the full graph width).
+        def black(px):
+            return sum(px) < 240
+        best = 0
+        for y in range(int(h * 0.35), int(h * 0.65)):
+            count = sum(
+                1 for x in range(int(w * 0.15), int(w * 0.80))
+                if black(img.getpixel((x, y)))
+            )
+            best = max(best, count)
+        span = int(w * 0.80) - int(w * 0.15)
+        self.assertGreater(
+            best, span * 0.6,
+            "expected a near-continuous horizontal zero line in the central band",
+        )
+
+    def test_zero_baseline_all_positive_includes_zero(self):
+        """All-positive data with the flag on still renders (floor pulled to 0)."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 5.0),
+            (datetime(2025, 1, 15, 10, 0), 9.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+    def test_zero_baseline_all_negative_includes_zero(self):
+        """All-negative data with the flag on still renders (ceiling pulled to 0)."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), -5.0),
+            (datetime(2025, 1, 15, 10, 0), -9.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+    def test_zero_baseline_flat_at_zero(self):
+        """A flat line at exactly 0 with the flag on renders without error."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 0.0),
+            (datetime(2025, 1, 15, 10, 0), 0.0),
+        ]
+        img = _draw_graph_component(
+            "S", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 11, 0),
+            zero_baseline=True,
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
 
 class TestDrawEntityComponent(unittest.TestCase):
     """Tests for _draw_entity_component function."""

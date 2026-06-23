@@ -163,6 +163,7 @@ def _draw_graph_component(
     *,
     window_start: datetime,
     window_end: datetime,
+    zero_baseline: bool = False,
 ) -> Image.Image:
     """Draws a single history graph component.
 
@@ -174,6 +175,8 @@ def _draw_graph_component(
         logger: Logger instance
         window_start: Start of the fixed time window (x-axis left bound).
         window_end: End of the fixed time window (x-axis right bound, typically "now").
+        zero_baseline: When True, include 0 in the value range and draw a thin
+            horizontal zero reference line with a labeled 0 y-tick.
 
     Returns:
         Rendered PIL Image
@@ -245,6 +248,11 @@ def _draw_graph_component(
     min_val: float = min(values)
     max_val: float = max(values)
 
+    # Bipolar variant: anchor the range so 0 is always inside it.
+    if zero_baseline:
+        min_val = min(0.0, min_val)
+        max_val = max(0.0, max_val)
+
     # Avoid division by zero
     if max_val == min_val:
         max_val += 1
@@ -285,6 +293,32 @@ def _draw_graph_component(
         )
         d.line([(margin - (5 * scale), y), (margin, y)], fill='black', width=scale)
 
+    # Bipolar variant: guarantee a labeled "0" tick (unless one already lands on 0).
+    if zero_baseline:
+        existing_tick_vals = [
+            min_val + (max_val - min_val) * i / num_y_labels
+            for i in range(num_y_labels + 1)
+        ]
+        if not any(abs(v) < 1e-9 for v in existing_tick_vals):
+            zero_y: float = (large_height - margin) - (
+                (0.0 - min_val) / (max_val - min_val)
+            ) * graph_height
+            zlabel: str = "0.0"
+            ztext_bbox = d.textbbox((0, 0), zlabel, font=font_axes)
+            ztext_width: int = ztext_bbox[2] - ztext_bbox[0]
+            ztext_height: int = ztext_bbox[3] - ztext_bbox[1]
+            d.text(
+                (margin - ztext_width - (5 * scale), zero_y - ztext_height / 2),
+                zlabel,
+                font=font_axes,
+                fill='black',
+            )
+            d.line(
+                [(margin - (5 * scale), zero_y), (margin, zero_y)],
+                fill='black',
+                width=scale,
+            )
+
     # Draw X-axis labels
     if (max_time - min_time).total_seconds() > 0:
         num_x_labels: int = 4
@@ -312,6 +346,17 @@ def _draw_graph_component(
         x = max(float(margin), min(x, float(margin + graph_width)))
         y: float = (large_height - margin) - ((v - min_val) / (max_val - min_val)) * graph_height
         return x, y
+
+    # Bipolar variant: thin horizontal reference line at value 0, spanning the
+    # plot width. Thinner (width=scale) than the axes (scale * 2) and the data
+    # line (4 * scale) so the visual hierarchy reads data > axes > zero line.
+    if zero_baseline:
+        _zx0, zero_line_y = to_coords(min_time, 0.0)
+        d.line(
+            [(margin, zero_line_y), (margin + graph_width, zero_line_y)],
+            fill='black',
+            width=scale,
+        )
 
     # Display last value
     last_value: float = values[-1]
