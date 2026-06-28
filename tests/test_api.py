@@ -296,5 +296,102 @@ class TestAPISimple(unittest.TestCase):
         mock_next.assert_called_once()
 
 
+class TestAPIMetrics(unittest.TestCase):
+    """End-to-end tests for serve-event recording and /api/metrics."""
+
+    def setUp(self):
+        from trmnl_server.state import server_state
+        api._device_indices.clear()
+        server_state.reset_metrics()
+
+    def create_handler(self, path, headers=None):
+        mock_logger = mock.Mock()
+        handler = APICalls.__new__(APICalls)
+        handler.logger = mock_logger
+        handler.refresh_rate = 600
+        handler.path = path
+        handler.headers = headers or {}
+        handler.client_address = ('127.0.0.1', 12345)
+        handler.wfile = BytesIO()
+        handler._response_code = None
+
+        def mock_send_response(code):
+            handler._response_code = code
+        handler.send_response = mock_send_response
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        return handler
+
+    @mock.patch('trmnl_server.api._aligned_refresh_rate', return_value=288)
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('trmnl_server.api.read_config')
+    def test_display_poll_records_event_with_battery(self, mock_read_config, _vis, _rate):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [{'dashboard': 'morning'}]}],
+            'dashboards': [],
+        }
+        handler = self.create_handler(
+            '/api/display',
+            {'ID': 'AA:BB:CC:DD:EE:FF', 'Battery-Voltage': '3.9'},
+        )
+        handler._handle_api_display()
+
+        metrics_handler = self.create_handler('/api/metrics')
+        metrics_handler._handle_api_metrics()
+        metrics_handler.wfile.seek(0)
+        out = json.loads(metrics_handler.wfile.read().decode())
+
+        self.assertEqual(out['dashboards_served']['total'], 1)
+        self.assertEqual(
+            out['dashboards_served']['by_device']['AA:BB:CC:DD:EE:FF']['count'], 1)
+        today = out['battery']['AA:BB:CC:DD:EE:FF']['daily'][-1]
+        self.assertEqual(today['voltage'], 3.9)
+
+    @mock.patch('trmnl_server.api.read_config')
+    def test_no_dashboard_selected_records_nothing(self, mock_read_config):
+        # Unknown device → no dashboard selected → no serve event.
+        mock_read_config.return_value = {'devices': [], 'dashboards': []}
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+        handler._handle_api_display()
+
+        metrics_handler = self.create_handler('/api/metrics')
+        metrics_handler._handle_api_metrics()
+        metrics_handler.wfile.seek(0)
+        out = json.loads(metrics_handler.wfile.read().decode())
+        self.assertEqual(out['dashboards_served']['total'], 0)
+
+    @mock.patch('trmnl_server.api._aligned_refresh_rate', return_value=288)
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('trmnl_server.api.read_config')
+    def test_invalid_battery_recorded_as_null(self, mock_read_config, _vis, _rate):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [{'dashboard': 'morning'}]}],
+            'dashboards': [],
+        }
+        # 5.0V is out of the 2.4–4.2 range → recorded as null.
+        handler = self.create_handler(
+            '/api/display',
+            {'ID': 'AA:BB:CC:DD:EE:FF', 'Battery-Voltage': '5.0'},
+        )
+        handler._handle_api_display()
+
+        metrics_handler = self.create_handler('/api/metrics')
+        metrics_handler._handle_api_metrics()
+        metrics_handler.wfile.seek(0)
+        out = json.loads(metrics_handler.wfile.read().decode())
+        today = out['battery']['AA:BB:CC:DD:EE:FF']['daily'][-1]
+        self.assertIsNone(today['voltage'])
+
+    def test_metrics_route_in_do_get(self):
+        from trmnl_server.state import server_state
+        server_state.record_serve_event('AA:BB:CC:DD:EE:FF', 'morning', 3.9)
+        handler = self.create_handler('/api/metrics')
+        handler.do_GET()
+        self.assertEqual(handler._response_code, 200)
+        handler.wfile.seek(0)
+        out = json.loads(handler.wfile.read().decode())
+        self.assertEqual(out['dashboards_served']['total'], 1)
+
+
 if __name__ == '__main__':
     unittest.main()
