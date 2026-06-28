@@ -4,6 +4,7 @@
 
 ### Added
 - history_graph: optional `zero_baseline` flag draws an in-graph zero reference line for values that span positive and negative.
+- Added /api/metrics endpoint reporting dashboards served (last 7 days, by device id) and per-device daily battery state.
 
 ## [1.5.0] - 2026-06-14
 

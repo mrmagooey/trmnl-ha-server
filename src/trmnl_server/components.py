@@ -1182,9 +1182,8 @@ def render_dashboard_image(
         battery_voltage: float | None = server_state.consume_battery_voltage(device_id) if device_id else None
         if battery_voltage is not None:
             try:
-                # Map 2.4V..4.2V to 0..100%
-                pct: int = int(round(((battery_voltage - 2.4) / (4.2 - 2.4)) * 100))
-                pct = max(0, min(100, pct))
+                from .metrics import voltage_to_percent
+                pct: int = voltage_to_percent(battery_voltage)
                 battery_text: str = f"{pct}%"
 
                 text_bbox = draw.textbbox((0, 0), battery_text, font=font_value)

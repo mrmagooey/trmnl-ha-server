@@ -20,9 +20,19 @@ from trmnl_server.components import (
     _load_font,
     _todo_capacity,
 )
+from trmnl_server.metrics import voltage_to_percent
 
 # Create a mock logger for testing
 mock_logger = mock.Mock(spec=logging.Logger)
+
+
+class TestBatteryPercentParity(unittest.TestCase):
+    """The shared helper must reproduce the legacy inline battery formula."""
+
+    def test_helper_matches_legacy_formula_across_range(self):
+        for v in (2.4, 2.7, 3.0, 3.3, 3.7, 3.91, 4.0, 4.2):
+            legacy = max(0, min(100, int(round(((v - 2.4) / (4.2 - 2.4)) * 100))))
+            self.assertEqual(voltage_to_percent(v), legacy)
 
 
 class TestLoadFont(unittest.TestCase):

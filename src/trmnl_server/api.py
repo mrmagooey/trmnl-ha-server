@@ -79,11 +79,14 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
         # Capture battery voltage header
         device_id: str | None = self._get_device_id()
+        battery_voltage_value: float | None = None
         battery_voltage_header: str | None = self.headers.get('Battery-Voltage')
         if battery_voltage_header is not None and device_id is not None:
             try:
                 v: float = float(battery_voltage_header)
                 server_state.set_battery_voltage(device_id, v)
+                if 2.4 <= v <= 4.2:
+                    battery_voltage_value = v
             except ValueError:
                 self.logger.warning("Invalid Battery-Voltage header: %s", battery_voltage_header)
 
@@ -135,6 +138,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                     encoded_id: str = device_id.replace(':', '-')
                     image_url = f"{SERVER_NAME}/static/{quote(encoded_id, safe='')}/{out_filename}"
                     self.logger.info("Device %s → dashboard '%s'", label, dashboard_name)
+                    server_state.record_serve_event(device_id, dashboard_name, battery_voltage_value)
 
                     entry_refresh_rate: int | None = entry.get('refresh_rate')
                     effective_rate: int = refresh_rate
@@ -197,6 +201,14 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             from pprint import pformat as pf
             self.logger.debug("display response: %s", pf(response))
         self.wfile.write(json.dumps(response).encode('utf-8'))
+
+    def _handle_api_metrics(self) -> None:
+        """Handle /api/metrics endpoint — serve-event & battery stats (7 days)."""
+        snapshot = server_state.metrics_snapshot(time.time())
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(snapshot).encode('utf-8'))
 
     def _send_png(self, img_io: BytesIO) -> None:
         """Send a PNG BytesIO as a 200 image/png response."""
@@ -310,6 +322,10 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
             if path == '/api/display':
                 self._handle_api_display()
+                return
+
+            if path == '/api/metrics':
+                self._handle_api_metrics()
                 return
 
             if path.startswith('/static/') and path.endswith('.png'):
