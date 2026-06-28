@@ -49,10 +49,17 @@ ServeEvent = { ts: float, device_id: str, dashboard: str, battery_voltage: float
 ```
 
 This single event stream feeds **both** outputs (dashboard counts and
-battery-per-day), giving one source of truth and one capture point. The
-`battery_voltage` is taken from the same request that already parses the
-`Battery-Voltage` header; the existing consume-on-render path in
-`components.py` is left untouched.
+battery-per-day), giving one source of truth and one capture point.
+
+**Battery-capture ordering (critical).** The `battery_voltage` for the event
+MUST be read from the **incoming request's `Battery-Voltage` header at record
+time** — i.e. the same parsed float (`v`) already computed in
+`_handle_api_display()` (`api.py:85`). It MUST NOT be read back from
+`ServerState`, because the existing consume-on-render path
+(`server_state.consume_battery_voltage`) *clears* that cached value; reading the
+cache after a render would silently record `null` for every event. The
+consume-on-render path itself is left untouched. If a poll has no valid
+`Battery-Voltage` header, the event is recorded with `battery_voltage = null`.
 
 **Retention / pruning:**
 
@@ -101,13 +108,18 @@ interpret times. Each day's battery value is the **latest reading in that day**.
 Details:
 
 - `daily` always contains exactly 7 entries, oldest first, one per calendar day
-  in the window (today inclusive). Days with no reading have `voltage: null`
-  and `percent: null`.
+  in the window (today inclusive). **Null-day format:** a day with no reading is
+  the object `{ "date": "YYYY-MM-DD", "voltage": null, "percent": null }` — the
+  array slot is never itself `null`. (See the `2026-06-24` entry in the example
+  above.)
 - `percent` is computed by the shared `voltage_to_percent()` helper (linear
   2.4–4.2V, clamped 0–100, rounded to int) — identical to the device screen.
-- A device that has produced any event in the window appears in `by_device`
-  and/or `battery`. A device with serves but no valid battery readings still
-  gets a `daily` array of 7 all-`null` entries.
+- **Which devices appear:** any device that produced at least one serve event in
+  the window appears in **both** `dashboards_served.by_device` and `battery`.
+  A device that polled but never sent a valid battery reading still gets a
+  `battery` entry whose `daily` array is 7 all-`null` entries (so the two
+  device key sets always match). A device with zero events in the window appears
+  in neither.
 
 ## Code Surface (small, isolated)
 
@@ -119,7 +131,11 @@ Details:
   - `metrics_snapshot(now)` returning the aggregated dict (delegates to
     `metrics.py`), pruning as it goes. All under the existing lock.
 - **`components.py`** — replace the inline formula at line 1186 with a call to
-  the shared `voltage_to_percent()`.
+  the shared `voltage_to_percent()`. **Intentional extra change** (not in the
+  original request): this is a behavior-preserving refactor to guarantee the
+  metrics percentage and the on-screen percentage can never drift apart. Output
+  for any given voltage is identical to today's. Called out so reviewers know
+  the expanded blast radius is deliberate.
 - **`api.py`** —
   - In `_handle_api_display()`, after a dashboard is selected, call
     `server_state.record_serve_event(...)`.
