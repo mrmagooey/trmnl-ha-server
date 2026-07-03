@@ -95,6 +95,12 @@ def resolve_firmware(
 - **Cache directory:** `FIRMWARE_CACHE_DIR` env var, default
   `"firmware_cache"` (relative path, matching the existing `CONFIG_PATH`
   env var's convention of defaulting to `"config.yaml"`).
+- **`"latest"` caching caveat:** because the cache key includes the literal
+  `version` string, `version: "latest"` is resolved once and then served
+  from cache indefinitely — it does not re-check GitHub for newer releases
+  on subsequent requests. This is a direct consequence of the "download
+  once, reuse until target version changes" caching design; clearing
+  `FIRMWARE_CACHE_DIR` is the way to force a re-resolution.
 
 ## API integration (`api.py`)
 

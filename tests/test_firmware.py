@@ -62,6 +62,18 @@ class TestDownloadAsset(unittest.TestCase):
         self.assertFalse(dest.exists())
         self.assertFalse((dest.parent / "firmware.bin.part").exists())
 
+    def test_oserror_during_write_returns_false(self):
+        dest = Path(self.tmp.name) / "firmware.bin"
+        cm = mock.MagicMock()
+        cm.__enter__.return_value.read.return_value = b"payload"
+
+        with mock.patch('trmnl_server.firmware.urlopen', return_value=cm), \
+             mock.patch('trmnl_server.firmware.os_replace', side_effect=OSError("disk full")):
+            ok = _download_asset("https://example.com/firmware.bin", dest, self.logger)
+
+        self.assertFalse(ok)
+        self.assertFalse(dest.exists())
+
 
 class TestResolveFirmware(unittest.TestCase):
     def setUp(self):

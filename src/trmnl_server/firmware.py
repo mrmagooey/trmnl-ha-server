@@ -86,15 +86,15 @@ def _download_asset(download_url: str, dest: Path, logger: "Logger") -> bool:
     Returns:
         True on success, False on any failure (dest is left untouched).
     """
-    dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path = dest.parent / f"{dest.name}.part"
     req = Request(download_url, headers={"User-Agent": _USER_AGENT})
     try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
         with urlopen(req, timeout=30) as response:
             tmp_path.write_bytes(response.read())
         os_replace(tmp_path, dest)
         return True
-    except (HTTPError, URLError) as e:
+    except (HTTPError, URLError, OSError) as e:
         logger.warning("Failed to download firmware asset from %s: %s", download_url, e)
         tmp_path.unlink(missing_ok=True)
         return False
