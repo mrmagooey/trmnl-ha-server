@@ -299,6 +299,63 @@ class TestFindDevice(unittest.TestCase):
         self.assertIsNone(find_device([], 'AA:BB'))
 
 
+class TestValidateFirmwareConfig(unittest.TestCase):
+    """Tests for the 'firmware' block validation in _validate_config."""
+
+    def setUp(self):
+        self.mock_logger = mock.Mock()
+
+    def test_no_firmware_key_is_valid(self):
+        from trmnl_server.config import _validate_config
+        _validate_config({'devices': [], 'dashboards': []}, self.mock_logger)
+        self.mock_logger.warning.assert_not_called()
+
+    def test_complete_firmware_block_is_valid(self):
+        from trmnl_server.config import _validate_config
+        config = {
+            'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'},
+        }
+        _validate_config(config, self.mock_logger)
+        self.mock_logger.warning.assert_not_called()
+
+    def test_firmware_not_a_mapping_warns(self):
+        from trmnl_server.config import _validate_config
+        _validate_config({'firmware': 'not-a-dict'}, self.mock_logger)
+        self.mock_logger.warning.assert_called_once()
+
+    def test_firmware_missing_repo_warns(self):
+        from trmnl_server.config import _validate_config
+        config = {'firmware': {'version': 'v1.6.0', 'asset_pattern': '*.bin'}}
+        _validate_config(config, self.mock_logger)
+        self.mock_logger.warning.assert_called_once_with(
+            "config: 'firmware.%s' missing or invalid", 'repo'
+        )
+
+    def test_firmware_missing_version_warns(self):
+        from trmnl_server.config import _validate_config
+        config = {'firmware': {'repo': 'owner/repo', 'asset_pattern': '*.bin'}}
+        _validate_config(config, self.mock_logger)
+        self.mock_logger.warning.assert_called_once_with(
+            "config: 'firmware.%s' missing or invalid", 'version'
+        )
+
+    def test_firmware_missing_asset_pattern_warns(self):
+        from trmnl_server.config import _validate_config
+        config = {'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0'}}
+        _validate_config(config, self.mock_logger)
+        self.mock_logger.warning.assert_called_once_with(
+            "config: 'firmware.%s' missing or invalid", 'asset_pattern'
+        )
+
+    def test_firmware_non_string_value_warns(self):
+        from trmnl_server.config import _validate_config
+        config = {'firmware': {'repo': 123, 'version': 'v1.6.0', 'asset_pattern': '*.bin'}}
+        _validate_config(config, self.mock_logger)
+        self.mock_logger.warning.assert_called_once_with(
+            "config: 'firmware.%s' missing or invalid", 'repo'
+        )
+
+
 class TestAlignedRefreshRate(unittest.TestCase):
     """Tests for _aligned_refresh_rate (drift-free schedule alignment)."""
 

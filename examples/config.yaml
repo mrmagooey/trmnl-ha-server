@@ -7,6 +7,12 @@ devices:
     # Optional human-readable name for this device (used in log messages).
     name: "Living Room"
 
+    # Optional: overrides the top-level firmware.asset_pattern for this device.
+    # Use when different physical devices need different board-variant binaries
+    # from the same GitHub release (e.g. a Seeed Studio build vs. the official
+    # TRMNL PCB build).
+    # firmware_asset_pattern: "*seeed_xiao_esp32c3*.bin"
+
     # Optional sleep window (local time, HH:MM). During this window the server
     # overrides the refresh_rate to the number of seconds until sleep_end.
     sleep_start: "23:00"
@@ -137,3 +143,16 @@ dashboards:
       - entity_name: "sensor.sensor_name3"
         friendly_name: "temp"
         type: entity
+
+# Optional: self-hosted firmware update delivery. When present, /api/display
+# compares each device's FW-Version request header against `version`; on a
+# mismatch, the server fetches the matching release asset from GitHub
+# (caching it to disk on first use) and tells the device to update.
+# firmware:
+#   # GitHub "owner/repo" to pull releases from.
+#   repo: usetrmnl/firmware
+#   # Exact release tag (e.g. "v1.6.0"), or "latest".
+#   version: v1.6.0
+#   # Default glob (fnmatch) used to pick the release asset by filename, when
+#   # a device doesn't set its own firmware_asset_pattern.
+#   asset_pattern: "*.bin"
