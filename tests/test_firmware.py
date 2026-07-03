@@ -175,6 +175,53 @@ class TestResolveFirmware(unittest.TestCase):
 
         self.assertEqual(mock_urlopen.call_count, 2)
 
+    def test_malformed_json_response_returns_none(self):
+        """Test that invalid JSON in GitHub response is caught and returns None."""
+        release_cm = mock.MagicMock()
+        release_cm.__enter__.return_value.read.return_value = b'not valid json'
+
+        with mock.patch('trmnl_server.firmware.urlopen', return_value=release_cm):
+            result = resolve_firmware("owner/repo", "v1.0.0", "*.bin", self.cache_dir, self.logger)
+
+        self.assertIsNone(result)
+        self.logger.warning.assert_called()
+        # Verify the warning message mentions invalid JSON
+        call_args = self.logger.warning.call_args
+        self.assertIn("invalid JSON", call_args[0][0])
+
+    def test_missing_asset_download_url_returns_none(self):
+        """Test that an asset dict missing 'browser_download_url' is handled gracefully."""
+        release_cm = mock.MagicMock()
+        release_cm.__enter__.return_value.read.return_value = (
+            b'{"assets": [{"name": "firmware.bin"}]}'
+        )
+
+        with mock.patch('trmnl_server.firmware.urlopen', return_value=release_cm):
+            result = resolve_firmware("owner/repo", "v1.0.0", "*.bin", self.cache_dir, self.logger)
+
+        self.assertIsNone(result)
+        self.logger.warning.assert_called()
+        # Verify the warning message mentions missing keys
+        call_args = self.logger.warning.call_args
+        self.assertIn("missing 'name' or 'browser_download_url'", call_args[0][0])
+
+    def test_malformed_asset_with_empty_string_name_and_url_returns_none(self):
+        """Test that an asset with empty string name/URL after matching is handled gracefully."""
+        release_cm = mock.MagicMock()
+        # Asset with name that matches pattern but empty browser_download_url
+        release_cm.__enter__.return_value.read.return_value = (
+            b'{"assets": [{"name": "firmware.bin", "browser_download_url": ""}]}'
+        )
+
+        with mock.patch('trmnl_server.firmware.urlopen', return_value=release_cm):
+            result = resolve_firmware("owner/repo", "v1.0.0", "*.bin", self.cache_dir, self.logger)
+
+        self.assertIsNone(result)
+        self.logger.warning.assert_called()
+        # Verify the warning message mentions missing keys
+        call_args = self.logger.warning.call_args
+        self.assertIn("missing 'name' or 'browser_download_url'", call_args[0][0])
+
 
 if __name__ == '__main__':
     unittest.main()

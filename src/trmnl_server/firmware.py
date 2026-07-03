@@ -75,6 +75,9 @@ def _fetch_release_assets(repo: str, version: str, logger: "Logger") -> list[dic
     except URLError as e:
         logger.warning("GitHub release lookup failed for %s@%s: %s", repo, version, e.reason)
         return None
+    except ValueError as e:
+        logger.warning("GitHub release lookup for %s@%s returned invalid JSON: %s", repo, version, e)
+        return None
 
 
 def _download_asset(download_url: str, dest: Path, logger: "Logger") -> bool:
@@ -140,14 +143,21 @@ def resolve_firmware(
             _failures[cache_key] = time.time()
             return None
 
-        match = next((a for a in assets if fnmatch(a.get("name", ""), asset_pattern)), None)
+        match = next((a for a in assets if a.get("name") and fnmatch(a.get("name"), asset_pattern)), None)
         if match is None:
             logger.warning("No release asset matching %r found for %s@%s", asset_pattern, repo, version)
             _failures[cache_key] = time.time()
             return None
 
-        dest = cache_root / match["name"]
-        if not _download_asset(match["browser_download_url"], dest, logger):
+        asset_name = match.get("name")
+        download_url = match.get("browser_download_url")
+        if not asset_name or not download_url:
+            logger.warning("Release asset from %s@%s is missing 'name' or 'browser_download_url'", repo, version)
+            _failures[cache_key] = time.time()
+            return None
+
+        dest = cache_root / asset_name
+        if not _download_asset(download_url, dest, logger):
             _failures[cache_key] = time.time()
             return None
 
