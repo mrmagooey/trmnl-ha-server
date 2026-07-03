@@ -9,6 +9,7 @@ import threading
 import time
 from io import BytesIO, SEEK_END
 from os import environ
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -21,6 +22,7 @@ from .components import (
     tile_components,
 )
 from .config import read_config, is_schedule_entry_visible, find_device, _coerce_time, _aligned_refresh_rate, _seconds_until_next_visible
+from .firmware import resolve_firmware, _fw_differs, _repo_dir_name, FIRMWARE_CACHE_DIR
 from .hass_client import HASS_URL, HASS_TOKEN
 
 if TYPE_CHECKING:
@@ -97,6 +99,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         out_filename: str = "device_not_found.png"
         image_url: str = f"{SERVER_NAME}/static/{out_filename}"
         refresh_rate: int = self.refresh_rate
+        update_firmware: bool = False
+        firmware_url: str | None = None
 
         if device_id is None:
             self.logger.warning("Rejected /api/display request with no ID header")
@@ -114,6 +118,22 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                 self.logger.warning("Device %s not found in devices config.", label)
                 image_url = f"{SERVER_NAME}/static/device_id/{device_id.replace(':', '-')}.png"
             else:
+                fw_config = config.get('firmware')
+                if fw_config and fw_config.get('repo') and fw_config.get('version') and fw_config.get('asset_pattern'):
+                    current_fw: str | None = self.headers.get('FW-Version')
+                    target_version: str = fw_config['version']
+                    if current_fw is not None and _fw_differs(current_fw, target_version):
+                        pattern: str = device_config.get('firmware_asset_pattern', fw_config['asset_pattern'])
+                        cached_path: Path | None = resolve_firmware(
+                            fw_config['repo'], target_version, pattern, FIRMWARE_CACHE_DIR, self.logger
+                        )
+                        if cached_path is not None:
+                            update_firmware = True
+                            firmware_url = (
+                                f"{SERVER_NAME}/static/firmware/"
+                                f"{quote(target_version, safe='')}/{quote(cached_path.name, safe='')}"
+                            )
+
                 out_filename = "no_dashboard_visible.png"
                 image_url = f"{SERVER_NAME}/static/{out_filename}"
 
@@ -193,8 +213,8 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             "image_url": image_url,
             "image_url_timeout": 0,
             "reset_firmware": False,
-            "update_firmware": False,
-            "firmware_url": None,
+            "update_firmware": update_firmware,
+            "firmware_url": firmware_url,
             "refresh_rate": str(refresh_rate),
         }
         if self.logger.isEnabledFor(10):  # DEBUG
@@ -298,6 +318,36 @@ class APICalls(http.server.BaseHTTPRequestHandler):
 
         return False
 
+    def _handle_static_firmware(self) -> bool:
+        """Handle GET /static/firmware/<version>/<filename> — serve a cached binary.
+
+        Returns:
+            True if a cached firmware file was found and served, False otherwise.
+        """
+        from urllib.parse import unquote
+
+        path: str = unquote(self._parse_path())
+        parts: list[str] = path[len('/static/firmware/'):].split('/')
+        if len(parts) != 2 or '..' in parts[0] or '..' in parts[1]:
+            return False
+        version, filename = parts
+
+        config = read_config(self.logger)
+        fw_config = config.get('firmware')
+        if not fw_config or not fw_config.get('repo'):
+            return False
+
+        file_path: Path = Path(FIRMWARE_CACHE_DIR) / _repo_dir_name(fw_config['repo']) / version / filename
+        if not file_path.is_file():
+            return False
+
+        self.send_response(200)
+        self.send_header('Content-type', 'application/octet-stream')
+        self.send_header('Content-length', str(file_path.stat().st_size))
+        self.end_headers()
+        self.wfile.write(file_path.read_bytes())
+        return True
+
     def log_message(self, format: str, *args: object) -> None:
         """Route BaseHTTPRequestHandler access logs through our logger."""
         self.logger.debug("%s - " + format, self.client_address[0], *args)
@@ -327,6 +377,10 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             if path == '/api/metrics':
                 self._handle_api_metrics()
                 return
+
+            if path.startswith('/static/firmware/'):
+                if self._handle_static_firmware():
+                    return
 
             if path.startswith('/static/') and path.endswith('.png'):
                 if self._handle_static_png():
