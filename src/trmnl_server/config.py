@@ -127,6 +127,16 @@ def _validate_config(config: Config, logger: "Logger") -> None:
                                         etag, part, ', '.join(sorted(VALID_DAYS))
                                     )
 
+    firmware = config.get("firmware")
+    if firmware is not None:
+        if not isinstance(firmware, dict):
+            logger.warning("config: 'firmware' must be a mapping")
+        else:
+            for key in ("repo", "version", "asset_pattern"):
+                value = firmware.get(key)
+                if not value or not isinstance(value, str):
+                    logger.warning("config: 'firmware.%s' missing or invalid", key)
+
     dashboards = config.get("dashboards")
     if dashboards is None:
         return

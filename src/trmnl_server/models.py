@@ -71,12 +71,21 @@ class DeviceConfig(TypedDict, total=False):
     sleep_end: str
     rotate: int
     schedule: list[ScheduleEntry]
+    firmware_asset_pattern: str
+
+
+class FirmwareConfig(TypedDict, total=False):
+    """Configuration for self-hosted firmware update delivery."""
+    repo: str
+    version: str
+    asset_pattern: str
 
 
 class Config(TypedDict, total=False):
     """Root configuration structure."""
     devices: list[DeviceConfig]
     dashboards: list[DashboardConfig]
+    firmware: FirmwareConfig
 
 
 class EntityState(TypedDict, total=False):
