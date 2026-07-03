@@ -1,10 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.0] - 2026-07-03
 
 ### Added
 - history_graph: optional `zero_baseline` flag draws an in-graph zero reference line for values that span positive and negative.
 - Added /api/metrics endpoint reporting dashboards served (last 7 days, by device id) and per-device daily battery state.
+- Optional self-hosted firmware update delivery: configure a `firmware` block (GitHub repo, version, asset pattern) in `config.yaml`, with an optional per-device `firmware_asset_pattern` override, and the server resolves, caches, and serves the matching release binary via `/api/display`'s `update_firmware`/`firmware_url` fields whenever a device's `FW-Version` header doesn't match the target.
 
 ## [1.5.0] - 2026-06-14
 
