@@ -108,7 +108,11 @@ firmware:
   asset_pattern: "*.bin"       # fnmatch glob used to pick the release asset by filename
 ```
 
-A release can publish multiple board-variant binaries; `asset_pattern` selects which one to serve. Since board variant is fixed per physical device, an individual device can override the default pattern:
+A release can publish multiple board-variant binaries; `asset_pattern` selects which one to serve.
+
+`version: "latest"` is resolved once (the first time a device needs an update) and then cached like any pinned tag — it does **not** automatically track new releases as they're published. To pick up a newer "latest" release, clear the relevant subdirectory under `FIRMWARE_CACHE_DIR` (or the whole directory) so the next resolution re-queries GitHub.
+
+Since board variant is fixed per physical device, an individual device can override the default pattern:
 
 ```yaml
 devices:
