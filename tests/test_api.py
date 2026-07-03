@@ -4,6 +4,8 @@ import unittest
 from unittest import mock
 from io import BytesIO
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from trmnl_server import api
 from trmnl_server.api import APICalls
@@ -391,6 +393,254 @@ class TestAPIMetrics(unittest.TestCase):
         handler.wfile.seek(0)
         out = json.loads(handler.wfile.read().decode())
         self.assertEqual(out['dashboards_served']['total'], 1)
+
+
+class TestAPIFirmware(unittest.TestCase):
+    """Integration tests for firmware fields in /api/display."""
+
+    def setUp(self):
+        api._device_indices.clear()
+
+    def create_handler(self, path, headers=None):
+        mock_logger = mock.Mock()
+        handler = APICalls.__new__(APICalls)
+        handler.logger = mock_logger
+        handler.refresh_rate = 600
+        handler.path = path
+        handler.headers = headers or {}
+        handler.client_address = ('127.0.0.1', 12345)
+        handler.wfile = BytesIO()
+        handler._response_code = None
+
+        def mock_send_response(code):
+            handler._response_code = code
+        handler.send_response = mock_send_response
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        return handler
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_display_sets_update_firmware_when_versions_differ(self, mock_read_config, mock_resolve):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+            'dashboards': [],
+            'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'},
+        }
+        mock_resolve.return_value = Path('/cache/owner_repo/v1.6.0/firmware.bin')
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': '1.5.2'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertTrue(response['update_firmware'])
+        self.assertIn('/static/firmware/v1.6.0/firmware.bin', response['firmware_url'])
+        mock_resolve.assert_called_once_with(
+            'owner/repo', 'v1.6.0', '*.bin', api.FIRMWARE_CACHE_DIR, handler.logger
+        )
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_display_no_update_when_versions_match(self, mock_read_config, mock_resolve):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+            'dashboards': [],
+            'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'},
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': 'v1.6.0'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertFalse(response['update_firmware'])
+        self.assertIsNone(response['firmware_url'])
+        mock_resolve.assert_not_called()
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_display_no_firmware_config_leaves_fields_false(self, mock_read_config, mock_resolve):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+            'dashboards': [],
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': '1.0.0'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertFalse(response['update_firmware'])
+        self.assertIsNone(response['firmware_url'])
+        mock_resolve.assert_not_called()
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_display_incomplete_firmware_config_does_not_crash(self, mock_read_config, mock_resolve):
+        # A 'firmware' block missing a required key (here: 'version') must not
+        # raise — _validate_config only warns, it doesn't reject malformed
+        # config, so _handle_api_display must tolerate this without a KeyError.
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+            'dashboards': [],
+            'firmware': {'repo': 'owner/repo', 'asset_pattern': '*.bin'},
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': '1.0.0'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertEqual(handler._response_code, 200)
+        self.assertFalse(response['update_firmware'])
+        self.assertIsNone(response['firmware_url'])
+        mock_resolve.assert_not_called()
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_display_resolution_failure_degrades_gracefully(self, mock_read_config, mock_resolve):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+            'dashboards': [],
+            'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'},
+        }
+        mock_resolve.return_value = None
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': '1.5.2'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertFalse(response['update_firmware'])
+        self.assertIsNone(response['firmware_url'])
+        self.assertEqual(handler._response_code, 200)
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_per_device_asset_pattern_overrides_global_default(self, mock_read_config, mock_resolve):
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'firmware_asset_pattern': '*seeed*.bin'}],
+            'dashboards': [],
+            'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'},
+        }
+        mock_resolve.return_value = Path('/cache/owner_repo/v1.6.0/seeed_xiao.bin')
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': '1.5.2'})
+        handler._handle_api_display()
+
+        mock_resolve.assert_called_once_with(
+            'owner/repo', 'v1.6.0', '*seeed*.bin', api.FIRMWARE_CACHE_DIR, handler.logger
+        )
+
+    def test_no_fw_version_header_leaves_fields_false(self):
+        with mock.patch('trmnl_server.api.read_config') as mock_read_config, \
+             mock.patch('trmnl_server.api.resolve_firmware') as mock_resolve:
+            mock_read_config.return_value = {
+                'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+                'dashboards': [],
+                'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'},
+            }
+            handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+            handler._handle_api_display()
+
+            handler.wfile.seek(0)
+            response = json.loads(handler.wfile.read().decode())
+
+        self.assertFalse(response['update_firmware'])
+        mock_resolve.assert_not_called()
+
+
+class TestStaticFirmwareRoute(unittest.TestCase):
+    """Tests for GET /static/firmware/<version>/<filename>."""
+
+    def create_handler(self, path, headers=None):
+        mock_logger = mock.Mock()
+        handler = APICalls.__new__(APICalls)
+        handler.logger = mock_logger
+        handler.refresh_rate = 600
+        handler.path = path
+        handler.headers = headers or {}
+        handler.client_address = ('127.0.0.1', 12345)
+        handler.wfile = BytesIO()
+        handler._response_code = None
+        handler._headers_sent = {}
+
+        def mock_send_response(code):
+            handler._response_code = code
+        handler.send_response = mock_send_response
+
+        def mock_send_header(key, value):
+            handler._headers_sent[key] = value
+        handler.send_header = mock_send_header
+        handler.end_headers = mock.Mock()
+        return handler
+
+    @mock.patch('trmnl_server.api.read_config')
+    def test_serves_cached_file_bytes(self, mock_read_config):
+        with TemporaryDirectory() as cache_dir:
+            mock_read_config.return_value = {
+                'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'}
+            }
+            fw_dir = Path(cache_dir) / 'owner_repo' / 'v1.6.0'
+            fw_dir.mkdir(parents=True)
+            (fw_dir / 'firmware.bin').write_bytes(b'binary-data')
+
+            with mock.patch('trmnl_server.api.FIRMWARE_CACHE_DIR', cache_dir):
+                handler = self.create_handler('/static/firmware/v1.6.0/firmware.bin')
+                result = handler._handle_static_firmware()
+
+            self.assertTrue(result)
+            self.assertEqual(handler._response_code, 200)
+            self.assertEqual(handler._headers_sent['Content-type'], 'application/octet-stream')
+            handler.wfile.seek(0)
+            self.assertEqual(handler.wfile.read(), b'binary-data')
+
+    @mock.patch('trmnl_server.api.read_config')
+    def test_missing_file_returns_false(self, mock_read_config):
+        with TemporaryDirectory() as cache_dir:
+            mock_read_config.return_value = {
+                'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'}
+            }
+            with mock.patch('trmnl_server.api.FIRMWARE_CACHE_DIR', cache_dir):
+                handler = self.create_handler('/static/firmware/v1.6.0/missing.bin')
+                result = handler._handle_static_firmware()
+
+        self.assertFalse(result)
+
+    @mock.patch('trmnl_server.api.read_config')
+    def test_path_traversal_rejected(self, mock_read_config):
+        mock_read_config.return_value = {
+            'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'}
+        }
+        handler = self.create_handler('/static/firmware/../secret')
+        result = handler._handle_static_firmware()
+        self.assertFalse(result)
+
+    def test_no_firmware_config_returns_false(self):
+        with mock.patch('trmnl_server.api.read_config', return_value={}):
+            handler = self.create_handler('/static/firmware/v1.6.0/firmware.bin')
+            result = handler._handle_static_firmware()
+        self.assertFalse(result)
+
+    def test_route_registered_in_do_get(self):
+        with TemporaryDirectory() as cache_dir:
+            fw_dir = Path(cache_dir) / 'owner_repo' / 'v1.6.0'
+            fw_dir.mkdir(parents=True)
+            (fw_dir / 'firmware.bin').write_bytes(b'binary-data')
+            with mock.patch(
+                'trmnl_server.api.read_config',
+                return_value={'firmware': {'repo': 'owner/repo', 'version': 'v1.6.0', 'asset_pattern': '*.bin'}},
+            ), mock.patch('trmnl_server.api.FIRMWARE_CACHE_DIR', cache_dir):
+                handler = self.create_handler('/static/firmware/v1.6.0/firmware.bin')
+                handler.do_GET()
+
+        self.assertEqual(handler._response_code, 200)
+
+    def test_unknown_firmware_path_falls_through_to_404(self):
+        with mock.patch('trmnl_server.api.read_config', return_value={}):
+            handler = self.create_handler('/static/firmware/v1.6.0/firmware.bin')
+            handler.do_GET()
+        self.assertEqual(handler._response_code, 404)
 
 
 if __name__ == '__main__':
