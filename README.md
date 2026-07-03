@@ -26,6 +26,7 @@ A Python HTTP server that fetches data from Home Assistant and renders black-and
 | `CONFIG_PATH` | No | Path to the config file (default: `config.yaml`) |
 | `PORT` | No | Port to listen on (default: `8000`) |
 | `DEBUG` | No | Set to any non-empty value to enable debug logging |
+| `FIRMWARE_CACHE_DIR` | No | Directory used to cache downloaded firmware binaries (default: `firmware_cache`). Only used if `firmware:` is set in `config.yaml`. |
 
 ### Configuration File (`config.yaml`)
 
@@ -95,6 +96,27 @@ dashboards:
           - entity_name: "sensor.outdoor_temp"
             friendly_name: "Outdoor"
 ```
+
+#### `firmware` (optional)
+
+Enables self-hosted firmware update delivery. When set, `/api/display` compares each device's `FW-Version` request header against `version`; on a mismatch, the server fetches the matching release asset from the configured GitHub repo (caching it to disk under `FIRMWARE_CACHE_DIR` on first use) and tells the device to update.
+
+```yaml
+firmware:
+  repo: usetrmnl/firmware      # GitHub "owner/repo" to pull releases from
+  version: v1.6.0              # Exact release tag, or "latest"
+  asset_pattern: "*.bin"       # fnmatch glob used to pick the release asset by filename
+```
+
+A release can publish multiple board-variant binaries; `asset_pattern` selects which one to serve. Since board variant is fixed per physical device, an individual device can override the default pattern:
+
+```yaml
+devices:
+  - id: "AA:BB:CC:DD:EE:FF"
+    firmware_asset_pattern: "*seeed_xiao_esp32c3*.bin"
+```
+
+If `firmware:` is omitted, `/api/display` always returns `update_firmware: false` and `firmware_url: null` (unchanged from previous versions of this server). Any resolution failure (repo/tag not found, no asset matches the pattern, GitHub unreachable) degrades the same way and logs a warning — it never affects dashboard image serving.
 
 #### Component Types
 
@@ -205,6 +227,7 @@ Returns the next dashboard for the requesting device. The server finds the devic
 |--------|-------------|
 | `ID` | Device MAC address (primary identifier) |
 | `Battery-Voltage` | Optional battery voltage, rendered on the dashboard image |
+| `FW-Version` | Device's current firmware version; compared against `firmware.version` in `config.yaml` when present |
 | `X-Forwarded-For` | Used as device ID if `ID` header is absent (proxy environments) |
 
 If the device is not found in `config.yaml`, or no schedule entries are active, `image_url` points to a generated "no dashboard scheduled" image.
@@ -217,13 +240,20 @@ If the device is not found in `config.yaml`, or no schedule entries are active, 
     "image_url_timeout": 0,
     "reset_firmware": false,
     "update_firmware": false,
+    "firmware_url": null,
     "refresh_rate": 600
 }
 ```
 
+`"update_firmware"` is `true` and `"firmware_url"` is set when a `firmware:` block is configured and the device's `FW-Version` header doesn't match the target version — see [`firmware` (optional)](#firmware-optional) above.
+
 ### `GET /static/<dashboard_name>.png`
 
 Renders and serves the PNG image for the named dashboard. The device must have that dashboard in its schedule; unrecognised devices or out-of-schedule requests receive a 404.
+
+### `GET /static/firmware/<version>/<filename>`
+
+Serves a cached firmware binary. Only reachable when `firmware:` is configured; `version`/`filename` come directly from the `firmware_url` returned by `/api/display`. Returns a 404 if the file isn't in the cache (e.g. `FIRMWARE_CACHE_DIR` was cleared).
 
 ### `POST /api/log`
 
