@@ -28,7 +28,7 @@
 - Modify (docs, no test): `examples/config.yaml`
 
 **Interfaces:**
-- Produces: `models.FirmwareConfig` (`TypedDict`, keys `repo: str`, `version: str`, `asset_pattern: str`, all required within the dict but the dict itself is optional on `Config`). `models.DeviceConfig` gains optional key `firmware_asset_pattern: str`. `models.Config` gains optional key `firmware: FirmwareConfig`.
+- Produces: `models.FirmwareConfig` (`TypedDict, total=False`, keys `repo: str`, `version: str`, `asset_pattern: str` — all optional at the type level, matching this codebase's convention of validating required-in-practice keys at runtime via `_validate_config` rather than via `Required[...]`; the dict itself is also optional on `Config`). `models.DeviceConfig` gains optional key `firmware_asset_pattern: str`. `models.Config` gains optional key `firmware: FirmwareConfig`. Because the type system does not guarantee these keys are present even when `firmware` is set, any code reading `fw_config['repo']`/`['version']`/`['asset_pattern']` (Task 3) must first confirm all three are present — see Task 3 Step 4's guard.
 - Consumes: nothing from other tasks.
 
 - [ ] **Step 1: Write the failing tests**
@@ -708,6 +708,28 @@ class TestAPIFirmware(unittest.TestCase):
 
     @mock.patch('trmnl_server.api.resolve_firmware')
     @mock.patch('trmnl_server.api.read_config')
+    def test_display_incomplete_firmware_config_does_not_crash(self, mock_read_config, mock_resolve):
+        # A 'firmware' block missing a required key (here: 'version') must not
+        # raise — _validate_config only warns, it doesn't reject malformed
+        # config, so _handle_api_display must tolerate this without a KeyError.
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
+            'dashboards': [],
+            'firmware': {'repo': 'owner/repo', 'asset_pattern': '*.bin'},
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF', 'FW-Version': '1.0.0'})
+        handler._handle_api_display()
+
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+
+        self.assertEqual(handler._response_code, 200)
+        self.assertFalse(response['update_firmware'])
+        self.assertIsNone(response['firmware_url'])
+        mock_resolve.assert_not_called()
+
+    @mock.patch('trmnl_server.api.resolve_firmware')
+    @mock.patch('trmnl_server.api.read_config')
     def test_display_resolution_failure_degrades_gracefully(self, mock_read_config, mock_resolve):
         mock_read_config.return_value = {
             'devices': [{'id': 'AA:BB:CC:DD:EE:FF'}],
@@ -972,7 +994,7 @@ with:
                 image_url = f"{SERVER_NAME}/static/device_id/{device_id.replace(':', '-')}.png"
             else:
                 fw_config = config.get('firmware')
-                if fw_config:
+                if fw_config and fw_config.get('repo') and fw_config.get('version') and fw_config.get('asset_pattern'):
                     current_fw: str | None = self.headers.get('FW-Version')
                     target_version: str = fw_config['version']
                     if current_fw is not None and _fw_differs(current_fw, target_version):
@@ -1044,7 +1066,7 @@ Insert this new method immediately after `_handle_static_png` (which currently e
 
         config = read_config(self.logger)
         fw_config = config.get('firmware')
-        if not fw_config:
+        if not fw_config or not fw_config.get('repo'):
             return False
 
         file_path: Path = Path(FIRMWARE_CACHE_DIR) / _repo_dir_name(fw_config['repo']) / version / filename
