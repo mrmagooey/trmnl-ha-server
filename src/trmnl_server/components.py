@@ -203,7 +203,7 @@ def _build_draw_segments(
 
 def _draw_graph_component(
     friendly_name: str,
-    data_points: list[tuple[datetime, float]],
+    data_points: list[tuple[datetime, float | None]],
     width: int,
     height: int,
     logger: "Logger",
@@ -216,7 +216,9 @@ def _draw_graph_component(
 
     Args:
         friendly_name: Display name for the component
-        data_points: List of (timestamp, value) tuples
+        data_points: List of (timestamp, value) tuples; value is None to
+            mark a known data gap (the entity was reported unavailable or
+            unknown at that time).
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
@@ -267,8 +269,9 @@ def _draw_graph_component(
     graph_width: int = large_width - margin - margin_right
     graph_height: int = large_height - 2 * margin - (10 * scale)
 
-    # Handle no data case
-    if not data_points:
+    # Handle no data case (including a series that is entirely gap markers)
+    has_real_reading: bool = any(v is not None for _, v in data_points)
+    if not data_points or not has_real_reading:
         msg: str = f"No numeric data for {friendly_name}"
         text_bbox = d.textbbox((0, 0), msg, font=font_title)
         text_width: int = text_bbox[2] - text_bbox[0]
@@ -286,14 +289,18 @@ def _draw_graph_component(
     text_width = text_bbox[2] - text_bbox[0]
     d.text(((large_width - text_width) / 2, 2 * scale), friendly_name, font=font_title, fill='black')
 
-    # Process data
-    times: tuple[datetime, ...]
-    values: tuple[float, ...]
-    times, values = zip(*data_points)
+    # Process data — min/max and the "last value" label are driven by real
+    # (non-gap) readings only; gap markers only affect line drawing below.
+    real_values: list[float] = [v for _, v in data_points if v is not None]
     min_time: datetime = window_start
     max_time: datetime = window_end
-    min_val: float = min(values)
-    max_val: float = max(values)
+    min_val: float = min(real_values)
+    max_val: float = max(real_values)
+    last_real_time: datetime
+    last_value: float
+    last_real_time, last_value = next(
+        (t, v) for t, v in reversed(data_points) if v is not None
+    )
 
     # Bipolar variant: anchor the range so 0 is always inside it.
     if zero_baseline:
@@ -405,34 +412,31 @@ def _draw_graph_component(
             width=scale,
         )
 
-    # Display last value
-    last_value: float = values[-1]
+    # Display last value (the most recent REAL reading, computed above)
     last_value_text: str = f"{last_value:.1f}"
-    _last_x, last_y = to_coords(times[-1], last_value)
+    _last_x, last_y = to_coords(last_real_time, last_value)
     text_bbox = d.textbbox((0, 0), last_value_text, font=font_value)
     text_height = text_bbox[3] - text_bbox[1]
     text_x: float = large_width - margin_right + (5 * scale)
     text_y: float = last_y - (text_height / 2)
     d.text((text_x, text_y), last_value_text, font=font_value, fill='black')
 
-    # Draw data line
-    points_coords: list[tuple[float, float]] = [to_coords(t, v) for t, v in data_points]
-    if len(points_coords) > 1:
-        d.line(points_coords, fill='black', width=4 * scale)
-
-    # Hold the last received value forward to the right edge (now) as a dotted line.
-    last_point_x, last_point_y = to_coords(times[-1], last_value)
-    right_edge_x, _ = to_coords(max_time, last_value)
-    if right_edge_x > last_point_x:
-        _draw_dashed_line(
-            d,
-            (last_point_x, last_point_y),
-            (right_edge_x, last_point_y),
-            fill='black',
-            width=4 * scale,
-            dash_on=12 * scale,
-            dash_off=8 * scale,
-        )
+    # Draw data line: solid between consecutive real readings, dashed
+    # (holding the last known value flat) across any gap — including the
+    # live tail from the last reading forward to window_end ("now").
+    for seg_t0, seg_v0, seg_t1, seg_v1, dashed in _build_draw_segments(data_points, max_time):
+        p0 = to_coords(seg_t0, seg_v0)
+        p1 = to_coords(seg_t1, seg_v1)
+        if dashed:
+            _draw_dashed_line(
+                d, p0, p1,
+                fill='black',
+                width=4 * scale,
+                dash_on=12 * scale,
+                dash_off=8 * scale,
+            )
+        else:
+            d.line([p0, p1], fill='black', width=4 * scale)
 
     return img.resize((width, height), Image.LANCZOS)
 

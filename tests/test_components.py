@@ -347,6 +347,83 @@ class TestDrawGraphComponent(unittest.TestCase):
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
 
+    def test_internal_gap_renders_dashed_not_interpolated(self):
+        """Regression test for the reported bug: a gap that has been closed
+        by a new reading must stay dashed across the gap span, not render as
+        a smooth solid line interpolated between the pre-gap and post-gap
+        values."""
+        from datetime import datetime
+        from PIL import ImageChops
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 20.0),
+            (datetime(2025, 1, 15, 10, 0), None),
+            (datetime(2025, 1, 15, 13, 0), 30.0),
+        ]
+        img = _draw_graph_component(
+            "Gappy", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 13, 0),
+        )
+        # A naive full-interpolation render (no gap marker at all) is what the
+        # bug used to produce once the gap closed; the fixed render must differ.
+        naive_interpolated = _draw_graph_component(
+            "Gappy", [
+                (datetime(2025, 1, 15, 9, 0), 20.0),
+                (datetime(2025, 1, 15, 13, 0), 30.0),
+            ], 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 13, 0),
+        )
+        self.assertIsNotNone(
+            ImageChops.difference(img, naive_interpolated).getbbox(),
+            "gap rendering must differ from a naive solid interpolation",
+        )
+
+        # The gap segment is drawn flat and dashed — a horizontal scan across
+        # its time span must show both painted and unpainted (gap) pixels.
+        w, h = img.size  # (400, 300)
+        band = []
+        for x in range(int(w * 0.25), int(w * 0.75)):
+            for y in range(h):
+                band.append(img.getpixel((x, y)))
+        has_black = any(sum(p) < 240 for p in band)
+        has_white = any(sum(p) > 600 for p in band)
+        self.assertTrue(has_black, "expected painted dash pixels across the gap region")
+        self.assertTrue(has_white, "expected gap (unpainted) pixels across the gap region")
+
+    def test_last_value_label_uses_most_recent_real_reading(self):
+        """If the series ends on a gap marker (entity currently unavailable),
+        the displayed last-value text must use the last REAL reading and
+        must not crash."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), 20.0),
+            (datetime(2025, 1, 15, 10, 0), None),
+        ]
+        img = _draw_graph_component(
+            "Stale", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 12, 0),
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
+    def test_all_gap_data_shows_no_numeric_data_message(self):
+        """A series that is entirely gap markers renders the no-data message
+        instead of crashing on min()/max() of an empty sequence."""
+        from datetime import datetime
+        data_points = [
+            (datetime(2025, 1, 15, 9, 0), None),
+            (datetime(2025, 1, 15, 10, 0), None),
+        ]
+        img = _draw_graph_component(
+            "AllGaps", data_points, 400, 300, mock_logger,
+            window_start=datetime(2025, 1, 15, 8, 0),
+            window_end=datetime(2025, 1, 15, 12, 0),
+        )
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 300))
+
 
 class TestBuildDrawSegments(unittest.TestCase):
     """Tests for the pure _build_draw_segments helper."""
