@@ -12,6 +12,7 @@ from trmnl_server.components import (
     tile_components,
     eink_display,
     _draw_dashed_line,
+    _build_draw_segments,
     _draw_graph_component,
     _draw_entity_component,
     _draw_calendar_component,
@@ -345,6 +346,68 @@ class TestDrawGraphComponent(unittest.TestCase):
         )
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
+
+
+class TestBuildDrawSegments(unittest.TestCase):
+    """Tests for the pure _build_draw_segments helper."""
+
+    def test_all_real_points_produce_one_solid_segment_per_pair(self):
+        from datetime import datetime
+        t0, t1, t2 = datetime(2025, 1, 15, 9, 0), datetime(2025, 1, 15, 10, 0), datetime(2025, 1, 15, 11, 0)
+        data_points = [(t0, 20.0), (t1, 21.0), (t2, 22.0)]
+
+        segments = _build_draw_segments(data_points, window_end=t2)
+
+        self.assertEqual(segments, [
+            (t0, 20.0, t1, 21.0, False),
+            (t1, 21.0, t2, 22.0, False),
+        ])
+
+    def test_gap_between_two_real_points_is_dashed_and_flat(self):
+        """Regression case for the reported bug: a gap that has since been
+        closed by a new reading must stay dashed and flat at the pre-gap
+        value, not become a solid line interpolated to the new value."""
+        from datetime import datetime
+        t0, gap_t, t1 = datetime(2025, 1, 15, 9, 0), datetime(2025, 1, 15, 10, 0), datetime(2025, 1, 15, 13, 0)
+        data_points = [(t0, 20.0), (gap_t, None), (t1, 30.0)]
+
+        segments = _build_draw_segments(data_points, window_end=t1)
+
+        self.assertEqual(segments, [(t0, 20.0, t1, 20.0, True)])
+
+    def test_trailing_gap_holds_last_value_to_window_end(self):
+        from datetime import datetime
+        t0 = datetime(2025, 1, 15, 9, 0)
+        window_end = datetime(2025, 1, 15, 16, 0)
+        data_points = [(t0, 20.0)]
+
+        segments = _build_draw_segments(data_points, window_end)
+
+        self.assertEqual(segments, [(t0, 20.0, window_end, 20.0, True)])
+
+    def test_no_trailing_segment_when_last_point_is_at_window_end(self):
+        from datetime import datetime
+        t0 = datetime(2025, 1, 15, 9, 0)
+        data_points = [(t0, 20.0)]
+
+        segments = _build_draw_segments(data_points, window_end=t0)
+
+        self.assertEqual(segments, [])
+
+    def test_leading_gap_before_first_real_point_produces_no_segment(self):
+        """Nothing can be held forward before we have a first real reading."""
+        from datetime import datetime
+        gap_t = datetime(2025, 1, 15, 8, 0)
+        t0 = datetime(2025, 1, 15, 9, 0)
+        data_points = [(gap_t, None), (t0, 20.0)]
+
+        segments = _build_draw_segments(data_points, window_end=t0)
+
+        self.assertEqual(segments, [])
+
+    def test_empty_input_produces_no_segments(self):
+        from datetime import datetime
+        self.assertEqual(_build_draw_segments([], window_end=datetime(2025, 1, 15, 9, 0)), [])
 
 
 class TestDrawEntityComponent(unittest.TestCase):

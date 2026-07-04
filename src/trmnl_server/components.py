@@ -154,6 +154,53 @@ def _draw_dashed_line(
         pos += period
 
 
+def _build_draw_segments(
+    data_points: list[tuple[datetime, float | None]],
+    window_end: datetime,
+) -> list[tuple[datetime, float, datetime, float, bool]]:
+    """Splits history points into contiguous solid/dashed line segments.
+
+    Consecutive real readings are joined with a solid segment. Any gap
+    between two real readings — a None marker from an 'unavailable'/'unknown'
+    state, or simply no reading yet between the last real one and
+    `window_end` — is rendered as a dashed segment holding the last known
+    value flat, rather than interpolating a value that was never observed.
+    A gap before the very first real reading has nothing to hold forward
+    from, so it produces no segment.
+
+    Args:
+        data_points: (timestamp, value) tuples sorted by timestamp; value
+            is None to mark a known data gap.
+        window_end: Right edge of the plotted time window ("now").
+
+    Returns:
+        (t0, v0, t1, v1, dashed) segments in chronological order. Dashed
+        segments always have v0 == v1 (a flat hold).
+    """
+    segments: list[tuple[datetime, float, datetime, float, bool]] = []
+    last_real: tuple[datetime, float] | None = None
+    gap_pending: bool = False
+
+    for t, v in data_points:
+        if v is None:
+            gap_pending = True
+            continue
+        if last_real is not None:
+            t0, v0 = last_real
+            if gap_pending:
+                segments.append((t0, v0, t, v0, True))
+            else:
+                segments.append((t0, v0, t, v, False))
+        last_real = (t, v)
+        gap_pending = False
+
+    if last_real is not None and window_end > last_real[0]:
+        t0, v0 = last_real
+        segments.append((t0, v0, window_end, v0, True))
+
+    return segments
+
+
 def _draw_graph_component(
     friendly_name: str,
     data_points: list[tuple[datetime, float]],
