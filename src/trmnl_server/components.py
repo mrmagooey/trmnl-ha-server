@@ -714,6 +714,7 @@ def _draw_calendar_component(
     logger: "Logger",
     *,
     title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> Image.Image:
     """Draws a calendar component.
 
@@ -725,6 +726,8 @@ def _draw_calendar_component(
         logger: Logger instance
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
+        title_lines: Number of title lines to wrap onto. At 1 (the default)
+            content starts at the legacy fixed offset unconditionally.
 
     Returns:
         Rendered PIL Image
@@ -751,12 +754,30 @@ def _draw_calendar_component(
         font_event = ImageFont.load_default()
 
     # Draw title
-    title_text: str = _ellipsize(friendly_name, font_title, large_width - TITLE_PADDING * scale, d)
-    text_bbox = d.textbbox((0, 0), title_text, font=font_title)
+    title_lines_text: list[str] = _wrap_title(
+        friendly_name, font_title, large_width - TITLE_PADDING * scale, max(1, title_lines)
+    ) or [friendly_name]
+    title_lines_text = [
+        _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
+        for line in title_lines_text
+    ]
+    rendered_title: str = "\n".join(title_lines_text)
+    text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                     spacing=TITLE_LINE_SPACING * scale)
     text_width: int = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
+    d.multiline_text(
+        ((large_width - text_width) / 2, 5 * scale), rendered_title,
+        font=font_title, fill='black', align='center',
+        spacing=TITLE_LINE_SPACING * scale,
+    )
 
-    y_pos: int = 50 * scale
+    if title_lines > 1:
+        band: int = _title_band_height(
+            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
+        ) * scale
+        y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
+    else:
+        y_pos = 50 * scale
     line_spacing: int = 8 * scale
 
     if not events:
@@ -831,6 +852,7 @@ def _draw_entities_component(
     logger: "Logger",
     *,
     title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> Image.Image:
     """Draws a list of entities and their states.
 
@@ -842,6 +864,8 @@ def _draw_entities_component(
         logger: Logger instance
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
+        title_lines: Number of title lines to wrap onto. At 1 (the default)
+            content starts at the legacy fixed offset unconditionally.
 
     Returns:
         Rendered PIL Image
@@ -866,12 +890,30 @@ def _draw_entities_component(
         font_list = ImageFont.load_default()
 
     # Draw title
-    title_text: str = _ellipsize(friendly_name, font_title, large_width - TITLE_PADDING * scale, d)
-    text_bbox = d.textbbox((0, 0), title_text, font=font_title)
+    title_lines_text: list[str] = _wrap_title(
+        friendly_name, font_title, large_width - TITLE_PADDING * scale, max(1, title_lines)
+    ) or [friendly_name]
+    title_lines_text = [
+        _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
+        for line in title_lines_text
+    ]
+    rendered_title: str = "\n".join(title_lines_text)
+    text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                     spacing=TITLE_LINE_SPACING * scale)
     text_width: int = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
+    d.multiline_text(
+        ((large_width - text_width) / 2, 5 * scale), rendered_title,
+        font=font_title, fill='black', align='center',
+        spacing=TITLE_LINE_SPACING * scale,
+    )
 
-    y_pos: int = 50 * scale
+    if title_lines > 1:
+        band: int = _title_band_height(
+            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
+        ) * scale
+        y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
+    else:
+        y_pos = 50 * scale
     line_spacing: int = 8 * scale
 
     if not entity_states:
@@ -920,7 +962,13 @@ def _draw_entities_component(
     return img.resize((width, height), Image.LANCZOS)
 
 
-def _todo_capacity(height: int, columns: int) -> tuple[int, int]:
+def _todo_capacity(
+    height: int,
+    columns: int,
+    title_font_size: int = COMPONENT_TITLE_FONT_SIZE,
+    title_lines: int = 1,
+    logger: "Logger | None" = None,
+) -> tuple[int, int]:
     """Compute todo-list page capacity for a component of the given height.
 
     Works in unscaled pixels (the draw function applies its own scale). The
@@ -929,12 +977,24 @@ def _todo_capacity(height: int, columns: int) -> tuple[int, int]:
     Args:
         height: Component (tile) height in unscaled pixels.
         columns: Number of columns (>= 1).
+        title_font_size: Unscaled title font size the panel will draw with.
+        title_lines: Number of title lines the panel will draw. At 1 (the
+            default) capacity matches the legacy TODO_HEADER_H exactly.
+        logger: Logger instance, passed through to the band-height
+            measurement when title_lines > 1.
 
     Returns:
         (rows_per_column, capacity) where capacity = rows_per_column * columns.
     """
     cols = columns if isinstance(columns, int) and columns > 0 else 1
-    body = height - TODO_HEADER_H - TODO_BOTTOM_PAD
+    if title_lines > 1:
+        header = max(
+            TODO_HEADER_H,
+            5 + _title_band_height(title_font_size, title_lines, logger) + TITLE_BAND_GAP,
+        )
+    else:
+        header = TODO_HEADER_H
+    body = height - header - TODO_BOTTOM_PAD
     rows_per_column = max(1, body // TODO_ROW_H)
     return rows_per_column, rows_per_column * cols
 
@@ -949,6 +1009,7 @@ def _draw_todo_list_component(
     columns: int = 1,
     page: int = 0,
     title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> Image.Image:
     """Draws a todo list with checkboxes, columns, and pagination.
 
@@ -967,6 +1028,8 @@ def _draw_todo_list_component(
         page: Page index to render (wrapped modulo the page count)
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
+        title_lines: Number of title lines to wrap onto. At 1 (the default)
+            content starts at the legacy fixed offset unconditionally.
 
     Returns:
         Rendered PIL Image
@@ -995,12 +1058,31 @@ def _draw_todo_list_component(
     total: int = len(incomplete)
 
     # Title with count.
-    title_text: str = _ellipsize(
-        f"{friendly_name} ({total})", font_title, large_width - TITLE_PADDING * scale, d
-    )
-    title_bbox = d.textbbox((0, 0), title_text, font=font_title)
+    title_text: str = f"{friendly_name} ({total})"
+    title_lines_text: list[str] = _wrap_title(
+        title_text, font_title, large_width - TITLE_PADDING * scale, max(1, title_lines)
+    ) or [title_text]
+    title_lines_text = [
+        _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
+        for line in title_lines_text
+    ]
+    rendered_title: str = "\n".join(title_lines_text)
+    title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                      spacing=TITLE_LINE_SPACING * scale)
     title_width: int = title_bbox[2] - title_bbox[0]
-    d.text(((large_width - title_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
+    d.multiline_text(
+        ((large_width - title_width) / 2, 5 * scale), rendered_title,
+        font=font_title, fill='black', align='center',
+        spacing=TITLE_LINE_SPACING * scale,
+    )
+
+    if title_lines > 1:
+        band: int = _title_band_height(
+            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
+        ) * scale
+        header_y: int = max(TODO_HEADER_H * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
+    else:
+        header_y = TODO_HEADER_H * scale
 
     if total == 0:
         msg: str = "No items to display"
@@ -1011,10 +1093,10 @@ def _draw_todo_list_component(
             pass
         msg_bbox = d.textbbox((0, 0), msg, font=font_item)
         msg_width: int = msg_bbox[2] - msg_bbox[0]
-        d.text(((large_width - msg_width) / 2, TODO_HEADER_H * scale), msg, font=font_item, fill='black')
+        d.text(((large_width - msg_width) / 2, header_y), msg, font=font_item, fill='black')
         return img.resize((width, height), Image.LANCZOS)
 
-    rows_per_column, capacity = _todo_capacity(height, cols)
+    rows_per_column, capacity = _todo_capacity(height, cols, title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger)
     num_pages: int = max(1, ceil(total / capacity))
     page_idx: int = page % num_pages
     page_items: list[dict[str, str]] = incomplete[page_idx * capacity:(page_idx + 1) * capacity]
@@ -1026,7 +1108,6 @@ def _draw_todo_list_component(
         ind_width: int = ind_bbox[2] - ind_bbox[0]
         d.text((large_width - ind_width - 10 * scale, 12 * scale), indicator, font=font_indicator, fill='black')
 
-    header_y: int = TODO_HEADER_H * scale
     row_h: int = TODO_ROW_H * scale
     checkbox_size: int = 24 * scale
     col_width: int = large_width // cols

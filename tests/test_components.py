@@ -1526,5 +1526,51 @@ class TestTitleBandHeight(unittest.TestCase):
         self.assertGreater(_title_band_height(35, 1, mock_logger), 40)
 
 
+class TestTwoLineSimpleComponents(unittest.TestCase):
+    """Calendar, entities and todo honour a two-line title band."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def test_calendar_accepts_title_lines(self):
+        img = _draw_calendar_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_entities_accepts_title_lines(self):
+        img = _draw_entities_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_todo_accepts_title_lines(self):
+        img = _draw_todo_list_component(self.LONG, [], 400, 220, mock_logger,
+                                        title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_two_lines_differs_from_one(self):
+        one = _draw_calendar_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=1)
+        two = _draw_calendar_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=2)
+        self.assertNotEqual(one.tobytes(), two.tobytes())
+
+    def test_one_line_default_is_unchanged(self):
+        a = _draw_entities_component("Short", [], 400, 220, mock_logger, title_font_size=35)
+        b = _draw_entities_component("Short", [], 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=1)
+        self.assertEqual(a.tobytes(), b.tobytes())
+
+
+class TestTodoCapacityWithBand(unittest.TestCase):
+    """Pagination must use the same header height the panel draws."""
+
+    def test_one_line_matches_legacy_constant(self):
+        self.assertEqual(_todo_capacity(220, 1), _todo_capacity(220, 1, 35, 1))
+
+    def test_two_lines_reduces_capacity(self):
+        one = _todo_capacity(220, 1, 35, 1)[1]
+        two = _todo_capacity(220, 1, 35, 2)[1]
+        self.assertLess(two, one)
+
+
 if __name__ == '__main__':
     unittest.main()
