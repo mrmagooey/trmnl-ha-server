@@ -52,6 +52,30 @@ drifting literal would break fitting silently.
   fit. It runs before any canvas exists, so it measures with
   `FreeTypeFont.getbbox()`, not `ImageDraw.textbbox`. Fonts load through the
   existing `_load_font`, inheriting its `IOError` fallback.
+- `_ellipsize(text, font, max_width, draw) -> str` — truncates `text` with a
+  trailing `…` until it fits `max_width`, reusing the truncate-at-the-floor
+  convention `_draw_todo_list_component` already applies to individual item
+  summaries. Used at render time for a title that still overflows at the
+  row's resolved rung.
+
+### Titles that still don't fit at rung 18
+
+Even at the smallest ladder rung, an unusually long title can still overflow
+its tile. Such titles are ellipsis-truncated by `_ellipsize` (e.g.
+`"Extremely Long Living Room Temperature …"`) rather than left to clip.
+
+The ladder floor stays at 18 rather than dropping further to accommodate
+these titles: letting one over-long title drag its whole row down to an
+unreadably small size would defeat the point of the feature, which is
+row-level size uniformity.
+
+This reverses an earlier design decision to let over-floor titles clip
+instead. During implementation, a title too long for rung 18 clipped at both
+tile edges, silently losing its first and last characters — worse than the
+size inconsistency this change exists to fix. The original justification
+also rested on a false premise: the old graph/entity bail-outs stepped down
+to ~10px, small enough to always fit the text, so they never actually
+clipped anything.
 
 ### Changes to the five drawing functions
 
@@ -101,8 +125,6 @@ row down.
   with a no-data placeholder can still show two differently sized text blocks;
   the placeholder is a different kind of element, and harmonising it is a
   separate question.
-- Titles that do not fit at the smallest rung (18) clip, matching how the
-  existing graph and entity bail-outs behave. No ellipsis truncation.
 
 ## Testing
 

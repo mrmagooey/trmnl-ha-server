@@ -1027,7 +1027,7 @@ class TestFitTitleSize(unittest.TestCase):
     """Title sizing picks rungs off the ladder and never anything else."""
 
     def test_short_title_in_wide_tile_gets_top_rung(self):
-        self.assertEqual(_fit_title_size("CPU", 800, mock_logger), 35)
+        self.assertEqual(_fit_title_size("CPU", 800, mock_logger), COMPONENT_TITLE_FONT_SIZE)
 
     def test_long_title_in_narrow_tile_drops_below_top_rung(self):
         size = _fit_title_size("Living Room Temperature Sensor", 200, mock_logger)
@@ -1047,7 +1047,7 @@ class TestFitTitleSize(unittest.TestCase):
         self.assertEqual(sizes, sorted(sizes))
 
     def test_empty_title_gets_top_rung(self):
-        self.assertEqual(_fit_title_size("", 200, mock_logger), 35)
+        self.assertEqual(_fit_title_size("", 200, mock_logger), COMPONENT_TITLE_FONT_SIZE)
 
 
 class TestIncompleteItems(unittest.TestCase):
@@ -1265,6 +1265,46 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
     def test_empty_component_list_still_returns_a_blank_image(self):
         img = tile_components([], 800, 480, 40, mock_logger)
         self.assertEqual(img.size, (800, 480))
+
+    def test_todo_count_suffix_pulls_the_row_down_to_its_own_rung(self):
+        """The measured string must be the drawn string, not the bare name.
+
+        At 400px, the bare name "Household Chores And Errands" fits rung 22,
+        but the drawn string "Household Chores And Errands (120)" only fits
+        rung 18. If _panel_title_text dropped the todo count suffix, this row
+        would wrongly resolve to 22.
+        """
+        name = "Household Chores And Errands"
+        bare_size = _fit_title_size(name, 400, mock_logger)
+        drawn_size = _fit_title_size(f"{name} (120)", 400, mock_logger)
+        self.assertEqual(bare_size, 22)
+        self.assertEqual(drawn_size, 18)
+
+        captured = []
+
+        def fake_entity_draw(friendly_name, value, width, height, logger, *, title_font_size=None):
+            captured.append((friendly_name, title_font_size))
+            return Image.new('RGB', (width, height), color='white')
+
+        def fake_todo_draw(friendly_name, items, width, height, logger, *,
+                            columns=1, page=0, title_font_size=None):
+            captured.append((friendly_name, title_font_size))
+            return Image.new('RGB', (width, height), color='white')
+
+        items = [{'summary': f'chore {i}', 'status': 'needs_action'} for i in range(120)]
+        render_data = [
+            self._panel('A'), self._panel('B'),
+            self._panel('C'),
+            {'type': 'todo_list', 'friendly_name': name, 'data': items, 'large_display': False},
+        ]
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=fake_entity_draw), \
+             mock.patch('trmnl_server.components._draw_todo_list_component', side_effect=fake_todo_draw):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+
+        sizes = dict(captured)
+        self.assertEqual(sizes['C'], 18)
+        self.assertEqual(sizes[name], 18)
 
 
 class TestEllipsize(unittest.TestCase):
