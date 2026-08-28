@@ -20,6 +20,7 @@ from trmnl_server.components import (
     _load_font,
     _todo_capacity,
     _fit_title_size,
+    _ellipsize,
     _panel_title_text,
     _incomplete_items,
     TITLE_SIZE_LADDER,
@@ -1264,6 +1265,102 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
     def test_empty_component_list_still_returns_a_blank_image(self):
         img = tile_components([], 800, 480, 40, mock_logger)
         self.assertEqual(img.size, (800, 480))
+
+
+class TestEllipsize(unittest.TestCase):
+    """Unit tests for the shared title-truncation helper."""
+
+    LONG = "Extremely Long Living Room Temperature Sensor Name"
+
+    def setUp(self):
+        from PIL import ImageDraw
+        self.img = Image.new('RGB', (10, 10))
+        self.d = ImageDraw.Draw(self.img)
+        self.font = _load_font(24, mock_logger)
+
+    def test_text_that_fits_is_returned_unchanged(self):
+        result = _ellipsize("Hi", self.font, 1000, self.d)
+        self.assertEqual(result, "Hi")
+
+    def test_text_too_wide_is_truncated_with_ellipsis(self):
+        result = _ellipsize(self.LONG, self.font, 100, self.d)
+        self.assertTrue(result.endswith('…'))
+        self.assertLess(len(result), len(self.LONG))
+
+    def test_truncated_result_actually_fits_max_width(self):
+        max_width = 100
+        result = _ellipsize(self.LONG, self.font, max_width, self.d)
+        bbox = self.d.textbbox((0, 0), result, font=self.font)
+        self.assertLessEqual(bbox[2] - bbox[0], max_width)
+
+    def test_degenerate_tiny_width_returns_ellipsis_alone(self):
+        result = _ellipsize(self.LONG, self.font, 1, self.d)
+        self.assertEqual(result, '…')
+
+
+class TestTitleEllipsisTruncation(unittest.TestCase):
+    """A title too long for its tile must ellipsis-truncate, not clip at the edges.
+
+    Regression coverage for the row-title-harmonisation defect: `_fit_title_size`
+    can resolve the ladder floor (18) even when it does not actually fit, so
+    each drawing function must fall back to truncating its own title rather
+    than drawing text that overflows the tile and gets clipped.
+    """
+
+    LONG = "Extremely Long Living Room Temperature Sensor Name"
+    # Rows containing only the title -- shorter than where any function's
+    # list/graph body content begins (todo's checkbox row starts at
+    # unscaled y=TODO_HEADER_H=50), so an edge hit here can only be the title.
+    BAND_HEIGHT = 45
+
+    def _edges_blank(self, img):
+        """True if columns 0 and width-1 are pure white for the title band."""
+        px = img.load()
+        w, h = img.size
+        band = min(self.BAND_HEIGHT, h)
+        for y in range(band):
+            if px[0, y] != (255, 255, 255) or px[w - 1, y] != (255, 255, 255):
+                return False
+        return True
+
+    def test_graph_component_does_not_clip(self):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        points = [(start, 1.0), (end, 2.0)]
+        img = _draw_graph_component(
+            self.LONG, points, 300, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=18,
+        )
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_entity_component_does_not_clip(self):
+        img = _draw_entity_component(self.LONG, 1, 300, 240, mock_logger, title_font_size=18)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_calendar_component_does_not_clip(self):
+        img = _draw_calendar_component(self.LONG, [], 300, 240, mock_logger, title_font_size=18)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_entities_component_does_not_clip(self):
+        img = _draw_entities_component(self.LONG, [], 300, 240, mock_logger, title_font_size=18)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_todo_component_does_not_clip(self):
+        items = [
+            {'summary': 'Buy milk', 'status': 'needs_action'},
+            {'summary': 'Walk dog', 'status': 'needs_action'},
+        ]
+        img = _draw_todo_list_component(
+            self.LONG, items, 300, 240, mock_logger, title_font_size=18,
+        )
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_calendar_component_none_path_also_does_not_clip(self):
+        """The three previously-non-shrinking components could already overflow
+        with no title_font_size supplied at all (the None/default path)."""
+        img = _draw_calendar_component(self.LONG, [], 300, 240, mock_logger)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
 
 
 if __name__ == '__main__':

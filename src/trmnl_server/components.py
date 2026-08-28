@@ -108,6 +108,33 @@ def _fit_title_size(text: str, tile_width: int, logger: "Logger") -> int:
     return TITLE_SIZE_LADDER[-1]
 
 
+def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:
+    """Truncates text with a trailing ellipsis until it fits max_width.
+
+    Args:
+        text: The string that will be drawn
+        font: The font it will be drawn with
+        max_width: The available width, in the same units as textbbox
+        d: A drawing context used only for text measurement
+
+    Returns:
+        text unchanged if it already fits within max_width; otherwise the
+        longest prefix of text plus a trailing '…' that fits; '…' alone if
+        even a single character plus the ellipsis does not fit.
+    """
+    bbox = d.textbbox((0, 0), text, font=font)
+    if bbox[2] - bbox[0] <= max_width:
+        return text
+
+    truncated: str = text
+    while truncated:
+        trunc_bbox = d.textbbox((0, 0), truncated + '…', font=font)
+        if trunc_bbox[2] - trunc_bbox[0] <= max_width:
+            break
+        truncated = truncated[:-1]
+    return (truncated + '…') if truncated else '…'
+
+
 def _create_info_image(
     message: str | None,
     width: int,
@@ -305,9 +332,10 @@ def _draw_graph_component(
         return img.resize((width, height), Image.LANCZOS)
 
     # Draw title
-    text_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
+    title_text: str = _ellipsize(friendly_name, font_title, large_width - padding, d)
+    text_bbox = d.textbbox((0, 0), title_text, font=font_title)
     text_width = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 2 * scale), friendly_name, font=font_title, fill='black')
+    d.text(((large_width - text_width) / 2, 2 * scale), title_text, font=font_title, fill='black')
 
     # Process data
     times: tuple[datetime, ...]
@@ -516,11 +544,12 @@ def _draw_entity_component(
 
     y_tweak: int = 40
     # Draw title
-    title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
+    title_text: str = _ellipsize(friendly_name, font_title, large_width - padding, d)
+    title_bbox = d.textbbox((0, 0), title_text, font=font_title)
     title_width: int = title_bbox[2] - title_bbox[0]
     title_x: float = (large_width - title_width) / 2
     title_y: float = 20 * scale - y_tweak
-    d.text((title_x, title_y), friendly_name, font=font_title, fill='black')
+    d.text((title_x, title_y), title_text, font=font_title, fill='black')
 
     if value is None:
         value_str: str = "N/A"
@@ -624,9 +653,10 @@ def _draw_calendar_component(
         font_event = ImageFont.load_default()
 
     # Draw title
-    text_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
+    title_text: str = _ellipsize(friendly_name, font_title, large_width - TITLE_PADDING * scale, d)
+    text_bbox = d.textbbox((0, 0), title_text, font=font_title)
     text_width: int = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 5 * scale), friendly_name, font=font_title, fill='black')
+    d.text(((large_width - text_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
 
     y_pos: int = 50 * scale
     line_spacing: int = 8 * scale
@@ -738,9 +768,10 @@ def _draw_entities_component(
         font_list = ImageFont.load_default()
 
     # Draw title
-    text_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
+    title_text: str = _ellipsize(friendly_name, font_title, large_width - TITLE_PADDING * scale, d)
+    text_bbox = d.textbbox((0, 0), title_text, font=font_title)
     text_width: int = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 5 * scale), friendly_name, font=font_title, fill='black')
+    d.text(((large_width - text_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
 
     y_pos: int = 50 * scale
     line_spacing: int = 8 * scale
@@ -866,7 +897,9 @@ def _draw_todo_list_component(
     total: int = len(incomplete)
 
     # Title with count.
-    title_text: str = f"{friendly_name} ({total})"
+    title_text: str = _ellipsize(
+        f"{friendly_name} ({total})", font_title, large_width - TITLE_PADDING * scale, d
+    )
     title_bbox = d.textbbox((0, 0), title_text, font=font_title)
     title_width: int = title_bbox[2] - title_bbox[0]
     d.text(((large_width - title_width) / 2, 5 * scale), title_text, font=font_title, fill='black')
