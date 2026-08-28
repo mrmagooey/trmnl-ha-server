@@ -1142,6 +1142,44 @@ class TestExplicitTitleFontSize(unittest.TestCase):
         forced = _draw_entity_component(name, 1, 300, 240, mock_logger, title_font_size=35)
         self.assertNotEqual(shrunk.tobytes(), forced.tobytes())
 
+    def test_graph_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        points = [(start, 1.0), (end, 2.0)]
+        small = _draw_graph_component(
+            "Sensor", points, 400, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=18,
+        )
+        large = _draw_graph_component(
+            "Sensor", points, 400, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=35,
+        )
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_calendar_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        small = _draw_calendar_component("Cal", [], 400, 240, mock_logger, title_font_size=18)
+        large = _draw_calendar_component("Cal", [], 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_entities_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        small = _draw_entities_component("Ents", [], 400, 240, mock_logger, title_font_size=18)
+        large = _draw_entities_component("Ents", [], 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_todo_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        items = [
+            {'summary': 'Buy milk', 'status': 'needs_action'},
+            {'summary': 'Walk dog', 'status': 'needs_action'},
+        ]
+        small = _draw_todo_list_component("Tasks", items, 400, 240, mock_logger, title_font_size=18)
+        large = _draw_todo_list_component("Tasks", items, 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
 
 if __name__ == '__main__':
     unittest.main()

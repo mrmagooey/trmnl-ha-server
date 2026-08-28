@@ -611,9 +611,10 @@ def _draw_calendar_component(
     d = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype(
-            NOTO_FONT, (title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale
-        )
+        resolved_title_size: int = (
+            title_font_size if title_font_size is not None else COMPONENT_TITLE_FONT_SIZE
+        ) * scale
+        font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
         font_event = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
         if not _font_warned[0]:
@@ -724,9 +725,10 @@ def _draw_entities_component(
     d = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype(
-            NOTO_FONT, (title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale
-        )
+        resolved_title_size: int = (
+            title_font_size if title_font_size is not None else COMPONENT_TITLE_FONT_SIZE
+        ) * scale
+        font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
         font_list = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
         if not _font_warned[0]:
@@ -848,9 +850,10 @@ def _draw_todo_list_component(
     d = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype(
-            NOTO_FONT, (title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale
-        )
+        resolved_title_size: int = (
+            title_font_size if title_font_size is not None else COMPONENT_TITLE_FONT_SIZE
+        ) * scale
+        font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
         font_indicator = ImageFont.truetype(NOTO_FONT, 18 * scale)
     except IOError:
         if not _font_warned[0]:
