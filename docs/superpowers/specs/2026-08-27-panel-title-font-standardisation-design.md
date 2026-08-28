@@ -39,9 +39,10 @@ drifting literal would break fitting silently.
 
 ### New helpers
 
-- `_incomplete_count(items) -> int` — counts items whose `status` is not
-  `'completed'`. Shared by the measuring pass and `_draw_todo_list_component`,
-  which currently computes it inline.
+- `_incomplete_items(items) -> list` — items whose `status` is not
+  `'completed'`. One definition of the predicate, shared by the measuring pass
+  (which takes its length) and `_draw_todo_list_component` (which needs the list
+  itself); both currently compute it inline.
 - `_panel_title_text(render_data) -> str` — the string a panel actually draws:
   `friendly_name`, or `f"{friendly_name} ({n})"` for `todo_list`. Measuring the
   bare name for a todo panel under-measures and the title still overflows.
@@ -107,7 +108,7 @@ row down.
 
 - **Unit** — `_fit_title_size` returns the largest fitting rung, only ever
   returns ladder values, and floors at 18 when nothing fits; `_panel_title_text`
-  includes the todo count; `_incomplete_count` ignores completed items; each of
+  includes the todo count; `_incomplete_items` drops completed items; each of
   the five drawing functions honours an explicit `title_font_size` and is
   unchanged when it is `None`.
 - **Integration** — `tile_components` with the drawing functions patched to
