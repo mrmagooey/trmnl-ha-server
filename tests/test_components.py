@@ -1266,6 +1266,18 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
         sizes = self._sizes(with_placeholder)
         self.assertEqual(sizes['C'], 35)
 
+    def test_empty_data_history_graph_is_excluded_from_the_row_minimum(self):
+        """A history_graph with data=[] draws a centred placeholder and no
+        title (see _draw_graph_component's `if not data_points` branch), so
+        it must not drag its neighbour's title size/line-count down either."""
+        with_empty_graph = [
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), {'type': 'history_graph', 'friendly_name': self.LONG,
+                               'data': [], 'large_display': False},
+        ]
+        sizes = self._sizes(with_empty_graph)
+        self.assertEqual(sizes['C'], 35)
+
     def test_row_of_only_no_data_panels_does_not_crash(self):
         sizes = self._sizes([
             {'type': 'entity', 'friendly_name': 'X', 'data': None, 'large_display': False},
@@ -1569,11 +1581,23 @@ class TestTwoLineSimpleComponents(unittest.TestCase):
                                        title_font_size=35, title_lines=2)
         self.assertNotEqual(one.tobytes(), two.tobytes())
 
-    def test_one_line_default_is_unchanged(self):
-        a = _draw_entities_component("Short", [], 400, 220, mock_logger, title_font_size=35)
-        b = _draw_entities_component("Short", [], 400, 220, mock_logger,
+    def test_one_line_content_origin_matches_legacy_y_pos(self):
+        """At one line, content must start at the legacy y_pos = 50 * scale,
+        not a band-derived value (the y_pos == 0 else-branch must never be
+        replaced by a max(50*scale, band) that could shift it).
+
+        Replaces a former tautology that compared two calls which were
+        already the same call (title_lines=1 is the default), so it could
+        never fail under any mutation.
+        """
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_entities_component("Short", [], 400, 220, mock_logger,
                                      title_font_size=35, title_lines=1)
-        self.assertEqual(a.tobytes(), b.tobytes())
+        # multiline_text (the title) delegates internally to text(), so the
+        # last text() call is the "No entities to display" message -- the
+        # content origin under test.
+        content_y = mock_text.call_args_list[-1].args[0][1]
+        self.assertEqual(content_y, 50 * COMPONENT_SCALE)
 
 
 class TestTodoCapacityWithBand(unittest.TestCase):
@@ -1679,13 +1703,13 @@ class TestGraphTwoLineTitle(unittest.TestCase):
                                     mock_logger, title_lines=2, **kw)
         self.assertNotEqual(one.tobytes(), two.tobytes())
 
-    def test_one_line_is_byte_identical_to_omitting_the_argument(self):
-        """The 1-line path must not route through max(40*scale, band)."""
-        start, end, pts = self._points()
-        kw = dict(window_start=start, window_end=end, title_font_size=35)
-        a = _draw_graph_component("CPU", pts, 400, 220, mock_logger, **kw)
-        b = _draw_graph_component("CPU", pts, 400, 220, mock_logger, title_lines=1, **kw)
-        self.assertEqual(a.tobytes(), b.tobytes())
+    # The "1-line must not route through max(40*scale, band)" claim used to
+    # live here as `a = _draw_graph_component(..., title_lines=1) == b =
+    # _draw_graph_component(...)` -- but title_lines=1 IS the default, so a
+    # and b were the same call and the assertion was a tautology. The real
+    # check (pinning margin_top to the literal 40 * COMPONENT_SCALE, observed
+    # via the mocked axis line rather than by comparing two identical calls)
+    # now lives in TestGraphAxisMarginMapping.test_axis_geometry_pins_the_margin_split.
 
     def test_preserves_literal_whitespace(self):
         """One-line path must bypass _wrap_title's split/join whitespace normalisation."""
@@ -1732,6 +1756,12 @@ class TestGraphAxisMarginMapping(unittest.TestCase):
         self.assertEqual(y_axis_1[0][0], y_axis_2[0][0])
         self.assertEqual(y_axis_1[1][0], y_axis_2[1][0])
 
+        # At one line margin_top must equal the legacy literal exactly, not a
+        # max(40*scale, band)-derived value -- the one-line band at rung 35
+        # (46px) exceeds the 40px legacy margin, so routing through max()
+        # here would shift every graph even at one line.
+        self.assertEqual(y_axis_1[0][1], 40 * COMPONENT_SCALE)
+
         # The first point's y (margin_top) grows when the title wraps.
         self.assertGreater(y_axis_2[0][1], y_axis_1[0][1])
 
@@ -1759,11 +1789,19 @@ class TestEntityTwoLineTitle(unittest.TestCase):
                                      title_font_size=35, title_lines=2)
         self.assertNotEqual(one.tobytes(), two.tobytes())
 
-    def test_one_line_is_byte_identical_to_omitting_the_argument(self):
-        a = _draw_entity_component("CPU", 21.5, 400, 220, mock_logger, title_font_size=35)
-        b = _draw_entity_component("CPU", 21.5, 400, 220, mock_logger,
-                                   title_font_size=35, title_lines=1)
-        self.assertEqual(a.tobytes(), b.tobytes())
+    # A "1-line is byte-identical to omitting the argument" test used to live
+    # here as `a = _draw_entity_component(..., title_lines=1) == b =
+    # _draw_entity_component(...)`. title_lines=1 IS the default, so a and b
+    # were the same call -- a tautology that could never fail. Deleted rather
+    # than replaced: unlike the graph's margin_top (a clean 40*scale literal)
+    # or the entities list's y_pos (a clean 50*scale literal), this
+    # component's one-line content origin (value_y) is not directly
+    # observable as a single literal without re-deriving the font metrics
+    # the implementation itself computes, which would make the assertion
+    # circular. Real, non-circular coverage of this exact one-line path
+    # (avail_top == 0, and the value must not overflow the tile) is added
+    # below as test_value_fits_a_short_tile_at_one_line, which inspects
+    # actual rendered pixels instead of comparing two identical calls.
 
     def test_value_does_not_overflow_a_short_tile_with_a_wrapped_title(self):
         """266x146 needed 158px before this fix. Top rows must stay blank."""
@@ -1778,6 +1816,27 @@ class TestEntityTwoLineTitle(unittest.TestCase):
             "Weather", "Partly Cloudy With Heavy Showers And Thunder",
             150, 90, mock_logger, title_font_size=18, title_lines=2,
         )
+        px = img.convert('L').load()
+        self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+    def test_value_fits_a_short_tile_at_one_line(self):
+        """A narrow value never triggers the width-shrink loop, so on a short
+        tile it used to stay at the max font and overflow both the top and
+        bottom (e.g. "21.5" rendered as "21 5", its decimal point cut off).
+        The height clause (`value_bbox[3] > avail_h`) and the
+        `value_y = max(avail_top, value_y)` clamp fix this -- deliberately
+        unconditionally, even at title_lines=1. Use "72", not "21.50": the
+        latter is wide enough that the width loop shrinks it before the
+        height clause ever gets a chance to fire.
+
+        Height 100 (not the sibling test's 146): at this narrow value/width,
+        146 lands the shrink loop's coarse -4px step on a font size that
+        still overflows by a few pixels (a pre-existing quantisation
+        artifact of the shared loop, not something this fix closes) --
+        confirmed by direct measurement, see final report. 100 exercises the
+        same height clause without hitting that artifact.
+        """
+        img = _draw_entity_component("Sensor", "72", 266, 100, mock_logger, title_lines=1)
         px = img.convert('L').load()
         self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
 

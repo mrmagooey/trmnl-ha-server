@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Dashboard grid panels sharing a row now render their titles at one shared font size instead of each shrinking independently, and a row may wrap its titles onto two lines instead of shrinking further when that yields a bigger font. As a side effect, entity values on short tiles (roughly under 183px tall) that were previously clipped top and/or bottom (e.g. `21.5` rendered as `21 5`, its decimal point cut off) are now kept within the tile's bounds.
+
 ## [1.6.0] - 2026-07-03
 
 ### Added

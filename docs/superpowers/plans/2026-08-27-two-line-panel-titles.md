@@ -4,7 +4,7 @@
 
 **Goal:** A dashboard row resolves a title font size *and* a line count together, so a long title wraps to two lines instead of dragging its whole row down the size ladder.
 
-**Architecture:** `tile_components` evaluates each row twice — once at one line, once at two with a band-height cap — and wraps only when that raises the row's size. Both values pass to every panel in the row. Each drawing function reserves a title band and starts its content beneath it, but only when the title actually wraps; at one line every content origin keeps its literal existing constant, so existing rendering is byte-identical by construction.
+**Architecture:** `tile_components` evaluates each row twice — once at one line, once at two with a band-height cap — and wraps only when that raises the row's size. Both values pass to every panel in the row. Each drawing function reserves a title band and starts its content beneath it, but only when the title actually wraps; at one line every content origin keeps its literal existing constant, so existing rendering is byte-identical by construction, **except** the entity component's value height clause (see the carve-out below).
 
 **Tech Stack:** Python 3, Pillow 12 (PIL), `unittest`, `pytest` via `uv`.
 
@@ -17,6 +17,7 @@
 - Exact constant values: `TITLE_MAX_LINES = 2`, `TITLE_WRAP_MIN_GAIN = 1`, `TITLE_LINE_SPACING = 4`, `TITLE_BAND_GAP = 4`, `TITLE_BAND_MAX_PERCENT = 45`.
 - Measured band heights, unscaled, `(1 line, 2 lines)`: rung 35 `(46, 87)`, 30 `(39, 76)`, 26 `(34, 66)`, 22 `(29, 57)`, 18 `(24, 47)`. Tests assert these.
 - **Byte-identity at one line is the safety property of this whole change.** At `title_lines == 1` every content origin uses its literal existing constant unconditionally. Never write `max(LEGACY, band)` on the one-line path — the one-line band at rung 35 is 46px, which exceeds the graph's 40px margin and would shift every graph.
+- **Carve-out:** `_draw_entity_component`'s value-height clause (`or value_bbox[3] > avail_h`) and its `value_y = max(avail_top, value_y)` clamp are deliberately *unconditional*, not gated on `title_lines > 1`. This is a genuine exception to byte-identity at one line, not an oversight: on tiles shorter than ~183px, a narrow value (e.g. `"72"`) never triggers the pre-existing width-shrink loop, so before this change it stayed at the maximum font and was clipped top and bottom (e.g. `21.5` rendered as `21 5`, its decimal point cut off). Keeping the clause unconditional fixes that pre-existing clipping bug even at one line; gating it on `title_lines > 1` would leave the bug in place for every row that never wraps.
 - All 9 existing golden images must stay byte-identical. Two golden tests fail at the branch point already — `test_entity_attribute_dashboard` and `test_history_graph_bipolar` — from stale references, red on `main` too. Those two are expected. ANY other golden failure is a real regression: fix the code, never regenerate a golden to make it pass.
 - Do NOT run `UPDATE_GOLDEN=1`. Only Task 6 adds a golden, and only its own.
 - `spacing` for the title band is `TITLE_LINE_SPACING * COMPONENT_SCALE`. `spacing` for the entity *value* is `4` ABSOLUTE (PIL's default, not scaled). Do not conflate them.

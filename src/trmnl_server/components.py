@@ -93,6 +93,30 @@ def _panel_title_text(render_data: "RenderData") -> str:
     return name
 
 
+def _panel_draws_a_title(render_data: "RenderData") -> bool:
+    """Returns whether the panel will draw a title, rather than a centred placeholder.
+
+    Must agree with `_render_component`'s drawing decision: `data is None`
+    always renders a titleless "No data for ..." placeholder, and a
+    `history_graph` with an empty `data` list renders a titleless "No numeric
+    data for ..." placeholder. Every other panel draws a title regardless of
+    its data's content (e.g. an empty calendar still shows its title above
+    "No upcoming events"), so it must still count toward the row minimum.
+
+    Args:
+        render_data: Component render data
+
+    Returns:
+        True if the panel will draw its title
+    """
+    data = render_data.get('data')
+    if data is None:
+        return False
+    if render_data.get('type') == 'history_graph' and not data:
+        return False
+    return True
+
+
 def _fit_title_size(
     text: str,
     tile_width: int,
@@ -750,6 +774,12 @@ def _draw_entity_component(
             value_bbox = d.textbbox((0, 0), value_str, font=font_value)
             value_width = value_bbox[2] - value_bbox[0]
 
+        # ponytail: this word-wrap duplicates _wrap_title's logic rather than
+        # calling it, because the two aren't interchangeable: this measures
+        # with ImageDraw.textbbox and a strict `<` against a live canvas,
+        # while _wrap_title measures with font.getbbox and `<=` so the row
+        # resolver can pick a size before any canvas exists. Unifying them
+        # risks shifting existing value renders by a word for no benefit here.
         # Wrap text if still too wide
         if value_width > large_width - padding:
             lines: list[str] = []
@@ -1456,7 +1486,7 @@ def tile_components(
         row_panels = [
             (render_data, tile_w)
             for render_data, _, _, tile_w, _ in row
-            if render_data.get('data') is not None
+            if _panel_draws_a_title(render_data)
         ]
 
         s1: int = min(
