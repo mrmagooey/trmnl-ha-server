@@ -1312,6 +1312,43 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
         self.assertEqual(sizes[name], 18)
 
 
+class TestFitTitleSizeWithLines(unittest.TestCase):
+    """Two-line fitting and the band-height cap."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def test_two_lines_reaches_a_higher_rung_than_one(self):
+        one = _fit_title_size(self.LONG, 400, mock_logger)
+        two = _fit_title_size(self.LONG, 400, mock_logger, lines=2)
+        self.assertEqual(one, 22)
+        self.assertEqual(two, 35)
+
+    def test_default_call_is_unchanged(self):
+        self.assertEqual(_fit_title_size("CPU", 400, mock_logger), 35)
+
+    def test_max_band_caps_the_rung(self):
+        # 146px tile -> cap 65 -> rung 22 (57) is the largest 2-line band that fits.
+        self.assertEqual(
+            _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=65), 22
+        )
+
+    def test_returns_none_when_cap_excludes_every_rung(self):
+        # 88px tile -> cap 39 -> below rung 18's 2-line band of 47.
+        self.assertIsNone(
+            _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=39)
+        )
+
+    def test_none_only_ever_happens_with_max_band(self):
+        for width in (10, 50, 200, 800):
+            self.assertIsNotNone(_fit_title_size(self.LONG, width, mock_logger))
+            self.assertIsNotNone(_fit_title_size(self.LONG, width, mock_logger, lines=2))
+
+    def test_result_is_always_a_ladder_member_or_none(self):
+        for cap in (30, 39, 47, 65, 99, None):
+            got = _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=cap)
+            self.assertTrue(got is None or got in TITLE_SIZE_LADDER)
+
+
 class TestEllipsize(unittest.TestCase):
     """Unit tests for the shared title-truncation helper."""
 

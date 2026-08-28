@@ -93,7 +93,14 @@ def _panel_title_text(render_data: "RenderData") -> str:
     return name
 
 
-def _fit_title_size(text: str, tile_width: int, logger: "Logger") -> int:
+def _fit_title_size(
+    text: str,
+    tile_width: int,
+    logger: "Logger",
+    *,
+    lines: int = 1,
+    max_band: int | None = None,
+) -> int | None:
     """Picks the largest ladder rung whose title fits the given tile width.
 
     Runs before any canvas exists, so it measures with the font's own getbbox
@@ -103,16 +110,32 @@ def _fit_title_size(text: str, tile_width: int, logger: "Logger") -> int:
         text: The title string that will be drawn
         tile_width: Unscaled width of the tile the title must fit
         logger: Logger instance
+        lines: Maximum title lines to wrap onto
+        max_band: Unscaled cap on the title band's height, or None for no cap
 
     Returns:
-        A size from TITLE_SIZE_LADDER; the smallest rung if none fit
+        A size from TITLE_SIZE_LADDER; the smallest rung if none fit. Returns
+        None only when max_band is given and excludes every rung.
     """
     budget: int = (tile_width - TITLE_PADDING) * COMPONENT_SCALE
     for size in TITLE_SIZE_LADDER:
+        if max_band is not None and _title_band_height(size, lines, logger) > max_band:
+            continue
         font = _load_font(size * COMPONENT_SCALE, logger)
-        bbox = font.getbbox(text)
-        if bbox[2] - bbox[0] <= budget:
+        wrapped = _wrap_title(text, font, budget, lines)
+        if wrapped is None:
+            continue
+        if all(font.getbbox(line)[2] - font.getbbox(line)[0] <= budget for line in wrapped):
             return size
+
+    if max_band is not None:
+        # Every rung either overflowed the band cap or could not be wrapped.
+        # Distinguish "cap excluded everything" from "nothing fitted the width".
+        if all(
+            _title_band_height(size, lines, logger) > max_band
+            for size in TITLE_SIZE_LADDER
+        ):
+            return None
     return TITLE_SIZE_LADDER[-1]
 
 
