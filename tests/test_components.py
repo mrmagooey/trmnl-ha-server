@@ -19,6 +19,11 @@ from trmnl_server.components import (
     _draw_todo_list_component,
     _load_font,
     _todo_capacity,
+    _fit_title_size,
+    _panel_title_text,
+    _incomplete_items,
+    TITLE_SIZE_LADDER,
+    COMPONENT_TITLE_FONT_SIZE,
 )
 from trmnl_server.metrics import voltage_to_percent
 
@@ -1015,6 +1020,77 @@ class TestZeroBaselineDispatch(unittest.TestCase):
             kwargs.get('zero_baseline', False),
             "zero_baseline must default to False when not configured",
         )
+
+
+class TestFitTitleSize(unittest.TestCase):
+    """Title sizing picks rungs off the ladder and never anything else."""
+
+    def test_short_title_in_wide_tile_gets_top_rung(self):
+        self.assertEqual(_fit_title_size("CPU", 800, mock_logger), 35)
+
+    def test_long_title_in_narrow_tile_drops_below_top_rung(self):
+        size = _fit_title_size("Living Room Temperature Sensor", 200, mock_logger)
+        self.assertLess(size, 35)
+
+    def test_only_ever_returns_ladder_values(self):
+        for width in range(60, 800, 20):
+            size = _fit_title_size("Living Room Temperature Sensor", width, mock_logger)
+            self.assertIn(size, TITLE_SIZE_LADDER)
+
+    def test_floors_at_smallest_rung_when_nothing_fits(self):
+        self.assertEqual(_fit_title_size("x" * 400, 100, mock_logger), TITLE_SIZE_LADDER[-1])
+
+    def test_wider_tile_never_yields_a_smaller_size(self):
+        text = "Living Room Temperature Sensor"
+        sizes = [_fit_title_size(text, w, mock_logger) for w in range(100, 801, 50)]
+        self.assertEqual(sizes, sorted(sizes))
+
+    def test_empty_title_gets_top_rung(self):
+        self.assertEqual(_fit_title_size("", 200, mock_logger), 35)
+
+
+class TestIncompleteItems(unittest.TestCase):
+    """The shared predicate for which todo items a panel displays."""
+
+    def test_drops_completed_items(self):
+        items = [
+            {'summary': 'a', 'status': 'needs_action'},
+            {'summary': 'b', 'status': 'completed'},
+            {'summary': 'c', 'status': 'needs_action'},
+        ]
+        self.assertEqual(len(_incomplete_items(items)), 2)
+
+    def test_missing_status_counts_as_incomplete(self):
+        self.assertEqual(len(_incomplete_items([{'summary': 'a'}])), 1)
+
+    def test_ignores_non_dict_entries(self):
+        self.assertEqual(len(_incomplete_items(['nope', {'summary': 'a'}])), 1)
+
+
+class TestPanelTitleText(unittest.TestCase):
+    """The measured string must match the string a panel actually draws."""
+
+    def test_plain_panel_uses_friendly_name(self):
+        data = {'type': 'entity', 'friendly_name': 'Kitchen', 'data': 'on'}
+        self.assertEqual(_panel_title_text(data), 'Kitchen')
+
+    def test_todo_panel_includes_incomplete_count(self):
+        data = {
+            'type': 'todo_list',
+            'friendly_name': 'Tasks',
+            'data': [
+                {'summary': 'a', 'status': 'needs_action'},
+                {'summary': 'b', 'status': 'completed'},
+            ],
+        }
+        self.assertEqual(_panel_title_text(data), 'Tasks (1)')
+
+    def test_todo_panel_with_non_list_data_counts_zero(self):
+        data = {'type': 'todo_list', 'friendly_name': 'Tasks', 'data': None}
+        self.assertEqual(_panel_title_text(data), 'Tasks (0)')
+
+    def test_missing_friendly_name_is_empty_string(self):
+        self.assertEqual(_panel_title_text({'type': 'entity', 'data': 'x'}), '')
 
 
 if __name__ == '__main__':

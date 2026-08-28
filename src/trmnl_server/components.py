@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 # Constants
 COMPONENT_TITLE_FONT_SIZE: int = 35
+COMPONENT_SCALE: int = 2
+# Panel titles are quantised to these sizes so that neighbouring panels land on
+# the same rung instead of each shrinking to its own arbitrary fit.
+TITLE_SIZE_LADDER: tuple[int, ...] = (35, 30, 26, 22, 18)
+TITLE_PADDING: int = 20
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -43,6 +48,64 @@ def _load_font(size: int, logger: "Logger") -> ImageFont.FreeTypeFont:
             logger.warning("%s not found, using default font. Check that the font file is present.", NOTO_FONT)
             _font_warned[0] = True
         return ImageFont.load_default()
+
+
+def _incomplete_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Selects the todo items a panel actually displays.
+
+    Args:
+        items: Raw todo items, which may contain non-dict entries
+
+    Returns:
+        Items not marked completed, in their original order
+    """
+    return [
+        it for it in items
+        if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
+    ]
+
+
+def _panel_title_text(render_data: "RenderData") -> str:
+    """Returns the title string a panel will actually draw.
+
+    Todo panels append their incomplete count to the friendly name, so measuring
+    the friendly name alone would under-measure them.
+
+    Args:
+        render_data: Component render data
+
+    Returns:
+        The title string, including any suffix the component adds
+    """
+    name: str = str(render_data.get('friendly_name', ''))
+    if render_data.get('type') == 'todo_list':
+        data = render_data.get('data')
+        total: int = len(_incomplete_items(data)) if isinstance(data, list) else 0
+        return f"{name} ({total})"
+    return name
+
+
+def _fit_title_size(text: str, tile_width: int, logger: "Logger") -> int:
+    """Picks the largest ladder rung whose title fits the given tile width.
+
+    Runs before any canvas exists, so it measures with the font's own getbbox
+    rather than ImageDraw.textbbox.
+
+    Args:
+        text: The title string that will be drawn
+        tile_width: Unscaled width of the tile the title must fit
+        logger: Logger instance
+
+    Returns:
+        A size from TITLE_SIZE_LADDER; the smallest rung if none fit
+    """
+    budget: int = (tile_width - TITLE_PADDING) * COMPONENT_SCALE
+    for size in TITLE_SIZE_LADDER:
+        font = _load_font(size * COMPONENT_SCALE, logger)
+        bbox = font.getbbox(text)
+        if bbox[2] - bbox[0] <= budget:
+            return size
+    return TITLE_SIZE_LADDER[-1]
 
 
 def _create_info_image(
