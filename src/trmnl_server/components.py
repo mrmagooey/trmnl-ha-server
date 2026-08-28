@@ -233,6 +233,22 @@ def _title_band_height(font_size: int, lines: int, logger: "Logger") -> int:
     return bbox[3] // COMPONENT_SCALE
 
 
+def _todo_header_height(title_font_size: int | None, title_lines: int, logger: "Logger") -> int:
+    """Unscaled height of a todo panel's header band.
+
+    One definition shared by _todo_capacity (which paginates before drawing)
+    and _draw_todo_list_component (which draws). If these ever disagreed,
+    pagination and rendering would diverge and rows would fall off the
+    bottom of the panel.
+    """
+    if title_lines <= 1:
+        return TODO_HEADER_H
+    return max(
+        TODO_HEADER_H,
+        5 + _title_band_height(title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger) + TITLE_BAND_GAP,
+    )
+
+
 def _create_info_image(
     message: str | None,
     width: int,
@@ -754,9 +770,12 @@ def _draw_calendar_component(
         font_event = ImageFont.load_default()
 
     # Draw title
-    title_lines_text: list[str] = _wrap_title(
-        friendly_name, font_title, large_width - TITLE_PADDING * scale, max(1, title_lines)
-    ) or [friendly_name]
+    if title_lines > 1:
+        title_lines_text: list[str] = _wrap_title(
+            friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
+        ) or [friendly_name]
+    else:
+        title_lines_text = [friendly_name]
     title_lines_text = [
         _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
         for line in title_lines_text
@@ -890,9 +909,12 @@ def _draw_entities_component(
         font_list = ImageFont.load_default()
 
     # Draw title
-    title_lines_text: list[str] = _wrap_title(
-        friendly_name, font_title, large_width - TITLE_PADDING * scale, max(1, title_lines)
-    ) or [friendly_name]
+    if title_lines > 1:
+        title_lines_text: list[str] = _wrap_title(
+            friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
+        ) or [friendly_name]
+    else:
+        title_lines_text = [friendly_name]
     title_lines_text = [
         _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
         for line in title_lines_text
@@ -987,13 +1009,7 @@ def _todo_capacity(
         (rows_per_column, capacity) where capacity = rows_per_column * columns.
     """
     cols = columns if isinstance(columns, int) and columns > 0 else 1
-    if title_lines > 1:
-        header = max(
-            TODO_HEADER_H,
-            5 + _title_band_height(title_font_size, title_lines, logger) + TITLE_BAND_GAP,
-        )
-    else:
-        header = TODO_HEADER_H
+    header = _todo_header_height(title_font_size, title_lines, logger)
     body = height - header - TODO_BOTTOM_PAD
     rows_per_column = max(1, body // TODO_ROW_H)
     return rows_per_column, rows_per_column * cols
@@ -1059,9 +1075,12 @@ def _draw_todo_list_component(
 
     # Title with count.
     title_text: str = f"{friendly_name} ({total})"
-    title_lines_text: list[str] = _wrap_title(
-        title_text, font_title, large_width - TITLE_PADDING * scale, max(1, title_lines)
-    ) or [title_text]
+    if title_lines > 1:
+        title_lines_text: list[str] = _wrap_title(
+            title_text, font_title, large_width - TITLE_PADDING * scale, title_lines
+        ) or [title_text]
+    else:
+        title_lines_text = [title_text]
     title_lines_text = [
         _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
         for line in title_lines_text
@@ -1076,13 +1095,7 @@ def _draw_todo_list_component(
         spacing=TITLE_LINE_SPACING * scale,
     )
 
-    if title_lines > 1:
-        band: int = _title_band_height(
-            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
-        ) * scale
-        header_y: int = max(TODO_HEADER_H * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
-    else:
-        header_y = TODO_HEADER_H * scale
+    header_y: int = _todo_header_height(title_font_size, title_lines, logger) * scale
 
     if total == 0:
         msg: str = "No items to display"

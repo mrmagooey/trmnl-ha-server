@@ -25,11 +25,14 @@ from trmnl_server.components import (
     _incomplete_items,
     _wrap_title,
     _title_band_height,
+    _todo_header_height,
     TITLE_SIZE_LADDER,
     COMPONENT_TITLE_FONT_SIZE,
     TITLE_MAX_LINES,
     TITLE_BAND_MAX_PERCENT,
     COMPONENT_SCALE,
+    TODO_BOTTOM_PAD,
+    TODO_ROW_H,
 )
 from trmnl_server.metrics import voltage_to_percent
 
@@ -1570,6 +1573,72 @@ class TestTodoCapacityWithBand(unittest.TestCase):
         one = _todo_capacity(220, 1, 35, 1, mock_logger)[1]
         two = _todo_capacity(220, 1, 35, 2, mock_logger)[1]
         self.assertLess(two, one)
+
+
+class TestTodoHeaderHeightSharedDefinition(unittest.TestCase):
+    """_todo_capacity and _draw_todo_list_component must derive header from one function.
+
+    Regression coverage for the header-agreement finding: two independently
+    written copies of the same formula could silently drift, causing
+    pagination and rendering to disagree and rows to render off the bottom.
+    """
+
+    COMBINATIONS = [(35, 1), (35, 2), (18, 2), (26, 2), (30, 2)]
+
+    def test_capacity_implies_the_shared_header(self):
+        for font_size, lines in self.COMBINATIONS:
+            header = _todo_header_height(font_size, lines, mock_logger)
+            expected_rows = max(1, (220 - header - TODO_BOTTOM_PAD) // TODO_ROW_H)
+            rows, capacity = _todo_capacity(220, 1, font_size, lines, mock_logger)
+            self.assertEqual(rows, expected_rows, f"rows mismatch at {(font_size, lines)}")
+            self.assertEqual(capacity, expected_rows, f"capacity mismatch at {(font_size, lines)}")
+
+    def test_draw_scales_the_same_header(self):
+        # Proves the draw path calls the one shared function with the same
+        # arguments _todo_capacity would use -- if a future edit reintroduced
+        # an inline duplicate, this mock would simply never be called.
+        for font_size, lines in self.COMBINATIONS:
+            with mock.patch('trmnl_server.components._todo_header_height',
+                             wraps=_todo_header_height) as spy:
+                _draw_todo_list_component("Title", [], 400, 300, mock_logger,
+                                          title_font_size=font_size, title_lines=lines)
+                spy.assert_called_once_with(font_size, lines, mock_logger)
+
+
+class TestTitleWhitespaceByteIdentity(unittest.TestCase):
+    """The one-line path must not normalise whitespace via _wrap_title's split/join.
+
+    Regression coverage: _wrap_title does text.split() then " ".join(...), so a
+    friendly_name with leading/trailing/double spaces would render normalised
+    rather than literal. Before Task 3 such a string was passed straight to
+    _ellipsize and drawn verbatim; the one-line path must bypass _wrap_title
+    entirely to restore that.
+    """
+
+    NAME = " Cal  Sensor "
+
+    def test_calendar_preserves_literal_whitespace(self):
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_calendar_component(self.NAME, [], 400, 220, mock_logger)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, self.NAME)
+
+    def test_entities_preserves_literal_whitespace(self):
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_entities_component(self.NAME, [], 400, 220, mock_logger)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, self.NAME)
+
+    def test_todo_preserves_literal_whitespace(self):
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_todo_list_component(self.NAME, [], 400, 220, mock_logger)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, f"{self.NAME} (0)")
+
+    def test_wrap_title_itself_would_have_normalised(self):
+        """Documents why the bypass is needed: _wrap_title alone loses whitespace."""
+        font = _load_font(35 * COMPONENT_SCALE, mock_logger)
+        self.assertEqual(_wrap_title(self.NAME, font, 100000, 1), ["Cal Sensor"])
 
 
 if __name__ == '__main__':
