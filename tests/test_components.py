@@ -1564,11 +1564,11 @@ class TestTodoCapacityWithBand(unittest.TestCase):
     """Pagination must use the same header height the panel draws."""
 
     def test_one_line_matches_legacy_constant(self):
-        self.assertEqual(_todo_capacity(220, 1), _todo_capacity(220, 1, 35, 1))
+        self.assertEqual(_todo_capacity(220, 1), _todo_capacity(220, 1, 35, 1, mock_logger))
 
     def test_two_lines_reduces_capacity(self):
-        one = _todo_capacity(220, 1, 35, 1)[1]
-        two = _todo_capacity(220, 1, 35, 2)[1]
+        one = _todo_capacity(220, 1, 35, 1, mock_logger)[1]
+        two = _todo_capacity(220, 1, 35, 2, mock_logger)[1]
         self.assertLess(two, one)
 
 
