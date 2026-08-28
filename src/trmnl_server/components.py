@@ -369,6 +369,7 @@ def _draw_graph_component(
     window_end: datetime,
     zero_baseline: bool = False,
     title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> Image.Image:
     """Draws a single history graph component.
 
@@ -384,6 +385,8 @@ def _draw_graph_component(
             horizontal zero reference line with a labeled 0 y-tick.
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
+        title_lines: Number of title lines to wrap onto. At 1 (the default)
+            content starts at the legacy fixed offset unconditionally.
 
     Returns:
         Rendered PIL Image
@@ -426,10 +429,20 @@ def _draw_graph_component(
         font_value = ImageFont.load_default()
 
     # Define graph dimensions
-    margin: int = 40 * scale
-    margin_right: int = ceil(margin * 1.6)
-    graph_width: int = large_width - margin - margin_right
-    graph_height: int = large_height - 2 * margin - (10 * scale)
+    # `margin` historically meant both the left inset and the top/bottom inset.
+    # A wrapped title needs a taller top only, so the three are now distinct.
+    margin_left: int = 40 * scale
+    margin_bottom: int = 40 * scale
+    if title_lines > 1:
+        band: int = _title_band_height(
+            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
+        ) * scale
+        margin_top: int = max(40 * scale, 2 * scale + band + TITLE_BAND_GAP * scale)
+    else:
+        margin_top = 40 * scale
+    margin_right: int = ceil(margin_left * 1.6)
+    graph_width: int = large_width - margin_left - margin_right
+    graph_height: int = large_height - margin_top - margin_bottom - (10 * scale)
 
     # Handle no data case
     if not data_points:
@@ -446,10 +459,25 @@ def _draw_graph_component(
         return img.resize((width, height), Image.LANCZOS)
 
     # Draw title
-    title_text: str = _ellipsize(friendly_name, font_title, large_width - padding, d)
-    text_bbox = d.textbbox((0, 0), title_text, font=font_title)
+    if title_lines > 1:
+        title_lines_text: list[str] = _wrap_title(
+            friendly_name, font_title, large_width - padding, title_lines
+        ) or [friendly_name]
+    else:
+        title_lines_text = [friendly_name]
+    title_lines_text = [
+        _ellipsize(line, font_title, large_width - padding, d)
+        for line in title_lines_text
+    ]
+    rendered_title: str = "\n".join(title_lines_text)
+    text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                     spacing=TITLE_LINE_SPACING * scale)
     text_width = text_bbox[2] - text_bbox[0]
-    d.text(((large_width - text_width) / 2, 2 * scale), title_text, font=font_title, fill='black')
+    d.multiline_text(
+        ((large_width - text_width) / 2, 2 * scale), rendered_title,
+        font=font_title, fill='black', align='center',
+        spacing=TITLE_LINE_SPACING * scale,
+    )
 
     # Process data
     times: tuple[datetime, ...]
@@ -476,12 +504,12 @@ def _draw_graph_component(
 
     # Draw axes
     d.line(
-        [(margin, margin), (margin, large_height - margin)],
+        [(margin_left, margin_top), (margin_left, large_height - margin_bottom)],
         fill='black',
         width=scale * 2,
     )
     d.line(
-        [(margin, large_height - margin), (large_width - margin_right, large_height - margin)],
+        [(margin_left, large_height - margin_bottom), (large_width - margin_right, large_height - margin_bottom)],
         fill='black',
         width=scale * 2,
     )
@@ -490,7 +518,7 @@ def _draw_graph_component(
     num_y_labels: int = 3
     for i in range(num_y_labels + 1):
         val: float = min_val + (max_val - min_val) * i / num_y_labels
-        y: float = (large_height - margin) - (i / num_y_labels) * graph_height
+        y: float = (large_height - margin_bottom) - (i / num_y_labels) * graph_height
         if i == 0:
             y -= 10
         label: str = f"{val:.1f}"
@@ -498,12 +526,12 @@ def _draw_graph_component(
         text_width = text_bbox[2] - text_bbox[0]
         text_height = text_bbox[3] - text_bbox[1]
         d.text(
-            (margin - text_width - (5 * scale), y - text_height / 2),
+            (margin_left - text_width - (5 * scale), y - text_height / 2),
             label,
             font=font_axes,
             fill='black',
         )
-        d.line([(margin - (5 * scale), y), (margin, y)], fill='black', width=scale)
+        d.line([(margin_left - (5 * scale), y), (margin_left, y)], fill='black', width=scale)
 
     # Bipolar variant: guarantee a labeled "0" tick (unless one already lands on 0).
     if zero_baseline:
@@ -512,7 +540,7 @@ def _draw_graph_component(
             for i in range(num_y_labels + 1)
         ]
         if not any(abs(v) < 1e-9 for v in existing_tick_vals):
-            zero_y: float = (large_height - margin) - (
+            zero_y: float = (large_height - margin_bottom) - (
                 (0.0 - min_val) / (max_val - min_val)
             ) * graph_height
             zlabel: str = "0.0"
@@ -520,13 +548,13 @@ def _draw_graph_component(
             ztext_width: int = ztext_bbox[2] - ztext_bbox[0]
             ztext_height: int = ztext_bbox[3] - ztext_bbox[1]
             d.text(
-                (margin - ztext_width - (5 * scale), zero_y - ztext_height / 2),
+                (margin_left - ztext_width - (5 * scale), zero_y - ztext_height / 2),
                 zlabel,
                 font=font_axes,
                 fill='black',
             )
             d.line(
-                [(margin - (5 * scale), zero_y), (margin, zero_y)],
+                [(margin_left - (5 * scale), zero_y), (margin_left, zero_y)],
                 fill='black',
                 width=scale,
             )
@@ -536,27 +564,27 @@ def _draw_graph_component(
         num_x_labels: int = 4
         for i in range(num_x_labels + 1):
             time_point: datetime = min_time + (max_time - min_time) * i / num_x_labels
-            x: float = margin + (i / num_x_labels) * graph_width
+            x: float = margin_left + (i / num_x_labels) * graph_width
             label = time_point.astimezone().strftime("%H:%M")
             text_bbox = d.textbbox((0, 0), label, font=font_axes)
             text_width = text_bbox[2] - text_bbox[0]
             d.text(
-                (x - text_width / 3, large_height - margin + (5 * scale)),
+                (x - text_width / 3, large_height - margin_bottom + (5 * scale)),
                 label,
                 font=font_axes,
                 fill='black',
             )
             d.line(
-                [(x, large_height - margin), (x, large_height - margin + (5 * scale))],
+                [(x, large_height - margin_bottom), (x, large_height - margin_bottom + (5 * scale))],
                 fill='black',
                 width=scale,
             )
 
     # Helper to convert data to pixel coordinates
     def to_coords(t: datetime, v: float) -> tuple[float, float]:
-        x: float = margin + ((t - min_time) / time_delta) * graph_width
-        x = max(float(margin), min(x, float(margin + graph_width)))
-        y: float = (large_height - margin) - ((v - min_val) / (max_val - min_val)) * graph_height
+        x: float = margin_left + ((t - min_time) / time_delta) * graph_width
+        x = max(float(margin_left), min(x, float(margin_left + graph_width)))
+        y: float = (large_height - margin_bottom) - ((v - min_val) / (max_val - min_val)) * graph_height
         return x, y
 
     # Bipolar variant: thin horizontal reference line at value 0, spanning the
@@ -565,7 +593,7 @@ def _draw_graph_component(
     if zero_baseline:
         _zx0, zero_line_y = to_coords(min_time, 0.0)
         d.line(
-            [(margin, zero_line_y), (margin + graph_width, zero_line_y)],
+            [(margin_left, zero_line_y), (margin_left + graph_width, zero_line_y)],
             fill='black',
             width=scale,
         )

@@ -1641,5 +1641,49 @@ class TestTitleWhitespaceByteIdentity(unittest.TestCase):
         self.assertEqual(_wrap_title(self.NAME, font, 100000, 1), ["Cal Sensor"])
 
 
+class TestGraphTwoLineTitle(unittest.TestCase):
+    """The graph reserves a taller top margin only when its title wraps."""
+
+    def _points(self):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        return start, end, [(start, 1.0), (end, 2.0)]
+
+    def test_accepts_title_lines(self):
+        start, end, pts = self._points()
+        img = _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                    mock_logger, window_start=start, window_end=end,
+                                    title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_two_lines_differs_from_one(self):
+        start, end, pts = self._points()
+        kw = dict(window_start=start, window_end=end, title_font_size=35)
+        one = _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                    mock_logger, title_lines=1, **kw)
+        two = _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                    mock_logger, title_lines=2, **kw)
+        self.assertNotEqual(one.tobytes(), two.tobytes())
+
+    def test_one_line_is_byte_identical_to_omitting_the_argument(self):
+        """The 1-line path must not route through max(40*scale, band)."""
+        start, end, pts = self._points()
+        kw = dict(window_start=start, window_end=end, title_font_size=35)
+        a = _draw_graph_component("CPU", pts, 400, 220, mock_logger, **kw)
+        b = _draw_graph_component("CPU", pts, 400, 220, mock_logger, title_lines=1, **kw)
+        self.assertEqual(a.tobytes(), b.tobytes())
+
+    def test_preserves_literal_whitespace(self):
+        """One-line path must bypass _wrap_title's split/join whitespace normalisation."""
+        start, end, pts = self._points()
+        name = " Graph  Sensor "
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_graph_component(name, pts, 400, 220, mock_logger,
+                                  window_start=start, window_end=end)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, name)
+
+
 if __name__ == '__main__':
     unittest.main()
