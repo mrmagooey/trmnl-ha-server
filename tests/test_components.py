@@ -1181,5 +1181,90 @@ class TestExplicitTitleFontSize(unittest.TestCase):
         self.assertNotEqual(small.tobytes(), large.tobytes())
 
 
+class TestRowTitleSizeHarmonisation(unittest.TestCase):
+    """Panels in a row share one title size; rows may differ."""
+
+    LONG = "Extremely Long Living Room Temperature Sensor Name"
+
+    def _sizes(self, render_data):
+        """Renders a dashboard and returns the title_font_size each panel got."""
+        captured = []
+
+        def fake_draw(friendly_name, value, width, height, logger, *, title_font_size=None):
+            captured.append((friendly_name, title_font_size))
+            return Image.new('RGB', (width, height), color='white')
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=fake_draw):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+        return dict(captured)
+
+    def _panel(self, name, large=False):
+        return {'type': 'entity', 'friendly_name': name, 'data': 'v', 'large_display': large}
+
+    def test_panels_in_the_same_row_get_the_same_size(self):
+        # n=4 gives a 2x2 grid: row 0 is A and B, row 1 is C and the long title.
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel(self.LONG),
+        ])
+        self.assertEqual(sizes['C'], sizes[self.LONG])
+
+    def test_a_row_with_a_long_title_uses_a_second_smaller_size(self):
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel(self.LONG),
+        ])
+        self.assertEqual(sizes['A'], sizes['B'])
+        self.assertLess(sizes[self.LONG], sizes['A'])
+
+    def test_every_resolved_size_is_a_ladder_rung(self):
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel(self.LONG),
+        ])
+        for size in sizes.values():
+            self.assertIn(size, TITLE_SIZE_LADDER)
+
+    def test_all_short_titles_collapse_to_one_size(self):
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel('D'),
+        ])
+        self.assertEqual(len(set(sizes.values())), 1)
+
+    def test_large_display_panel_is_sized_independently(self):
+        """The full-width panel is fitted to its own width, not the row below."""
+        sizes = self._sizes([
+            self._panel(self.LONG, large=True),
+            self._panel('A'), self._panel('B'), self._panel('C'),
+        ])
+        # The large panel spans the full 800px, so it resolves against that
+        # width alone -- independently of the three narrow panels beneath it.
+        self.assertEqual(sizes[self.LONG], _fit_title_size(self.LONG, 800, mock_logger))
+        self.assertEqual(sizes['A'], sizes['B'])
+        self.assertEqual(sizes['B'], sizes['C'])
+
+    def test_no_data_panels_are_excluded_from_the_row_minimum(self):
+        """A placeholder's long name must not shrink its neighbour's title."""
+        with_placeholder = [
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), {'type': 'entity', 'friendly_name': self.LONG,
+                               'data': None, 'large_display': False},
+        ]
+        sizes = self._sizes(with_placeholder)
+        self.assertEqual(sizes['C'], 35)
+
+    def test_row_of_only_no_data_panels_does_not_crash(self):
+        sizes = self._sizes([
+            {'type': 'entity', 'friendly_name': 'X', 'data': None, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'Y', 'data': None, 'large_display': False},
+        ])
+        self.assertEqual(sizes, {})
+
+    def test_empty_component_list_still_returns_a_blank_image(self):
+        img = tile_components([], 800, 480, 40, mock_logger)
+        self.assertEqual(img.size, (800, 480))
+
+
 if __name__ == '__main__':
     unittest.main()

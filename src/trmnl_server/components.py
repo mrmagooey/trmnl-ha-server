@@ -1005,6 +1005,7 @@ def tile_components(
         render_data: RenderData,
         tile_width: int,
         tile_height: int,
+        title_font_size: int,
     ) -> Image.Image:
         component_type: str = render_data['type']
         friendly_name: str = render_data.get('friendly_name', '')
@@ -1027,6 +1028,7 @@ def tile_components(
                 window_start=window_start_val,
                 window_end=window_end_val,
                 zero_baseline=bool(render_data.get('zero_baseline', False)),
+                title_font_size=title_font_size,
             )
         elif component_type == 'entity':
             return _draw_entity_component(
@@ -1035,6 +1037,7 @@ def tile_components(
                 tile_width,
                 tile_height,
                 logger,
+                title_font_size=title_font_size,
             )
         elif component_type == 'calendar':
             return _draw_calendar_component(
@@ -1043,6 +1046,7 @@ def tile_components(
                 tile_width,
                 tile_height,
                 logger,
+                title_font_size=title_font_size,
             )
         elif component_type == 'entities':
             return _draw_entities_component(
@@ -1051,15 +1055,13 @@ def tile_components(
                 tile_width,
                 tile_height,
                 logger,
+                title_font_size=title_font_size,
             )
         elif component_type == 'todo_list':
             todo_columns = render_data.get('columns', 1)
             todo_key = render_data.get('todo_key')
             items_list = data if isinstance(data, list) else []
-            total_incomplete = sum(
-                1 for it in items_list
-                if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
-            )
+            total_incomplete = len(_incomplete_items(items_list))
             _, capacity = _todo_capacity(tile_height, todo_columns)
             num_pages = max(1, ceil(total_incomplete / capacity))
             page = server_state.next_todo_page(todo_key, num_pages) if todo_key else 0
@@ -1071,6 +1073,7 @@ def tile_components(
                 logger,
                 columns=todo_columns,
                 page=page,
+                title_font_size=title_font_size,
             )
         else:
             logger.warning("Unknown component type: %s", component_type)
@@ -1078,18 +1081,16 @@ def tile_components(
 
     available_height: int = height - top_margin
 
-    if large_component_data:
-        # Top half for large component
-        large_height: int = available_height // 2
-        component_image: Image.Image = _render_component(
-            large_component_data,
-            width,
-            large_height,
-        )
-        if component_image:
-            final_image.paste(component_image, (0, top_margin))
+    # Geometry is resolved before rendering so that each row's panels can agree
+    # on one title size. A row is exactly the set of panels drawn side by side.
+    rows: list[list[tuple[RenderData, int, int, int, int]]] = []
 
-        # Bottom half for other components
+    if large_component_data:
+        # Top half for the large component; it forms its own row because it has
+        # the full width to itself.
+        large_height: int = available_height // 2
+        rows.append([(large_component_data, 0, top_margin, width, large_height)])
+
         num_components: int = len(other_components_data)
         if num_components > 0:
             bottom_y_start: int = top_margin + large_height
@@ -1100,30 +1101,50 @@ def tile_components(
             tile_height: int = bottom_available_height
 
             if tile_width > 0 and tile_height > 0:
-                for i, render_data in enumerate(other_components_data):
-                    x: int = i * tile_width
-                    y: int = bottom_y_start
-                    component_image = _render_component(render_data, tile_width, tile_height)
-                    if component_image:
-                        final_image.paste(component_image, (x, y))
+                rows.append([
+                    (render_data, i * tile_width, bottom_y_start, tile_width, tile_height)
+                    for i, render_data in enumerate(other_components_data)
+                ])
     else:
         # Tile all in a grid
         num_components = len(component_render_data)
-        rows: int = int(ceil(sqrt(num_components)))
-        cols = int(ceil(num_components / rows))
+        num_rows: int = int(ceil(sqrt(num_components)))
+        cols = int(ceil(num_components / num_rows))
 
         tile_width = width // cols
-        tile_height = available_height // rows
+        tile_height = available_height // num_rows
 
         if tile_width > 0 and tile_height > 0:
-            for i, render_data in enumerate(component_render_data):
-                row: int = i // cols
-                col: int = i % cols
-                x = col * tile_width
-                y = top_margin + row * tile_height
-                component_image = _render_component(render_data, tile_width, tile_height)
-                if component_image:
-                    final_image.paste(component_image, (x, y))
+            for row_index in range(num_rows):
+                row_placements = [
+                    (
+                        render_data,
+                        (i % cols) * tile_width,
+                        top_margin + (i // cols) * tile_height,
+                        tile_width,
+                        tile_height,
+                    )
+                    for i, render_data in enumerate(component_render_data)
+                    if i // cols == row_index
+                ]
+                if row_placements:
+                    rows.append(row_placements)
+
+    for row in rows:
+        # Panels rendering as no-data placeholders draw a centred message rather
+        # than a title, so they must not drag their neighbours' size down.
+        title_font_size: int = min(
+            (
+                _fit_title_size(_panel_title_text(render_data), tile_w, logger)
+                for render_data, _, _, tile_w, _ in row
+                if render_data.get('data') is not None
+            ),
+            default=COMPONENT_TITLE_FONT_SIZE,
+        )
+        for render_data, x, y, tile_w, tile_h in row:
+            component_image = _render_component(render_data, tile_w, tile_h, title_font_size)
+            if component_image:
+                final_image.paste(component_image, (x, y))
 
     return final_image
 
