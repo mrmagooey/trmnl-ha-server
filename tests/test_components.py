@@ -1685,5 +1685,49 @@ class TestGraphTwoLineTitle(unittest.TestCase):
         self.assertEqual(drawn, name)
 
 
+class TestGraphAxisMarginMapping(unittest.TestCase):
+    """Pins margin_left/margin_top/margin_bottom to the correct axis positions.
+
+    Regression coverage for the horizontal/vertical margin-swap bug class the
+    task brief warned about: golden images can't see it because at
+    title_lines == 1 all three margins equal 40 * scale, so a mis-assignment
+    renders pixel-identically. This inspects the raw d.line() calls instead.
+    """
+
+    def _axis_lines(self, title_lines):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        pts = [(start, 1.0), (end, 2.0)]
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.line') as mock_line:
+            _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                  mock_logger, window_start=start, window_end=end,
+                                  title_font_size=35, title_lines=title_lines)
+        calls = [c.args[0] for c in mock_line.call_args_list]
+        # The y-axis is the first line whose two points share an x.
+        y_axis = next(xy for xy in calls if xy[0][0] == xy[1][0])
+        # The x-axis is drawn immediately after it.
+        x_axis = calls[calls.index(y_axis) + 1]
+        return y_axis, x_axis
+
+    def test_axis_geometry_pins_the_margin_split(self):
+        y_axis_1, x_axis_1 = self._axis_lines(1)
+        y_axis_2, x_axis_2 = self._axis_lines(2)
+
+        # x of both y-axis points is unchanged: margin_top must never leak
+        # into a horizontal position.
+        self.assertEqual(y_axis_1[0][0], y_axis_2[0][0])
+        self.assertEqual(y_axis_1[1][0], y_axis_2[1][0])
+
+        # The first point's y (margin_top) grows when the title wraps.
+        self.assertGreater(y_axis_2[0][1], y_axis_1[0][1])
+
+        # The second point's y (margin_bottom) is untouched.
+        self.assertEqual(y_axis_1[1][1], y_axis_2[1][1])
+
+        # Nothing horizontal or bottom-anchored moved.
+        self.assertEqual(x_axis_1, x_axis_2)
+
+
 if __name__ == '__main__':
     unittest.main()
