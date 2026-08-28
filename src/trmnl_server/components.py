@@ -767,11 +767,22 @@ def _draw_entity_component(
                 lines.append(current_line)
             value_str = "\n".join(lines)
 
+        # This cap only engages once the value has wrapped onto multiple
+        # lines. A single-line value floored by min_font_size with
+        # value_bbox[3] still > avail_h is not re-checked here — it relies on
+        # TITLE_MAX_LINES == 2 and Task 6's TITLE_BAND_MAX_PERCENT cap on the
+        # band, which together keep avail_h at least ~55% of tile height (a
+        # smaller tile admits no rung and falls back to a full-height,
+        # one-line title). Raising TITLE_MAX_LINES or loosening
+        # TITLE_BAND_MAX_PERCENT would reopen this and need a height re-check.
         if '\n' in value_str:
             # PIL's text() uses spacing=4 ABSOLUTE for embedded newlines.
+            # This "Ag" probe deliberately over-estimates the true per-line
+            # advance, so the line cap below is conservative (undercounts
+            # max_value_lines) rather than permissive.
             probe_bbox = d.multiline_textbbox((0, 0), "Ag", font=font_value, spacing=4)
-            line_pitch: int = max(1, probe_bbox[3])
-            max_value_lines: int = max(1, avail_h // line_pitch)
+            line_probe_height: int = max(1, probe_bbox[3])
+            max_value_lines: int = max(1, avail_h // line_probe_height)
             wrapped_lines: list[str] = value_str.split('\n')
             if len(wrapped_lines) > max_value_lines:
                 wrapped_lines = wrapped_lines[:max_value_lines]
