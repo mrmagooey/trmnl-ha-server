@@ -185,6 +185,27 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'entity_dashboard')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_title_size_harmonisation(self, mock_get_entity_state):
+        """Four panels in a 2x2 grid: the top row shares one title size, the
+        bottom row drops to a smaller one because of a long title."""
+        mock_get_entity_state.return_value = {'state': '21.5', 'attributes': {}}
+        dashboard = {
+            'name': 'harmonisation',
+            'title': 'Harmonisation',
+            'components': [
+                {'entity_name': 'sensor.a', 'friendly_name': 'Kitchen', 'type': 'entity'},
+                {'entity_name': 'sensor.b', 'friendly_name': 'Hallway', 'type': 'entity'},
+                {'entity_name': 'sensor.c', 'friendly_name': 'Study', 'type': 'entity'},
+                {'entity_name': 'sensor.d',
+                 'friendly_name': 'Extremely Long Living Room Temperature Sensor',
+                 'type': 'entity'},
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'title_size_harmonisation')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     @mock.patch('trmnl_server.state.server_state')
     def test_entity_dashboard_with_battery(self, mock_state, mock_get_entity_state):
         """Entity dashboard with battery percentage in top-right."""
