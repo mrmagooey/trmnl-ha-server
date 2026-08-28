@@ -246,9 +246,6 @@ Add to `tests/test_components.py`:
 class TestExplicitTitleFontSize(unittest.TestCase):
     """Every panel type must honour an externally resolved title size."""
 
-    def _render(self, fn, *args, **kwargs):
-        return fn(*args, logger=mock_logger, **kwargs) if False else fn(*args, **kwargs)
-
     def test_graph_component_accepts_title_font_size(self):
         from datetime import datetime, timedelta, timezone
         end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -295,9 +292,6 @@ class TestExplicitTitleFontSize(unittest.TestCase):
         forced = _draw_entity_component(name, 1, 300, 240, mock_logger, title_font_size=35)
         self.assertNotEqual(shrunk.tobytes(), forced.tobytes())
 ```
-
-Delete the unused `_render` helper stub above before committing — it is a
-leftover; the tests call the drawing functions directly.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -511,13 +505,16 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
         self.assertEqual(len(set(sizes.values())), 1)
 
     def test_large_display_panel_is_sized_independently(self):
-        """The full-width panel keeps 35 even though the narrow row shrinks."""
+        """The full-width panel is fitted to its own width, not the row below."""
         sizes = self._sizes([
             self._panel(self.LONG, large=True),
             self._panel('A'), self._panel('B'), self._panel('C'),
         ])
-        self.assertEqual(sizes[self.LONG], 35)
+        # The large panel spans the full 800px, so it resolves against that
+        # width alone -- independently of the three narrow panels beneath it.
+        self.assertEqual(sizes[self.LONG], _fit_title_size(self.LONG, 800, mock_logger))
         self.assertEqual(sizes['A'], sizes['B'])
+        self.assertEqual(sizes['B'], sizes['C'])
 
     def test_no_data_panels_are_excluded_from_the_row_minimum(self):
         """A placeholder's long name must not shrink its neighbour's title."""
