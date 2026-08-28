@@ -227,6 +227,7 @@ def _draw_graph_component(
     window_start: datetime,
     window_end: datetime,
     zero_baseline: bool = False,
+    title_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a single history graph component.
 
@@ -240,12 +241,14 @@ def _draw_graph_component(
         window_end: End of the fixed time window (x-axis right bound, typically "now").
         zero_baseline: When True, include 0 in the value range and draw a thin
             horizontal zero reference line with a labeled 0 y-tick.
+        title_font_size: Title size resolved by the caller. When None, the
+            title shrinks to fit this component's own width.
 
     Returns:
         Rendered PIL Image
     """
     # Create a larger image for antialiasing
-    scale: int = 2
+    scale: int = COMPONENT_SCALE
     large_width: int = width * scale
     large_height: int = height * scale
     img = Image.new('RGB', (large_width, large_height), color='white')
@@ -253,19 +256,23 @@ def _draw_graph_component(
 
     # Load fonts
     try:
-        title_font_size: int = COMPONENT_TITLE_FONT_SIZE * scale
-        padding: int = 20 * scale
-        font_title = ImageFont.truetype(NOTO_FONT, title_font_size)
-        title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
-        title_width_val: int = title_bbox[2] - title_bbox[0]
-        
-        while title_width_val > large_width - padding:
-            title_font_size -= 2
-            if title_font_size <= 8:
-                break
-            font_title = ImageFont.truetype(NOTO_FONT, title_font_size)
+        padding: int = TITLE_PADDING * scale
+        if title_font_size is not None:
+            resolved_title_size: int = title_font_size * scale
+            font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
+        else:
+            resolved_title_size = COMPONENT_TITLE_FONT_SIZE * scale
+            font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
             title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
-            title_width_val = title_bbox[2] - title_bbox[0]
+            title_width_val: int = title_bbox[2] - title_bbox[0]
+
+            while title_width_val > large_width - padding:
+                resolved_title_size -= 2
+                if resolved_title_size <= 8:
+                    break
+                font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
+                title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
+                title_width_val = title_bbox[2] - title_bbox[0]
 
         font_axes = ImageFont.truetype(NOTO_FONT, 15 * scale)
         font_value = ImageFont.truetype(NOTO_FONT, 30 * scale)
@@ -459,41 +466,49 @@ def _draw_entity_component(
     width: int,
     height: int,
     logger: "Logger",
+    *,
+    title_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a single entity component.
-    
+
     Args:
         friendly_name: Display name for the component
         value: Entity state value
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
-        
+        title_font_size: Title size resolved by the caller. When None, the
+            title shrinks to fit this component's own width.
+
     Returns:
         Rendered PIL Image
     """
-    scale: int = 2
+    scale: int = COMPONENT_SCALE
     large_width: int = width * scale
     large_height: int = height * scale
     img = Image.new('RGB', (large_width, large_height), color='white')
     d = ImageDraw.Draw(img)
 
     # Dynamically adjust title font size
-    title_font_size: int = COMPONENT_TITLE_FONT_SIZE * scale
-    padding: int = 20 * scale
+    padding: int = TITLE_PADDING * scale
     font_title = ImageFont.load_default()
     try:
-        font_title = ImageFont.truetype(NOTO_FONT, title_font_size)
-        title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
-        title_width_val: int = title_bbox[2] - title_bbox[0]
-
-        while title_width_val > large_width - padding:
-            title_font_size -= 2
-            if title_font_size <= 8:
-                break
-            font_title = ImageFont.truetype(NOTO_FONT, title_font_size)
+        if title_font_size is not None:
+            resolved_title_size: int = title_font_size * scale
+            font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
+        else:
+            resolved_title_size = COMPONENT_TITLE_FONT_SIZE * scale
+            font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
             title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
-            title_width_val = title_bbox[2] - title_bbox[0]
+            title_width_val: int = title_bbox[2] - title_bbox[0]
+
+            while title_width_val > large_width - padding:
+                resolved_title_size -= 2
+                if resolved_title_size <= 8:
+                    break
+                font_title = ImageFont.truetype(NOTO_FONT, resolved_title_size)
+                title_bbox = d.textbbox((0, 0), friendly_name, font=font_title)
+                title_width_val = title_bbox[2] - title_bbox[0]
     except IOError:
         if not _font_warned[0]:
             logger.warning("%s not found. Using default font.", NOTO_FONT)
@@ -570,29 +585,35 @@ def _draw_calendar_component(
     width: int,
     height: int,
     logger: "Logger",
+    *,
+    title_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a calendar component.
-    
+
     Args:
         friendly_name: Display name for the component
         events: List of calendar events
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
-        
+        title_font_size: Title size resolved by the caller. When None, the
+            title shrinks to fit this component's own width.
+
     Returns:
         Rendered PIL Image
     """
     from datetime import date as dt_date
-    
-    scale: int = 2
+
+    scale: int = COMPONENT_SCALE
     large_width: int = width * scale
     large_height: int = height * scale
     img = Image.new('RGB', (large_width, large_height), color='white')
     d = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
+        font_title = ImageFont.truetype(
+            NOTO_FONT, (title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale
+        )
         font_event = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
         if not _font_warned[0]:
@@ -679,27 +700,33 @@ def _draw_entities_component(
     width: int,
     height: int,
     logger: "Logger",
+    *,
+    title_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a list of entities and their states.
-    
+
     Args:
         friendly_name: Display name for the component
         entity_states: List of entity state dictionaries
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
-        
+        title_font_size: Title size resolved by the caller. When None, the
+            title shrinks to fit this component's own width.
+
     Returns:
         Rendered PIL Image
     """
-    scale: int = 2
+    scale: int = COMPONENT_SCALE
     large_width: int = width * scale
     large_height: int = height * scale
     img = Image.new('RGB', (large_width, large_height), color='white')
     d = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
+        font_title = ImageFont.truetype(
+            NOTO_FONT, (title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale
+        )
         font_list = ImageFont.truetype(NOTO_FONT, 28 * scale)
     except IOError:
         if not _font_warned[0]:
@@ -790,6 +817,7 @@ def _draw_todo_list_component(
     *,
     columns: int = 1,
     page: int = 0,
+    title_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a todo list with checkboxes, columns, and pagination.
 
@@ -806,19 +834,23 @@ def _draw_todo_list_component(
         logger: Logger instance
         columns: Number of columns (>= 1; invalid coerced to 1)
         page: Page index to render (wrapped modulo the page count)
+        title_font_size: Title size resolved by the caller. When None, the
+            title shrinks to fit this component's own width.
 
     Returns:
         Rendered PIL Image
     """
     cols: int = columns if isinstance(columns, int) and columns > 0 else 1
-    scale: int = 2
+    scale: int = COMPONENT_SCALE
     large_width: int = width * scale
     large_height: int = height * scale
     img = Image.new('RGB', (large_width, large_height), color='white')
     d = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype(NOTO_FONT, COMPONENT_TITLE_FONT_SIZE * scale)
+        font_title = ImageFont.truetype(
+            NOTO_FONT, (title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale
+        )
         font_indicator = ImageFont.truetype(NOTO_FONT, 18 * scale)
     except IOError:
         if not _font_warned[0]:
@@ -827,10 +859,7 @@ def _draw_todo_list_component(
         font_title = ImageFont.load_default()
         font_indicator = ImageFont.load_default()
 
-    incomplete: list[dict[str, str]] = [
-        it for it in items
-        if isinstance(it, dict) and it.get('status', 'needs_action') != 'completed'
-    ]
+    incomplete: list[dict[str, str]] = _incomplete_items(items)
     total: int = len(incomplete)
 
     # Title with count.

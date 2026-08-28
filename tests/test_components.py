@@ -1093,5 +1093,55 @@ class TestPanelTitleText(unittest.TestCase):
         self.assertEqual(_panel_title_text({'type': 'entity', 'data': 'x'}), '')
 
 
+class TestExplicitTitleFontSize(unittest.TestCase):
+    """Every panel type must honour an externally resolved title size."""
+
+    def test_graph_component_accepts_title_font_size(self):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        points = [(start, 1.0), (end, 2.0)]
+        img = _draw_graph_component(
+            "Sensor", points, 400, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=22,
+        )
+        self.assertEqual(img.size, (400, 240))
+
+    def test_entity_component_accepts_title_font_size(self):
+        img = _draw_entity_component("Sensor", 21.5, 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_calendar_component_accepts_title_font_size(self):
+        img = _draw_calendar_component("Cal", [], 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_entities_component_accepts_title_font_size(self):
+        img = _draw_entities_component("Ents", [], 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_todo_component_accepts_title_font_size(self):
+        img = _draw_todo_list_component("Tasks", [], 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_explicit_size_actually_changes_the_title(self):
+        """A larger title size must produce visibly different pixels."""
+        small = _draw_entity_component("Sensor", 1, 400, 240, mock_logger, title_font_size=18)
+        large = _draw_entity_component("Sensor", 1, 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_none_matches_the_default_rendering(self):
+        """Omitting the argument must be identical to passing None."""
+        a = _draw_entity_component("Sensor", 1, 400, 240, mock_logger)
+        b = _draw_entity_component("Sensor", 1, 400, 240, mock_logger, title_font_size=None)
+        self.assertEqual(a.tobytes(), b.tobytes())
+
+    def test_explicit_size_overrides_the_shrink_loop(self):
+        """A long title forced to 35 must differ from the same title left to shrink."""
+        name = "Extremely Long Living Room Temperature Sensor Name"
+        shrunk = _draw_entity_component(name, 1, 300, 240, mock_logger)
+        forced = _draw_entity_component(name, 1, 300, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(shrunk.tobytes(), forced.tobytes())
+
+
 if __name__ == '__main__':
     unittest.main()
