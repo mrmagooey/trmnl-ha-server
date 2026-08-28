@@ -1327,13 +1327,15 @@ class TestFitTitleSizeWithLines(unittest.TestCase):
         self.assertEqual(_fit_title_size("CPU", 400, mock_logger), 35)
 
     def test_max_band_caps_the_rung(self):
-        # 146px tile -> cap 65 -> rung 22 (57) is the largest 2-line band that fits.
+        # cap 65 is what a 146px-tall tile yields; rung 22 (band 57) is the
+        # largest that fits.
         self.assertEqual(
             _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=65), 22
         )
 
     def test_returns_none_when_cap_excludes_every_rung(self):
-        # 88px tile -> cap 39 -> below rung 18's 2-line band of 47.
+        # cap 39 is what an 88px-tall tile yields; below rung 18's band of
+        # 47, so no rung qualifies.
         self.assertIsNone(
             _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=39)
         )
@@ -1347,6 +1349,24 @@ class TestFitTitleSizeWithLines(unittest.TestCase):
         for cap in (30, 39, 47, 65, 99, None):
             got = _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=cap)
             self.assertTrue(got is None or got in TITLE_SIZE_LADDER)
+
+    def test_width_failure_under_a_permissive_cap_returns_a_rung_not_none(self):
+        """Mode 2: the cap admits every rung, but no rung fits the width.
+
+        tile_width=10 makes the width budget negative (10 - TITLE_PADDING),
+        so no line at any font size can ever fit -- while max_band=99 is
+        above even rung 35's 2-line band (87), so every rung passes the cap.
+        Confirmed directly: at every rung in TITLE_SIZE_LADDER,
+        _title_band_height(size, 2, logger) <= 99, and the impossible text
+        (one unbroken word, no spaces to wrap on) never satisfies the width
+        check at any size. This must return the smallest rung, never None --
+        a regression here would make Task 6 crash on
+        TITLE_SIZE_LADDER.index(None).
+        """
+        impossible = "Supercalifragilisticexpialidocious" * 3
+        got = _fit_title_size(impossible, 10, mock_logger, lines=2, max_band=99)
+        self.assertIsNotNone(got)
+        self.assertEqual(got, TITLE_SIZE_LADDER[-1])
 
 
 class TestEllipsize(unittest.TestCase):
