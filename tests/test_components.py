@@ -1729,5 +1729,45 @@ class TestGraphAxisMarginMapping(unittest.TestCase):
         self.assertEqual(x_axis_1, x_axis_2)
 
 
+class TestEntityTwoLineTitle(unittest.TestCase):
+    """The entity value is bounded by the region below a wrapped title."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def test_accepts_title_lines(self):
+        img = _draw_entity_component(self.LONG, 21.5, 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_two_lines_differs_from_one(self):
+        one = _draw_entity_component(self.LONG, 21.5, 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=1)
+        two = _draw_entity_component(self.LONG, 21.5, 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=2)
+        self.assertNotEqual(one.tobytes(), two.tobytes())
+
+    def test_one_line_is_byte_identical_to_omitting_the_argument(self):
+        a = _draw_entity_component("CPU", 21.5, 400, 220, mock_logger, title_font_size=35)
+        b = _draw_entity_component("CPU", 21.5, 400, 220, mock_logger,
+                                   title_font_size=35, title_lines=1)
+        self.assertEqual(a.tobytes(), b.tobytes())
+
+    def test_value_does_not_overflow_a_short_tile_with_a_wrapped_title(self):
+        """266x146 needed 158px before this fix. Top rows must stay blank."""
+        img = _draw_entity_component(self.LONG, 21.5, 266, 146, mock_logger,
+                                     title_font_size=18, title_lines=2)
+        px = img.convert('L').load()
+        # The bottom-most row must not be inked: the value has to fit.
+        self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+    def test_long_multiword_value_is_bounded(self):
+        img = _draw_entity_component(
+            "Weather", "Partly Cloudy With Heavy Showers And Thunder",
+            150, 90, mock_logger, title_font_size=18, title_lines=2,
+        )
+        px = img.convert('L').load()
+        self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -638,6 +638,7 @@ def _draw_entity_component(
     logger: "Logger",
     *,
     title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> Image.Image:
     """Draws a single entity component.
 
@@ -649,6 +650,8 @@ def _draw_entity_component(
         logger: Logger instance
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
+        title_lines: Number of title lines to wrap onto. At 1 (the default)
+            the value is centred in the whole tile unconditionally.
 
     Returns:
         Rendered PIL Image
@@ -686,12 +689,35 @@ def _draw_entity_component(
 
     y_tweak: int = 40
     # Draw title
-    title_text: str = _ellipsize(friendly_name, font_title, large_width - padding, d)
-    title_bbox = d.textbbox((0, 0), title_text, font=font_title)
+    if title_lines > 1:
+        title_lines_text: list[str] = _wrap_title(
+            friendly_name, font_title, large_width - padding, title_lines
+        ) or [friendly_name]
+    else:
+        title_lines_text = [friendly_name]
+    title_lines_text = [
+        _ellipsize(line, font_title, large_width - padding, d)
+        for line in title_lines_text
+    ]
+    rendered_title: str = "\n".join(title_lines_text)
+    title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                       spacing=TITLE_LINE_SPACING * scale)
     title_width: int = title_bbox[2] - title_bbox[0]
     title_x: float = (large_width - title_width) / 2
     title_y: float = 20 * scale - y_tweak
-    d.text((title_x, title_y), title_text, font=font_title, fill='black')
+    d.multiline_text(
+        (title_x, title_y), rendered_title, font=font_title, fill='black',
+        align='center', spacing=TITLE_LINE_SPACING * scale,
+    )
+
+    if title_lines > 1:
+        band: int = _title_band_height(
+            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
+        ) * scale
+        avail_top: int = band
+    else:
+        avail_top = 0
+    avail_h: int = large_height - avail_top
 
     if value is None:
         value_str: str = "N/A"
@@ -709,7 +735,14 @@ def _draw_entity_component(
         value_bbox = d.textbbox((0, 0), value_str, font=font_value)
         value_width: int = value_bbox[2] - value_bbox[0]
 
-        while value_width > large_width - padding:
+        while (
+            value_width > large_width - padding
+            # Use bbox[3] (anchor-to-ink-bottom), not ink-only height: once the
+            # clamp below pins value_y to avail_top, the anchor IS the region's
+            # top edge, so this must match _title_band_height's convention or
+            # the ink can spill past avail_top + avail_h.
+            or value_bbox[3] > avail_h
+        ):
             font_size -= 4
             if font_size <= min_font_size:
                 break
@@ -733,6 +766,19 @@ def _draw_entity_component(
                         current_line = word
                 lines.append(current_line)
             value_str = "\n".join(lines)
+
+        if '\n' in value_str:
+            # PIL's text() uses spacing=4 ABSOLUTE for embedded newlines.
+            probe_bbox = d.multiline_textbbox((0, 0), "Ag", font=font_value, spacing=4)
+            line_pitch: int = max(1, probe_bbox[3])
+            max_value_lines: int = max(1, avail_h // line_pitch)
+            wrapped_lines: list[str] = value_str.split('\n')
+            if len(wrapped_lines) > max_value_lines:
+                wrapped_lines = wrapped_lines[:max_value_lines]
+                wrapped_lines[-1] = _ellipsize(
+                    wrapped_lines[-1], font_value, large_width - padding, d
+                )
+                value_str = '\n'.join(wrapped_lines)
     except IOError:
         pass  # Use default font
 
@@ -743,7 +789,8 @@ def _draw_entity_component(
 
     value_x: float = (large_width - value_width) / 2
     final_y_tweak: int = y_tweak if '\n' not in value_str else 0
-    value_y: float = (large_height - value_height) / 2 - final_y_tweak
+    value_y: float = avail_top + (avail_h - value_height) / 2 - final_y_tweak
+    value_y = max(float(avail_top), value_y)
 
     d.text((value_x, value_y), value_str, font=font_value, fill='black', align='center')
 
