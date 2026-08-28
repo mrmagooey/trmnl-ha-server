@@ -23,8 +23,13 @@ from trmnl_server.components import (
     _ellipsize,
     _panel_title_text,
     _incomplete_items,
+    _wrap_title,
+    _title_band_height,
     TITLE_SIZE_LADDER,
     COMPONENT_TITLE_FONT_SIZE,
+    TITLE_MAX_LINES,
+    TITLE_BAND_MAX_PERCENT,
+    COMPONENT_SCALE,
 )
 from trmnl_server.metrics import voltage_to_percent
 
@@ -1401,6 +1406,67 @@ class TestTitleEllipsisTruncation(unittest.TestCase):
         with no title_font_size supplied at all (the None/default path)."""
         img = _draw_calendar_component(self.LONG, [], 300, 240, mock_logger)
         self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+
+class TestWrapTitle(unittest.TestCase):
+    """Greedy pixel word wrap for panel titles."""
+
+    def _font(self, size=35):
+        return _load_font(size * COMPONENT_SCALE, mock_logger)
+
+    def test_short_text_returns_single_line(self):
+        self.assertEqual(_wrap_title("CPU", self._font(), 760, 2), ["CPU"])
+
+    def test_wraps_onto_two_lines_when_needed(self):
+        lines = _wrap_title("Back Garden Soil Moisture Level", self._font(), 760, 2)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(" ".join(lines), "Back Garden Soil Moisture Level")
+
+    def test_never_breaks_a_word(self):
+        lines = _wrap_title("Supercalifragilistic Expialidocious", self._font(), 760, 2)
+        for line in lines or []:
+            for word in line.split():
+                self.assertIn(word, "Supercalifragilistic Expialidocious")
+
+    def test_returns_none_when_more_lines_needed(self):
+        self.assertIsNone(
+            _wrap_title("One Two Three Four Five Six Seven Eight Nine Ten", self._font(), 200, 2)
+        )
+
+    def test_single_unbreakable_word_returns_one_line(self):
+        # A word that cannot fit is still returned; _ellipsize handles it later.
+        self.assertEqual(_wrap_title("Supercalifragilistic", self._font(), 50, 2),
+                         ["Supercalifragilistic"])
+
+    def test_empty_string(self):
+        self.assertEqual(_wrap_title("", self._font(), 760, 2), [""])
+
+    def test_every_returned_line_fits_when_not_none(self):
+        font = self._font(18)
+        lines = _wrap_title("Back Garden Soil Moisture Level", font, 400, 2)
+        if lines is not None and len(lines) > 1:
+            for line in lines:
+                self.assertLessEqual(font.getbbox(line)[2] - font.getbbox(line)[0], 400)
+
+
+class TestTitleBandHeight(unittest.TestCase):
+    """Band height must match the measured table the design was calibrated on."""
+
+    EXPECTED = {35: (46, 87), 30: (39, 76), 26: (34, 66), 22: (29, 57), 18: (24, 47)}
+
+    def test_matches_measured_table(self):
+        for size, (one, two) in self.EXPECTED.items():
+            self.assertEqual(_title_band_height(size, 1, mock_logger), one, f"rung {size}, 1 line")
+            self.assertEqual(_title_band_height(size, 2, mock_logger), two, f"rung {size}, 2 lines")
+
+    def test_two_lines_always_taller_than_one(self):
+        for size in TITLE_SIZE_LADDER:
+            self.assertGreater(_title_band_height(size, 2, mock_logger),
+                               _title_band_height(size, 1, mock_logger))
+
+    def test_one_line_band_at_top_rung_exceeds_graph_margin(self):
+        """Guards the reason the 1-line path must NOT use max(40, band)."""
+        self.assertGreater(_title_band_height(35, 1, mock_logger), 40)
 
 
 if __name__ == '__main__':

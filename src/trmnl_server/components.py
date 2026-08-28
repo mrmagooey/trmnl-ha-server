@@ -24,6 +24,14 @@ COMPONENT_SCALE: int = 2
 # the same rung instead of each shrinking to its own arbitrary fit.
 TITLE_SIZE_LADDER: tuple[int, ...] = (35, 30, 26, 22, 18)
 TITLE_PADDING: int = 20
+TITLE_MAX_LINES: int = 2
+# A wrap must gain at least this many ladder rungs for a row to spend the
+# vertical space on a second title line.
+TITLE_WRAP_MIN_GAIN: int = 1
+TITLE_LINE_SPACING: int = 4
+TITLE_BAND_GAP: int = 4
+# A title band may not consume more than this share of its tile's height.
+TITLE_BAND_MAX_PERCENT: int = 45
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -133,6 +141,73 @@ def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "Imag
             break
         truncated = truncated[:-1]
     return (truncated + '…') if truncated else '…'
+
+
+def _wrap_title(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: int,
+    max_lines: int,
+) -> list[str] | None:
+    """Wraps a title onto at most max_lines, breaking only at spaces.
+
+    Measures with the font's own getbbox so it can run before any canvas
+    exists. A single word wider than max_width is returned on its own line
+    rather than broken; callers ellipsize such a line.
+
+    Args:
+        text: The title string
+        font: Font the title will be drawn with
+        max_width: Available width in the same (scaled) units as the font
+        max_lines: Maximum number of lines permitted
+
+    Returns:
+        The wrapped lines, or None if the text needs more than max_lines
+    """
+    words: list[str] = text.split()
+    if not words:
+        return [text]
+
+    lines: list[str] = []
+    current: str = words[0]
+    for word in words[1:]:
+        candidate: str = current + " " + word
+        bbox = font.getbbox(candidate)
+        if bbox[2] - bbox[0] <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+
+    return lines if len(lines) <= max_lines else None
+
+
+def _title_band_height(font_size: int, lines: int, logger: "Logger") -> int:
+    """Height reserved below a title's anchor for the given line count.
+
+    Measured through the same PIL routine the drawing functions paint with, so
+    the reserved band and the painted extent cannot diverge. Uses a fixed
+    "Ag" ascender/descender probe so the band does not vary with the glyphs of
+    a particular title.
+
+    Args:
+        font_size: Unscaled title font size
+        lines: Number of title lines
+        logger: Logger instance
+
+    Returns:
+        Unscaled height from the title anchor to the bottom of its ink
+    """
+    font = _load_font(font_size * COMPONENT_SCALE, logger)
+    probe = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    bbox = probe.multiline_textbbox(
+        (0, 0),
+        "\n".join(["Ag"] * max(1, lines)),
+        font=font,
+        spacing=TITLE_LINE_SPACING * COMPONENT_SCALE,
+    )
+    return bbox[3] // COMPONENT_SCALE
 
 
 def _create_info_image(
