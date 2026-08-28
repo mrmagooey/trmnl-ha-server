@@ -19,6 +19,20 @@ from trmnl_server.components import (
     _draw_todo_list_component,
     _load_font,
     _todo_capacity,
+    _fit_title_size,
+    _ellipsize,
+    _panel_title_text,
+    _incomplete_items,
+    _wrap_title,
+    _title_band_height,
+    _todo_header_height,
+    TITLE_SIZE_LADDER,
+    COMPONENT_TITLE_FONT_SIZE,
+    TITLE_MAX_LINES,
+    TITLE_BAND_MAX_PERCENT,
+    COMPONENT_SCALE,
+    TODO_BOTTOM_PAD,
+    TODO_ROW_H,
 )
 from trmnl_server.metrics import voltage_to_percent
 
@@ -1015,6 +1029,868 @@ class TestZeroBaselineDispatch(unittest.TestCase):
             kwargs.get('zero_baseline', False),
             "zero_baseline must default to False when not configured",
         )
+
+
+class TestFitTitleSize(unittest.TestCase):
+    """Title sizing picks rungs off the ladder and never anything else."""
+
+    def test_short_title_in_wide_tile_gets_top_rung(self):
+        self.assertEqual(_fit_title_size("CPU", 800, mock_logger), COMPONENT_TITLE_FONT_SIZE)
+
+    def test_long_title_in_narrow_tile_drops_below_top_rung(self):
+        size = _fit_title_size("Living Room Temperature Sensor", 200, mock_logger)
+        self.assertLess(size, 35)
+
+    def test_only_ever_returns_ladder_values(self):
+        for width in range(60, 800, 20):
+            size = _fit_title_size("Living Room Temperature Sensor", width, mock_logger)
+            self.assertIn(size, TITLE_SIZE_LADDER)
+
+    def test_floors_at_smallest_rung_when_nothing_fits(self):
+        self.assertEqual(_fit_title_size("x" * 400, 100, mock_logger), TITLE_SIZE_LADDER[-1])
+
+    def test_wider_tile_never_yields_a_smaller_size(self):
+        text = "Living Room Temperature Sensor"
+        sizes = [_fit_title_size(text, w, mock_logger) for w in range(100, 801, 50)]
+        self.assertEqual(sizes, sorted(sizes))
+
+    def test_empty_title_gets_top_rung(self):
+        self.assertEqual(_fit_title_size("", 200, mock_logger), COMPONENT_TITLE_FONT_SIZE)
+
+
+class TestIncompleteItems(unittest.TestCase):
+    """The shared predicate for which todo items a panel displays."""
+
+    def test_drops_completed_items(self):
+        items = [
+            {'summary': 'a', 'status': 'needs_action'},
+            {'summary': 'b', 'status': 'completed'},
+            {'summary': 'c', 'status': 'needs_action'},
+        ]
+        self.assertEqual(len(_incomplete_items(items)), 2)
+
+    def test_missing_status_counts_as_incomplete(self):
+        self.assertEqual(len(_incomplete_items([{'summary': 'a'}])), 1)
+
+    def test_ignores_non_dict_entries(self):
+        self.assertEqual(len(_incomplete_items(['nope', {'summary': 'a'}])), 1)
+
+
+class TestPanelTitleText(unittest.TestCase):
+    """The measured string must match the string a panel actually draws."""
+
+    def test_plain_panel_uses_friendly_name(self):
+        data = {'type': 'entity', 'friendly_name': 'Kitchen', 'data': 'on'}
+        self.assertEqual(_panel_title_text(data), 'Kitchen')
+
+    def test_todo_panel_includes_incomplete_count(self):
+        data = {
+            'type': 'todo_list',
+            'friendly_name': 'Tasks',
+            'data': [
+                {'summary': 'a', 'status': 'needs_action'},
+                {'summary': 'b', 'status': 'completed'},
+            ],
+        }
+        self.assertEqual(_panel_title_text(data), 'Tasks (1)')
+
+    def test_todo_panel_with_non_list_data_counts_zero(self):
+        data = {'type': 'todo_list', 'friendly_name': 'Tasks', 'data': None}
+        self.assertEqual(_panel_title_text(data), 'Tasks (0)')
+
+    def test_missing_friendly_name_is_empty_string(self):
+        self.assertEqual(_panel_title_text({'type': 'entity', 'data': 'x'}), '')
+
+
+class TestExplicitTitleFontSize(unittest.TestCase):
+    """Every panel type must honour an externally resolved title size."""
+
+    def test_graph_component_accepts_title_font_size(self):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        points = [(start, 1.0), (end, 2.0)]
+        img = _draw_graph_component(
+            "Sensor", points, 400, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=22,
+        )
+        self.assertEqual(img.size, (400, 240))
+
+    def test_entity_component_accepts_title_font_size(self):
+        img = _draw_entity_component("Sensor", 21.5, 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_calendar_component_accepts_title_font_size(self):
+        img = _draw_calendar_component("Cal", [], 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_entities_component_accepts_title_font_size(self):
+        img = _draw_entities_component("Ents", [], 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_todo_component_accepts_title_font_size(self):
+        img = _draw_todo_list_component("Tasks", [], 400, 240, mock_logger, title_font_size=22)
+        self.assertEqual(img.size, (400, 240))
+
+    def test_explicit_size_actually_changes_the_title(self):
+        """A larger title size must produce visibly different pixels."""
+        small = _draw_entity_component("Sensor", 1, 400, 240, mock_logger, title_font_size=18)
+        large = _draw_entity_component("Sensor", 1, 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_none_matches_the_default_rendering(self):
+        """Omitting the argument must be identical to passing None."""
+        a = _draw_entity_component("Sensor", 1, 400, 240, mock_logger)
+        b = _draw_entity_component("Sensor", 1, 400, 240, mock_logger, title_font_size=None)
+        self.assertEqual(a.tobytes(), b.tobytes())
+
+    def test_explicit_size_overrides_the_shrink_loop(self):
+        """A long title forced to 35 must differ from the same title left to shrink."""
+        name = "Extremely Long Living Room Temperature Sensor Name"
+        shrunk = _draw_entity_component(name, 1, 300, 240, mock_logger)
+        forced = _draw_entity_component(name, 1, 300, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(shrunk.tobytes(), forced.tobytes())
+
+    def test_graph_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        points = [(start, 1.0), (end, 2.0)]
+        small = _draw_graph_component(
+            "Sensor", points, 400, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=18,
+        )
+        large = _draw_graph_component(
+            "Sensor", points, 400, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=35,
+        )
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_calendar_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        small = _draw_calendar_component("Cal", [], 400, 240, mock_logger, title_font_size=18)
+        large = _draw_calendar_component("Cal", [], 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_entities_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        small = _draw_entities_component("Ents", [], 400, 240, mock_logger, title_font_size=18)
+        large = _draw_entities_component("Ents", [], 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+    def test_todo_component_title_font_size_changes_pixels(self):
+        """A larger title size must produce visibly different pixels."""
+        items = [
+            {'summary': 'Buy milk', 'status': 'needs_action'},
+            {'summary': 'Walk dog', 'status': 'needs_action'},
+        ]
+        small = _draw_todo_list_component("Tasks", items, 400, 240, mock_logger, title_font_size=18)
+        large = _draw_todo_list_component("Tasks", items, 400, 240, mock_logger, title_font_size=35)
+        self.assertNotEqual(small.tobytes(), large.tobytes())
+
+
+class TestRowTitleSizeHarmonisation(unittest.TestCase):
+    """Panels in a row share one title size; rows may differ."""
+
+    LONG = "Extremely Long Living Room Temperature Sensor Name"
+
+    def _sizes(self, render_data):
+        """Renders a dashboard and returns the title_font_size each panel got."""
+        captured = []
+
+        def fake_draw(friendly_name, value, width, height, logger, *,
+                      title_font_size=None, title_lines=1):
+            captured.append((friendly_name, title_font_size))
+            return Image.new('RGB', (width, height), color='white')
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=fake_draw):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+        return dict(captured)
+
+    def _panel(self, name, large=False):
+        return {'type': 'entity', 'friendly_name': name, 'data': 'v', 'large_display': large}
+
+    def test_panels_in_the_same_row_get_the_same_size(self):
+        # n=4 gives a 2x2 grid: row 0 is A and B, row 1 is C and the long title.
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel(self.LONG),
+        ])
+        self.assertEqual(sizes['C'], sizes[self.LONG])
+
+    def test_a_row_with_a_long_title_uses_a_second_smaller_size(self):
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel(self.LONG),
+        ])
+        self.assertEqual(sizes['A'], sizes['B'])
+        self.assertLess(sizes[self.LONG], sizes['A'])
+
+    def test_every_resolved_size_is_a_ladder_rung(self):
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel(self.LONG),
+        ])
+        for size in sizes.values():
+            self.assertIn(size, TITLE_SIZE_LADDER)
+
+    def test_all_short_titles_collapse_to_one_size(self):
+        sizes = self._sizes([
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel('D'),
+        ])
+        self.assertEqual(len(set(sizes.values())), 1)
+
+    def test_large_display_panel_is_sized_independently(self):
+        """The full-width panel is fitted to its own width, not the row below."""
+        sizes = self._sizes([
+            self._panel(self.LONG, large=True),
+            self._panel('A'), self._panel('B'), self._panel('C'),
+        ])
+        alone = self._sizes([self._panel(self.LONG, large=True)])
+        # The large panel spans the full 800px in both cases (row resolution
+        # is scoped per row), so it must resolve identically whether or not
+        # the narrow row beneath it exists.
+        self.assertEqual(sizes[self.LONG], alone[self.LONG])
+        self.assertEqual(sizes['A'], sizes['B'])
+        self.assertEqual(sizes['B'], sizes['C'])
+
+    def test_no_data_panels_are_excluded_from_the_row_minimum(self):
+        """A placeholder's long name must not shrink its neighbour's title."""
+        with_placeholder = [
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), {'type': 'entity', 'friendly_name': self.LONG,
+                               'data': None, 'large_display': False},
+        ]
+        sizes = self._sizes(with_placeholder)
+        self.assertEqual(sizes['C'], 35)
+
+    def test_empty_data_history_graph_is_excluded_from_the_row_minimum(self):
+        """A history_graph with data=[] draws a centred placeholder and no
+        title (see _draw_graph_component's `if not data_points` branch), so
+        it must not drag its neighbour's title size/line-count down either."""
+        with_empty_graph = [
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), {'type': 'history_graph', 'friendly_name': self.LONG,
+                               'data': [], 'large_display': False},
+        ]
+        sizes = self._sizes(with_empty_graph)
+        self.assertEqual(sizes['C'], 35)
+
+    def test_row_of_only_no_data_panels_does_not_crash(self):
+        sizes = self._sizes([
+            {'type': 'entity', 'friendly_name': 'X', 'data': None, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'Y', 'data': None, 'large_display': False},
+        ])
+        self.assertEqual(sizes, {})
+
+    def test_empty_component_list_still_returns_a_blank_image(self):
+        img = tile_components([], 800, 480, 40, mock_logger)
+        self.assertEqual(img.size, (800, 480))
+
+    def test_todo_count_suffix_pulls_the_row_down_to_its_own_rung(self):
+        """The measured string must be the drawn string, not the bare name.
+
+        At 400px, the bare name "Household Chores And Errands" fits rung 22,
+        but the drawn string "Household Chores And Errands (120)" only fits
+        rung 18 on one line (checked directly below -- this is what would
+        regress if _panel_title_text dropped the todo count suffix).
+
+        With 6 components the grid is 3 rows x 2 cols, giving 400x146 tiles
+        and a band cap of 146 * 45 // 100 = 65. At that cap: with the suffix,
+        s1=18 and s2=22 -- a one-rung gain, so the row wraps to (22, 2). Without
+        the suffix, s1=22 and s2=22 -- no gain, so it would stay at (22, 1).
+        The LINE COUNT (not just the size) is what distinguishes a correctly
+        measured suffix from a dropped one, so that is what this test pins.
+        """
+        name = "Household Chores And Errands"
+        bare_size = _fit_title_size(name, 400, mock_logger)
+        drawn_size = _fit_title_size(f"{name} (120)", 400, mock_logger)
+        self.assertEqual(bare_size, 22)
+        self.assertEqual(drawn_size, 18)
+
+        captured = []
+
+        def fake_entity_draw(friendly_name, value, width, height, logger, *,
+                              title_font_size=None, title_lines=1):
+            captured.append((friendly_name, title_font_size, title_lines))
+            return Image.new('RGB', (width, height), color='white')
+
+        def fake_todo_draw(friendly_name, items, width, height, logger, *,
+                            columns=1, page=0, title_font_size=None, title_lines=1):
+            captured.append((friendly_name, title_font_size, title_lines))
+            return Image.new('RGB', (width, height), color='white')
+
+        items = [{'summary': f'chore {i}', 'status': 'needs_action'} for i in range(120)]
+        render_data = [
+            self._panel('A'), self._panel('B'),
+            self._panel('C'), self._panel('D'), self._panel('E'),
+            {'type': 'todo_list', 'friendly_name': name, 'data': items, 'large_display': False},
+        ]
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=fake_entity_draw), \
+             mock.patch('trmnl_server.components._draw_todo_list_component', side_effect=fake_todo_draw):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+
+        sizes = {n: (s, l) for n, s, l in captured}
+        # E is the todo panel's row-mate: 6 items in a 2-col grid put E (index
+        # 4) and the todo panel (index 5) together in the last row.
+        self.assertEqual(sizes['E'], (22, 2))
+        self.assertEqual(sizes[name], (22, 2))
+
+
+class TestFitTitleSizeWithLines(unittest.TestCase):
+    """Two-line fitting and the band-height cap."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def test_two_lines_reaches_a_higher_rung_than_one(self):
+        one = _fit_title_size(self.LONG, 400, mock_logger)
+        two = _fit_title_size(self.LONG, 400, mock_logger, lines=2)
+        self.assertEqual(one, 22)
+        self.assertEqual(two, 35)
+
+    def test_default_call_is_unchanged(self):
+        self.assertEqual(_fit_title_size("CPU", 400, mock_logger), 35)
+
+    def test_max_band_caps_the_rung(self):
+        # cap 65 is what a 146px-tall tile yields; rung 22 (band 57) is the
+        # largest that fits.
+        self.assertEqual(
+            _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=65), 22
+        )
+
+    def test_returns_none_when_cap_excludes_every_rung(self):
+        # cap 39 is what an 88px-tall tile yields; below rung 18's band of
+        # 47, so no rung qualifies.
+        self.assertIsNone(
+            _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=39)
+        )
+
+    def test_none_only_ever_happens_with_max_band(self):
+        for width in (10, 50, 200, 800):
+            self.assertIsNotNone(_fit_title_size(self.LONG, width, mock_logger))
+            self.assertIsNotNone(_fit_title_size(self.LONG, width, mock_logger, lines=2))
+
+    def test_result_is_always_a_ladder_member_or_none(self):
+        for cap in (30, 39, 47, 65, 99, None):
+            got = _fit_title_size(self.LONG, 400, mock_logger, lines=2, max_band=cap)
+            self.assertTrue(got is None or got in TITLE_SIZE_LADDER)
+
+    def test_width_failure_under_a_permissive_cap_returns_a_rung_not_none(self):
+        """Mode 2: the cap admits every rung, but no rung fits the width.
+
+        tile_width=10 makes the width budget negative (10 - TITLE_PADDING),
+        so no line at any font size can ever fit -- while max_band=99 is
+        above even rung 35's 2-line band (87), so every rung passes the cap.
+        Confirmed directly: at every rung in TITLE_SIZE_LADDER,
+        _title_band_height(size, 2, logger) <= 99, and the impossible text
+        (one unbroken word, no spaces to wrap on) never satisfies the width
+        check at any size. This must return the smallest rung, never None --
+        a regression here would make Task 6 crash on
+        TITLE_SIZE_LADDER.index(None).
+        """
+        impossible = "Supercalifragilisticexpialidocious" * 3
+        got = _fit_title_size(impossible, 10, mock_logger, lines=2, max_band=99)
+        self.assertIsNotNone(got)
+        self.assertEqual(got, TITLE_SIZE_LADDER[-1])
+
+
+class TestEllipsize(unittest.TestCase):
+    """Unit tests for the shared title-truncation helper."""
+
+    LONG = "Extremely Long Living Room Temperature Sensor Name"
+
+    def setUp(self):
+        from PIL import ImageDraw
+        self.img = Image.new('RGB', (10, 10))
+        self.d = ImageDraw.Draw(self.img)
+        self.font = _load_font(24, mock_logger)
+
+    def test_text_that_fits_is_returned_unchanged(self):
+        result = _ellipsize("Hi", self.font, 1000, self.d)
+        self.assertEqual(result, "Hi")
+
+    def test_text_too_wide_is_truncated_with_ellipsis(self):
+        result = _ellipsize(self.LONG, self.font, 100, self.d)
+        self.assertTrue(result.endswith('…'))
+        self.assertLess(len(result), len(self.LONG))
+
+    def test_truncated_result_actually_fits_max_width(self):
+        max_width = 100
+        result = _ellipsize(self.LONG, self.font, max_width, self.d)
+        bbox = self.d.textbbox((0, 0), result, font=self.font)
+        self.assertLessEqual(bbox[2] - bbox[0], max_width)
+
+    def test_degenerate_tiny_width_returns_ellipsis_alone(self):
+        result = _ellipsize(self.LONG, self.font, 1, self.d)
+        self.assertEqual(result, '…')
+
+
+class TestTitleEllipsisTruncation(unittest.TestCase):
+    """A title too long for its tile must ellipsis-truncate, not clip at the edges.
+
+    Regression coverage for the row-title-harmonisation defect: `_fit_title_size`
+    can resolve the ladder floor (18) even when it does not actually fit, so
+    each drawing function must fall back to truncating its own title rather
+    than drawing text that overflows the tile and gets clipped.
+    """
+
+    LONG = "Extremely Long Living Room Temperature Sensor Name"
+    # Rows containing only the title -- shorter than where any function's
+    # list/graph body content begins (todo's checkbox row starts at
+    # unscaled y=TODO_HEADER_H=50), so an edge hit here can only be the title.
+    BAND_HEIGHT = 45
+
+    def _edges_blank(self, img):
+        """True if columns 0 and width-1 are pure white for the title band."""
+        px = img.load()
+        w, h = img.size
+        band = min(self.BAND_HEIGHT, h)
+        for y in range(band):
+            if px[0, y] != (255, 255, 255) or px[w - 1, y] != (255, 255, 255):
+                return False
+        return True
+
+    def test_graph_component_does_not_clip(self):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        points = [(start, 1.0), (end, 2.0)]
+        img = _draw_graph_component(
+            self.LONG, points, 300, 240, mock_logger,
+            window_start=start, window_end=end, title_font_size=18,
+        )
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_entity_component_does_not_clip(self):
+        img = _draw_entity_component(self.LONG, 1, 300, 240, mock_logger, title_font_size=18)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_calendar_component_does_not_clip(self):
+        img = _draw_calendar_component(self.LONG, [], 300, 240, mock_logger, title_font_size=18)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_entities_component_does_not_clip(self):
+        img = _draw_entities_component(self.LONG, [], 300, 240, mock_logger, title_font_size=18)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_todo_component_does_not_clip(self):
+        items = [
+            {'summary': 'Buy milk', 'status': 'needs_action'},
+            {'summary': 'Walk dog', 'status': 'needs_action'},
+        ]
+        img = _draw_todo_list_component(
+            self.LONG, items, 300, 240, mock_logger, title_font_size=18,
+        )
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+    def test_calendar_component_none_path_also_does_not_clip(self):
+        """The three previously-non-shrinking components could already overflow
+        with no title_font_size supplied at all (the None/default path)."""
+        img = _draw_calendar_component(self.LONG, [], 300, 240, mock_logger)
+        self.assertTrue(self._edges_blank(img), "title touches the tile edge -- it clipped")
+
+
+class TestWrapTitle(unittest.TestCase):
+    """Greedy pixel word wrap for panel titles."""
+
+    def _font(self, size=35):
+        return _load_font(size * COMPONENT_SCALE, mock_logger)
+
+    def test_short_text_returns_single_line(self):
+        self.assertEqual(_wrap_title("CPU", self._font(), 760, 2), ["CPU"])
+
+    def test_wraps_onto_two_lines_when_needed(self):
+        lines = _wrap_title("Back Garden Soil Moisture Level", self._font(), 760, 2)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(" ".join(lines), "Back Garden Soil Moisture Level")
+
+    def test_never_breaks_a_word(self):
+        lines = _wrap_title("Supercalifragilistic Expialidocious", self._font(), 760, 2)
+        for line in lines or []:
+            for word in line.split():
+                self.assertIn(word, "Supercalifragilistic Expialidocious")
+
+    def test_returns_none_when_more_lines_needed(self):
+        self.assertIsNone(
+            _wrap_title("One Two Three Four Five Six Seven Eight Nine Ten", self._font(), 200, 2)
+        )
+
+    def test_single_unbreakable_word_returns_one_line(self):
+        # A word that cannot fit is still returned; _ellipsize handles it later.
+        self.assertEqual(_wrap_title("Supercalifragilistic", self._font(), 50, 2),
+                         ["Supercalifragilistic"])
+
+    def test_empty_string(self):
+        self.assertEqual(_wrap_title("", self._font(), 760, 2), [""])
+
+    def test_every_returned_line_fits_when_not_none(self):
+        font = self._font(18)
+        lines = _wrap_title("Back Garden Soil Moisture Level", font, 400, 2)
+        if lines is not None and len(lines) > 1:
+            for line in lines:
+                self.assertLessEqual(font.getbbox(line)[2] - font.getbbox(line)[0], 400)
+
+
+class TestTitleBandHeight(unittest.TestCase):
+    """Band height must match the measured table the design was calibrated on."""
+
+    EXPECTED = {35: (46, 87), 30: (39, 76), 26: (34, 66), 22: (29, 57), 18: (24, 47)}
+
+    def test_matches_measured_table(self):
+        for size, (one, two) in self.EXPECTED.items():
+            self.assertEqual(_title_band_height(size, 1, mock_logger), one, f"rung {size}, 1 line")
+            self.assertEqual(_title_band_height(size, 2, mock_logger), two, f"rung {size}, 2 lines")
+
+    def test_two_lines_always_taller_than_one(self):
+        for size in TITLE_SIZE_LADDER:
+            self.assertGreater(_title_band_height(size, 2, mock_logger),
+                               _title_band_height(size, 1, mock_logger))
+
+    def test_one_line_band_at_top_rung_exceeds_graph_margin(self):
+        """Guards the reason the 1-line path must NOT use max(40, band)."""
+        self.assertGreater(_title_band_height(35, 1, mock_logger), 40)
+
+
+class TestTwoLineSimpleComponents(unittest.TestCase):
+    """Calendar, entities and todo honour a two-line title band."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def test_calendar_accepts_title_lines(self):
+        img = _draw_calendar_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_entities_accepts_title_lines(self):
+        img = _draw_entities_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_todo_accepts_title_lines(self):
+        img = _draw_todo_list_component(self.LONG, [], 400, 220, mock_logger,
+                                        title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_two_lines_differs_from_one(self):
+        one = _draw_calendar_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=1)
+        two = _draw_calendar_component(self.LONG, [], 400, 220, mock_logger,
+                                       title_font_size=35, title_lines=2)
+        self.assertNotEqual(one.tobytes(), two.tobytes())
+
+    def test_one_line_content_origin_matches_legacy_y_pos(self):
+        """At one line, content must start at the legacy y_pos = 50 * scale,
+        not a band-derived value (the y_pos == 0 else-branch must never be
+        replaced by a max(50*scale, band) that could shift it).
+
+        Replaces a former tautology that compared two calls which were
+        already the same call (title_lines=1 is the default), so it could
+        never fail under any mutation.
+        """
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_entities_component("Short", [], 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=1)
+        # multiline_text (the title) delegates internally to text(), so the
+        # last text() call is the "No entities to display" message -- the
+        # content origin under test.
+        content_y = mock_text.call_args_list[-1].args[0][1]
+        self.assertEqual(content_y, 50 * COMPONENT_SCALE)
+
+
+class TestTodoCapacityWithBand(unittest.TestCase):
+    """Pagination must use the same header height the panel draws."""
+
+    def test_one_line_matches_legacy_constant(self):
+        self.assertEqual(_todo_capacity(220, 1), _todo_capacity(220, 1, 35, 1, mock_logger))
+
+    def test_two_lines_reduces_capacity(self):
+        one = _todo_capacity(220, 1, 35, 1, mock_logger)[1]
+        two = _todo_capacity(220, 1, 35, 2, mock_logger)[1]
+        self.assertLess(two, one)
+
+
+class TestTodoHeaderHeightSharedDefinition(unittest.TestCase):
+    """_todo_capacity and _draw_todo_list_component must derive header from one function.
+
+    Regression coverage for the header-agreement finding: two independently
+    written copies of the same formula could silently drift, causing
+    pagination and rendering to disagree and rows to render off the bottom.
+    """
+
+    COMBINATIONS = [(35, 1), (35, 2), (18, 2), (26, 2), (30, 2)]
+
+    def test_capacity_implies_the_shared_header(self):
+        for font_size, lines in self.COMBINATIONS:
+            header = _todo_header_height(font_size, lines, mock_logger)
+            expected_rows = max(1, (220 - header - TODO_BOTTOM_PAD) // TODO_ROW_H)
+            rows, capacity = _todo_capacity(220, 1, font_size, lines, mock_logger)
+            self.assertEqual(rows, expected_rows, f"rows mismatch at {(font_size, lines)}")
+            self.assertEqual(capacity, expected_rows, f"capacity mismatch at {(font_size, lines)}")
+
+    def test_draw_scales_the_same_header(self):
+        # Proves the draw path calls the one shared function with the same
+        # arguments _todo_capacity would use -- if a future edit reintroduced
+        # an inline duplicate, this mock would simply never be called.
+        for font_size, lines in self.COMBINATIONS:
+            with mock.patch('trmnl_server.components._todo_header_height',
+                             wraps=_todo_header_height) as spy:
+                _draw_todo_list_component("Title", [], 400, 300, mock_logger,
+                                          title_font_size=font_size, title_lines=lines)
+                spy.assert_called_once_with(font_size, lines, mock_logger)
+
+
+class TestTitleWhitespaceByteIdentity(unittest.TestCase):
+    """The one-line path must not normalise whitespace via _wrap_title's split/join.
+
+    Regression coverage: _wrap_title does text.split() then " ".join(...), so a
+    friendly_name with leading/trailing/double spaces would render normalised
+    rather than literal. Before Task 3 such a string was passed straight to
+    _ellipsize and drawn verbatim; the one-line path must bypass _wrap_title
+    entirely to restore that.
+    """
+
+    NAME = " Cal  Sensor "
+
+    def test_calendar_preserves_literal_whitespace(self):
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_calendar_component(self.NAME, [], 400, 220, mock_logger)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, self.NAME)
+
+    def test_entities_preserves_literal_whitespace(self):
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_entities_component(self.NAME, [], 400, 220, mock_logger)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, self.NAME)
+
+    def test_todo_preserves_literal_whitespace(self):
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_todo_list_component(self.NAME, [], 400, 220, mock_logger)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, f"{self.NAME} (0)")
+
+    def test_wrap_title_itself_would_have_normalised(self):
+        """Documents why the bypass is needed: _wrap_title alone loses whitespace."""
+        font = _load_font(35 * COMPONENT_SCALE, mock_logger)
+        self.assertEqual(_wrap_title(self.NAME, font, 100000, 1), ["Cal Sensor"])
+
+
+class TestGraphTwoLineTitle(unittest.TestCase):
+    """The graph reserves a taller top margin only when its title wraps."""
+
+    def _points(self):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        return start, end, [(start, 1.0), (end, 2.0)]
+
+    def test_accepts_title_lines(self):
+        start, end, pts = self._points()
+        img = _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                    mock_logger, window_start=start, window_end=end,
+                                    title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_two_lines_differs_from_one(self):
+        start, end, pts = self._points()
+        kw = dict(window_start=start, window_end=end, title_font_size=35)
+        one = _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                    mock_logger, title_lines=1, **kw)
+        two = _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                    mock_logger, title_lines=2, **kw)
+        self.assertNotEqual(one.tobytes(), two.tobytes())
+
+    # The "1-line must not route through max(40*scale, band)" claim used to
+    # live here as `a = _draw_graph_component(..., title_lines=1) == b =
+    # _draw_graph_component(...)` -- but title_lines=1 IS the default, so a
+    # and b were the same call and the assertion was a tautology. The real
+    # check (pinning margin_top to the literal 40 * COMPONENT_SCALE, observed
+    # via the mocked axis line rather than by comparing two identical calls)
+    # now lives in TestGraphAxisMarginMapping.test_axis_geometry_pins_the_margin_split.
+
+    def test_preserves_literal_whitespace(self):
+        """One-line path must bypass _wrap_title's split/join whitespace normalisation."""
+        start, end, pts = self._points()
+        name = " Graph  Sensor "
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.multiline_text') as mock_draw:
+            _draw_graph_component(name, pts, 400, 220, mock_logger,
+                                  window_start=start, window_end=end)
+        drawn = mock_draw.call_args.args[1]
+        self.assertEqual(drawn, name)
+
+
+class TestGraphAxisMarginMapping(unittest.TestCase):
+    """Pins margin_left/margin_top/margin_bottom to the correct axis positions.
+
+    Regression coverage for the horizontal/vertical margin-swap bug class the
+    task brief warned about: golden images can't see it because at
+    title_lines == 1 all three margins equal 40 * scale, so a mis-assignment
+    renders pixel-identically. This inspects the raw d.line() calls instead.
+    """
+
+    def _axis_lines(self, title_lines):
+        from datetime import datetime, timedelta, timezone
+        end = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        pts = [(start, 1.0), (end, 2.0)]
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.line') as mock_line:
+            _draw_graph_component("Back Garden Soil Moisture Level", pts, 400, 220,
+                                  mock_logger, window_start=start, window_end=end,
+                                  title_font_size=35, title_lines=title_lines)
+        calls = [c.args[0] for c in mock_line.call_args_list]
+        # The y-axis is the first line whose two points share an x.
+        y_axis = next(xy for xy in calls if xy[0][0] == xy[1][0])
+        # The x-axis is drawn immediately after it.
+        x_axis = calls[calls.index(y_axis) + 1]
+        return y_axis, x_axis
+
+    def test_axis_geometry_pins_the_margin_split(self):
+        y_axis_1, x_axis_1 = self._axis_lines(1)
+        y_axis_2, x_axis_2 = self._axis_lines(2)
+
+        # x of both y-axis points is unchanged: margin_top must never leak
+        # into a horizontal position.
+        self.assertEqual(y_axis_1[0][0], y_axis_2[0][0])
+        self.assertEqual(y_axis_1[1][0], y_axis_2[1][0])
+
+        # At one line margin_top must equal the legacy literal exactly, not a
+        # max(40*scale, band)-derived value -- the one-line band at rung 35
+        # (46px) exceeds the 40px legacy margin, so routing through max()
+        # here would shift every graph even at one line.
+        self.assertEqual(y_axis_1[0][1], 40 * COMPONENT_SCALE)
+
+        # The first point's y (margin_top) grows when the title wraps.
+        self.assertGreater(y_axis_2[0][1], y_axis_1[0][1])
+
+        # The second point's y (margin_bottom) is untouched.
+        self.assertEqual(y_axis_1[1][1], y_axis_2[1][1])
+
+        # Nothing horizontal or bottom-anchored moved.
+        self.assertEqual(x_axis_1, x_axis_2)
+
+
+class TestEntityTwoLineTitle(unittest.TestCase):
+    """The entity value is bounded by the region below a wrapped title."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def test_accepts_title_lines(self):
+        img = _draw_entity_component(self.LONG, 21.5, 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=2)
+        self.assertEqual(img.size, (400, 220))
+
+    def test_two_lines_differs_from_one(self):
+        one = _draw_entity_component(self.LONG, 21.5, 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=1)
+        two = _draw_entity_component(self.LONG, 21.5, 400, 220, mock_logger,
+                                     title_font_size=35, title_lines=2)
+        self.assertNotEqual(one.tobytes(), two.tobytes())
+
+    # A "1-line is byte-identical to omitting the argument" test used to live
+    # here as `a = _draw_entity_component(..., title_lines=1) == b =
+    # _draw_entity_component(...)`. title_lines=1 IS the default, so a and b
+    # were the same call -- a tautology that could never fail. Deleted rather
+    # than replaced: unlike the graph's margin_top (a clean 40*scale literal)
+    # or the entities list's y_pos (a clean 50*scale literal), this
+    # component's one-line content origin (value_y) is not directly
+    # observable as a single literal without re-deriving the font metrics
+    # the implementation itself computes, which would make the assertion
+    # circular. Real, non-circular coverage of this exact one-line path
+    # (avail_top == 0, and the value must not overflow the tile) is added
+    # below as test_value_fits_a_short_tile_at_one_line, which inspects
+    # actual rendered pixels instead of comparing two identical calls.
+
+    def test_value_does_not_overflow_a_short_tile_with_a_wrapped_title(self):
+        """266x146 needed 158px before this fix. Top rows must stay blank."""
+        img = _draw_entity_component(self.LONG, 21.5, 266, 146, mock_logger,
+                                     title_font_size=18, title_lines=2)
+        px = img.convert('L').load()
+        # The bottom-most row must not be inked: the value has to fit.
+        self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+    def test_long_multiword_value_is_bounded(self):
+        img = _draw_entity_component(
+            "Weather", "Partly Cloudy With Heavy Showers And Thunder",
+            150, 90, mock_logger, title_font_size=18, title_lines=2,
+        )
+        px = img.convert('L').load()
+        self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+    def test_value_fits_a_short_tile_at_one_line(self):
+        """A narrow value never triggers the width-shrink loop, so on a short
+        tile it used to stay at the max font and overflow both the top and
+        bottom (e.g. "21.5" rendered as "21 5", its decimal point cut off).
+        The height clause (`value_bbox[3] > avail_h`) and the
+        `value_y = max(avail_top, value_y)` clamp fix this -- deliberately
+        unconditionally, even at title_lines=1. Use "72", not "21.50": the
+        latter is wide enough that the width loop shrinks it before the
+        height clause ever gets a chance to fire.
+
+        Height 100 (not the sibling test's 146): at this narrow value/width,
+        146 lands the shrink loop's coarse -4px step on a font size that
+        still overflows by a few pixels (a pre-existing quantisation
+        artifact of the shared loop, not something this fix closes) --
+        confirmed by direct measurement, see final report. 100 exercises the
+        same height clause without hitting that artifact.
+        """
+        img = _draw_entity_component("Sensor", "72", 266, 100, mock_logger, title_lines=1)
+        px = img.convert('L').load()
+        self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+
+class TestRowLineCountResolution(unittest.TestCase):
+    """A row shares a line count as well as a size."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def _capture(self, render_data, width=800, height=480):
+        seen = []
+
+        def fake(friendly_name, value, w, h, logger, *, title_font_size=None, title_lines=1):
+            seen.append((friendly_name, title_font_size, title_lines))
+            return Image.new('RGB', (w, h), color='white')
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=fake):
+            tile_components(render_data, width, height, 40, mock_logger)
+        return {n: (s, l) for n, s, l in seen}
+
+    def _panel(self, name, large=False):
+        return {'type': 'entity', 'friendly_name': name, 'data': 'v', 'large_display': large}
+
+    def test_row_wraps_to_gain_a_bigger_font(self):
+        got = self._capture([self._panel('A'), self._panel('B'),
+                             self._panel('C'), self._panel(self.LONG)])
+        self.assertEqual(got[self.LONG], (35, 2))
+        self.assertEqual(got['C'], (35, 2))
+
+    def test_neighbours_share_size_and_line_count(self):
+        got = self._capture([self._panel('A'), self._panel('B'),
+                             self._panel('C'), self._panel(self.LONG)])
+        self.assertEqual(got['C'], got[self.LONG])
+        self.assertEqual(got['A'], got['B'])
+
+    def test_no_wrap_when_nothing_is_gained(self):
+        got = self._capture([self._panel('A'), self._panel('B'),
+                             self._panel('C'), self._panel('D')])
+        for value in got.values():
+            self.assertEqual(value, (35, 1))
+
+    def test_mixed_none_results_do_not_raise(self):
+        """17 panels -> tile_height 88 -> the band cap excludes every rung."""
+        panels = [self._panel(f'Panel Number {i}') for i in range(17)]
+        got = self._capture(panels)
+        for size, lines in got.values():
+            self.assertEqual(lines, 1)
+
+    def test_placeholder_only_row_falls_back(self):
+        got = self._capture([
+            {'type': 'entity', 'friendly_name': 'X', 'data': None, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'Y', 'data': None, 'large_display': False},
+        ])
+        self.assertEqual(got, {})
 
 
 if __name__ == '__main__':

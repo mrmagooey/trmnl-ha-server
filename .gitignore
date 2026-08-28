@@ -1,3 +1,6 @@
 .aider*
 __pycache__
 *.png
+# Agent scratch: SDD workspace and CodeGraph index
+.superpowers/
+.codegraph/
