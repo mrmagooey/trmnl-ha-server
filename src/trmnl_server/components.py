@@ -1317,6 +1317,7 @@ def tile_components(
         tile_width: int,
         tile_height: int,
         title_font_size: int,
+        title_lines: int = 1,
     ) -> Image.Image:
         component_type: str = render_data['type']
         friendly_name: str = render_data.get('friendly_name', '')
@@ -1340,6 +1341,7 @@ def tile_components(
                 window_end=window_end_val,
                 zero_baseline=bool(render_data.get('zero_baseline', False)),
                 title_font_size=title_font_size,
+                title_lines=title_lines,
             )
         elif component_type == 'entity':
             return _draw_entity_component(
@@ -1349,6 +1351,7 @@ def tile_components(
                 tile_height,
                 logger,
                 title_font_size=title_font_size,
+                title_lines=title_lines,
             )
         elif component_type == 'calendar':
             return _draw_calendar_component(
@@ -1358,6 +1361,7 @@ def tile_components(
                 tile_height,
                 logger,
                 title_font_size=title_font_size,
+                title_lines=title_lines,
             )
         elif component_type == 'entities':
             return _draw_entities_component(
@@ -1367,13 +1371,16 @@ def tile_components(
                 tile_height,
                 logger,
                 title_font_size=title_font_size,
+                title_lines=title_lines,
             )
         elif component_type == 'todo_list':
             todo_columns = render_data.get('columns', 1)
             todo_key = render_data.get('todo_key')
             items_list = data if isinstance(data, list) else []
             total_incomplete = len(_incomplete_items(items_list))
-            _, capacity = _todo_capacity(tile_height, todo_columns)
+            _, capacity = _todo_capacity(
+                tile_height, todo_columns, title_font_size, title_lines, logger
+            )
             num_pages = max(1, ceil(total_incomplete / capacity))
             page = server_state.next_todo_page(todo_key, num_pages) if todo_key else 0
             return _draw_todo_list_component(
@@ -1385,6 +1392,7 @@ def tile_components(
                 columns=todo_columns,
                 page=page,
                 title_font_size=title_font_size,
+                title_lines=title_lines,
             )
         else:
             logger.warning("Unknown component type: %s", component_type)
@@ -1444,16 +1452,47 @@ def tile_components(
     for row in rows:
         # Panels rendering as no-data placeholders draw a centred message rather
         # than a title, so they must not drag their neighbours' size down.
-        title_font_size: int = min(
+        tile_height_for_row: int = row[0][4]
+        row_panels = [
+            (render_data, tile_w)
+            for render_data, _, _, tile_w, _ in row
+            if render_data.get('data') is not None
+        ]
+
+        s1: int = min(
             (
                 _fit_title_size(_panel_title_text(render_data), tile_w, logger)
-                for render_data, _, _, tile_w, _ in row
-                if render_data.get('data') is not None
+                for render_data, tile_w in row_panels
             ),
             default=COMPONENT_TITLE_FONT_SIZE,
         )
+
+        cap: int = tile_height_for_row * TITLE_BAND_MAX_PERCENT // 100
+        s2_results: list[int | None] = [
+            _fit_title_size(
+                _panel_title_text(render_data), tile_w, logger,
+                lines=TITLE_MAX_LINES, max_band=cap,
+            )
+            for render_data, tile_w in row_panels
+        ]
+        # Materialise and check for None BEFORE min(): min() over a mix of
+        # None and int raises TypeError.
+        s2: int | None = (
+            None
+            if (not s2_results or any(r is None for r in s2_results))
+            else min(s2_results)
+        )
+
+        if s2 is not None and (
+            TITLE_SIZE_LADDER.index(s1) - TITLE_SIZE_LADDER.index(s2) >= TITLE_WRAP_MIN_GAIN
+        ):
+            title_font_size, title_lines = s2, TITLE_MAX_LINES
+        else:
+            title_font_size, title_lines = s1, 1
+
         for render_data, x, y, tile_w, tile_h in row:
-            component_image = _render_component(render_data, tile_w, tile_h, title_font_size)
+            component_image = _render_component(render_data, tile_w, tile_h,
+                                                title_font_size, title_lines)
             if component_image:
                 final_image.paste(component_image, (x, y))
 

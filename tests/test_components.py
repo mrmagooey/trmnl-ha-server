@@ -1199,7 +1199,8 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
         """Renders a dashboard and returns the title_font_size each panel got."""
         captured = []
 
-        def fake_draw(friendly_name, value, width, height, logger, *, title_font_size=None):
+        def fake_draw(friendly_name, value, width, height, logger, *,
+                      title_font_size=None, title_lines=1):
             captured.append((friendly_name, title_font_size))
             return Image.new('RGB', (width, height), color='white')
 
@@ -1247,9 +1248,11 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
             self._panel(self.LONG, large=True),
             self._panel('A'), self._panel('B'), self._panel('C'),
         ])
-        # The large panel spans the full 800px, so it resolves against that
-        # width alone -- independently of the three narrow panels beneath it.
-        self.assertEqual(sizes[self.LONG], _fit_title_size(self.LONG, 800, mock_logger))
+        alone = self._sizes([self._panel(self.LONG, large=True)])
+        # The large panel spans the full 800px in both cases (row resolution
+        # is scoped per row), so it must resolve identically whether or not
+        # the narrow row beneath it exists.
+        self.assertEqual(sizes[self.LONG], alone[self.LONG])
         self.assertEqual(sizes['A'], sizes['B'])
         self.assertEqual(sizes['B'], sizes['C'])
 
@@ -1279,8 +1282,15 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
 
         At 400px, the bare name "Household Chores And Errands" fits rung 22,
         but the drawn string "Household Chores And Errands (120)" only fits
-        rung 18. If _panel_title_text dropped the todo count suffix, this row
-        would wrongly resolve to 22.
+        rung 18 on one line (checked directly below -- this is what would
+        regress if _panel_title_text dropped the todo count suffix).
+
+        With 6 components the grid is 3 rows x 2 cols, giving 400x146 tiles
+        and a band cap of 146 * 45 // 100 = 65. At that cap: with the suffix,
+        s1=18 and s2=22 -- a one-rung gain, so the row wraps to (22, 2). Without
+        the suffix, s1=22 and s2=22 -- no gain, so it would stay at (22, 1).
+        The LINE COUNT (not just the size) is what distinguishes a correctly
+        measured suffix from a dropped one, so that is what this test pins.
         """
         name = "Household Chores And Errands"
         bare_size = _fit_title_size(name, 400, mock_logger)
@@ -1290,19 +1300,20 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
 
         captured = []
 
-        def fake_entity_draw(friendly_name, value, width, height, logger, *, title_font_size=None):
-            captured.append((friendly_name, title_font_size))
+        def fake_entity_draw(friendly_name, value, width, height, logger, *,
+                              title_font_size=None, title_lines=1):
+            captured.append((friendly_name, title_font_size, title_lines))
             return Image.new('RGB', (width, height), color='white')
 
         def fake_todo_draw(friendly_name, items, width, height, logger, *,
-                            columns=1, page=0, title_font_size=None):
-            captured.append((friendly_name, title_font_size))
+                            columns=1, page=0, title_font_size=None, title_lines=1):
+            captured.append((friendly_name, title_font_size, title_lines))
             return Image.new('RGB', (width, height), color='white')
 
         items = [{'summary': f'chore {i}', 'status': 'needs_action'} for i in range(120)]
         render_data = [
             self._panel('A'), self._panel('B'),
-            self._panel('C'),
+            self._panel('C'), self._panel('D'), self._panel('E'),
             {'type': 'todo_list', 'friendly_name': name, 'data': items, 'large_display': False},
         ]
 
@@ -1310,9 +1321,11 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
              mock.patch('trmnl_server.components._draw_todo_list_component', side_effect=fake_todo_draw):
             tile_components(render_data, 800, 480, 40, mock_logger)
 
-        sizes = dict(captured)
-        self.assertEqual(sizes['C'], 18)
-        self.assertEqual(sizes[name], 18)
+        sizes = {n: (s, l) for n, s, l in captured}
+        # E is the todo panel's row-mate: 6 items in a 2-col grid put E (index
+        # 4) and the todo panel (index 5) together in the last row.
+        self.assertEqual(sizes['E'], (22, 2))
+        self.assertEqual(sizes[name], (22, 2))
 
 
 class TestFitTitleSizeWithLines(unittest.TestCase):
@@ -1767,6 +1780,58 @@ class TestEntityTwoLineTitle(unittest.TestCase):
         )
         px = img.convert('L').load()
         self.assertTrue(all(px[x, img.height - 1] > 200 for x in range(img.width)))
+
+
+class TestRowLineCountResolution(unittest.TestCase):
+    """A row shares a line count as well as a size."""
+
+    LONG = "Back Garden Soil Moisture Level"
+
+    def _capture(self, render_data, width=800, height=480):
+        seen = []
+
+        def fake(friendly_name, value, w, h, logger, *, title_font_size=None, title_lines=1):
+            seen.append((friendly_name, title_font_size, title_lines))
+            return Image.new('RGB', (w, h), color='white')
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=fake):
+            tile_components(render_data, width, height, 40, mock_logger)
+        return {n: (s, l) for n, s, l in seen}
+
+    def _panel(self, name, large=False):
+        return {'type': 'entity', 'friendly_name': name, 'data': 'v', 'large_display': large}
+
+    def test_row_wraps_to_gain_a_bigger_font(self):
+        got = self._capture([self._panel('A'), self._panel('B'),
+                             self._panel('C'), self._panel(self.LONG)])
+        self.assertEqual(got[self.LONG], (35, 2))
+        self.assertEqual(got['C'], (35, 2))
+
+    def test_neighbours_share_size_and_line_count(self):
+        got = self._capture([self._panel('A'), self._panel('B'),
+                             self._panel('C'), self._panel(self.LONG)])
+        self.assertEqual(got['C'], got[self.LONG])
+        self.assertEqual(got['A'], got['B'])
+
+    def test_no_wrap_when_nothing_is_gained(self):
+        got = self._capture([self._panel('A'), self._panel('B'),
+                             self._panel('C'), self._panel('D')])
+        for value in got.values():
+            self.assertEqual(value, (35, 1))
+
+    def test_mixed_none_results_do_not_raise(self):
+        """17 panels -> tile_height 88 -> the band cap excludes every rung."""
+        panels = [self._panel(f'Panel Number {i}') for i in range(17)]
+        got = self._capture(panels)
+        for size, lines in got.values():
+            self.assertEqual(lines, 1)
+
+    def test_placeholder_only_row_falls_back(self):
+        got = self._capture([
+            {'type': 'entity', 'friendly_name': 'X', 'data': None, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'Y', 'data': None, 'large_display': False},
+        ])
+        self.assertEqual(got, {})
 
 
 if __name__ == '__main__':
