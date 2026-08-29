@@ -809,6 +809,17 @@ def _draw_entity_component(
                 lines.append(current_line)
             value_str = "\n".join(lines)
 
+        # Word wrapping splits on spaces, so it cannot break a single long
+        # token (a JSON blob, a hash, an id) — and a word longer than the tile
+        # still overflows the line it lands on. Either way the line is centred
+        # at a negative x and spills past both tile edges. Ellipsize any line
+        # that still does not fit; _ellipsize returns a fitting line unchanged,
+        # so values that already fit render identically.
+        value_str = "\n".join(
+            _ellipsize(line, font_value, large_width - padding, d)
+            for line in value_str.split("\n")
+        )
+
         # This cap only engages once the value has wrapped onto multiple
         # lines. A single-line value floored by min_font_size with
         # value_bbox[3] still > avail_h is not re-checked here — it relies on
