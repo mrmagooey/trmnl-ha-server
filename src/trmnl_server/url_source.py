@@ -65,7 +65,10 @@ def _tokenise_path(path: str) -> list[str]:
         if head:
             tokens.append(head)
         if rest:
-            tokens.extend(f"[{chunk}" for chunk in rest.split("[") if chunk)
+            tokens.extend(f"[{chunk}" for chunk in rest.split("["))
+        elif "[" in part:
+            # Dangling bracket with nothing after it is malformed
+            tokens.append("[")
     return tokens
 
 

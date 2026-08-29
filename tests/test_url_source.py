@@ -60,6 +60,18 @@ class TestJsonPath(unittest.TestCase):
         """An unparseable index yields None rather than raising."""
         self.assertIsNone(_json_path({"a": [1]}, ".a[x]"))
 
+    def test_dangling_bracket_returns_none(self):
+        """A path ending in an unclosed bracket is malformed, not ignored."""
+        self.assertIsNone(_json_path({"a": [1]}, ".a["))
+
+    def test_dangling_bracket_after_index_returns_none(self):
+        """A trailing unclosed bracket after a valid index is still malformed."""
+        self.assertIsNone(_json_path({"a": [[9, 8]]}, ".a[0]["))
+
+    def test_empty_brackets_return_none(self):
+        """An empty index is malformed."""
+        self.assertIsNone(_json_path({"a": [1]}, ".a[]"))
+
 
 class TestStringify(unittest.TestCase):
     """Tests for value stringification."""
