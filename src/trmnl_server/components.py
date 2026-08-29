@@ -991,6 +991,12 @@ def _draw_calendar_component(
             except IOError:
                 dynamic_font_event = ImageFont.load_default()
 
+            # The shrink loop gives up at its font-size floor, so an event that
+            # is still too wide there — an unbreakable summary — would be drawn
+            # off the right edge. Rows are not wrapped, so truncate instead.
+            # _ellipsize returns a fitting string unchanged.
+            event_str = _ellipsize(event_str, dynamic_font_event, large_width - padding, d)
+
             d.text((20 * scale, y_pos), event_str, font=dynamic_font_event, fill='black')
             event_bbox = d.textbbox((0, 0), event_str, font=dynamic_font_event)
             event_height: int = event_bbox[3] - event_bbox[1]
@@ -1111,6 +1117,12 @@ def _draw_entities_component(
                     list_width = list_bbox[2] - list_bbox[0]
             except IOError:
                 dynamic_font_list = ImageFont.load_default()
+
+            # The shrink loop gives up at its font-size floor, so a row that is
+            # still too wide there — an unbreakable state value — would be drawn
+            # off the right edge. Rows are not wrapped, so truncate instead.
+            # _ellipsize returns a fitting string unchanged.
+            list_str = _ellipsize(list_str, dynamic_font_list, large_width - padding, d)
 
             d.text((20 * scale, y_pos), list_str, font=dynamic_font_list, fill='black')
             list_bbox = d.textbbox((0, 0), list_str, font=dynamic_font_list)
