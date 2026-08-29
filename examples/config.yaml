@@ -66,6 +66,7 @@ dashboards:
         # - "entities": shows a list of entity states
         # - "history_graph": shows a graph of numeric history for an entity
         # - "todo_list": shows incomplete items from a Home Assistant todo list
+        # - "url": shows a value fetched from an external HTTP(S) URL
         type: "calendar"
         arguments:
           calendar_id: "calendar.name"
@@ -100,6 +101,18 @@ dashboards:
       #   columns: 2   # optional, default 1; lay items into N columns.
       #   # When items overflow the card, it pages through them on each
       #   # refresh, showing the count and a page indicator (e.g. 2/3).
+
+      # Example url component (commented out): fetches a value from an
+      # external HTTP(S) URL instead of Home Assistant. Fetches run in the
+      # background and are cached, so the panel shows "No data" until the
+      # first fetch completes.
+      # - friendly_name: "Outside Temp (external)"
+      #   type: "url"
+      #   url: "https://api.example.com/weather?key=YOUR_KEY"   # http/https only; put API keys in the query string, not headers
+      #   json_path: ".current.temp_f"   # optional; jq-style, e.g. .data.items[0].name
+      #   regex: "\\d+"                  # optional; applied after json_path, re.search, group 1 if the pattern has groups
+      #   cache_ttl: 300                 # optional, default 300 seconds
+      #   timeout: 5                     # optional, default 10 seconds, capped at 60
 
   - name: daytime
     title: "Daytime"
