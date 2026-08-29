@@ -201,6 +201,31 @@ class TestGoldenImages(unittest.TestCase):
 
         assert_golden(img_io, 'entity_dashboard')
 
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_entity_unbroken_value_ellipsized(self, mock_get_entity_state):
+        """A long value with no spaces is ellipsized, not clipped at the tile edges.
+
+        Word wrapping splits on spaces, so this value cannot be broken; it is
+        truncated with a trailing ellipsis instead of overflowing the tile.
+        """
+        mock_get_entity_state.return_value = {
+            'state': '{"nested":{"deep":[1,2,3]},"more":"data","and":"evenmorevalues"}'
+        }
+        dashboard = {
+            'name': 'blob',
+            'title': 'Blob',
+            'components': [
+                {'entity_name': 'sensor.blob', 'friendly_name': 'Raw Feed', 'type': 'entity'},
+                {'entity_name': 'sensor.blob', 'friendly_name': 'Raw Feed 2', 'type': 'entity'},
+                {'entity_name': 'sensor.blob', 'friendly_name': 'Raw Feed 3', 'type': 'entity'},
+                {'entity_name': 'sensor.blob', 'friendly_name': 'Raw Feed 4', 'type': 'entity'},
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+
+        assert_golden(img_io, 'entity_unbroken_value')
+
     def test_url_panel(self):
         """A url component renders its extracted value like an entity panel."""
         url_source.reset_cache()

@@ -379,6 +379,44 @@ class TestDrawEntityComponent(unittest.TestCase):
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
     
+    def test_long_unbroken_value_is_ellipsized_not_clipped(self):
+        """A long value with no spaces is ellipsized rather than clipped at the tile edges.
+
+        Word wrapping cannot split a string with no spaces, so before this was
+        fixed the value stayed on one line, floored at the minimum font size,
+        and was centred at a negative x — spilling past both tile edges.
+        """
+        img = _draw_entity_component(
+            "Feed",
+            "a7f3e9c1b5d84a2e6f0c9b7d3e1a5f8c2b6d0e4a9c7f1b3d5e8a2c6f0b4d7e9a1c3f5" * 3,
+            400,
+            240,
+            mock_logger,
+        )
+
+        width, height = img.size
+        # getextrema()[0] is the darkest pixel; 255 means the strip is all white.
+        left_darkest = img.crop((0, 0, 2, height)).convert("L").getextrema()[0]
+        right_darkest = img.crop((width - 2, 0, width, height)).convert("L").getextrema()[0]
+        self.assertEqual(left_darkest, 255, "value ink reached the left tile edge")
+        self.assertEqual(right_darkest, 255, "value ink reached the right tile edge")
+
+    def test_long_value_with_spaces_still_wraps(self):
+        """A long value containing spaces still word-wraps rather than being truncated."""
+        img = _draw_entity_component(
+            "Feed",
+            "Heavy rain expected this afternoon with gusts up to sixty km per hour",
+            400,
+            240,
+            mock_logger,
+        )
+
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (400, 240))
+        width, height = img.size
+        self.assertEqual(img.crop((0, 0, 2, height)).convert("L").getextrema()[0], 255)
+        self.assertEqual(img.crop((width - 2, 0, width, height)).convert("L").getextrema()[0], 255)
+
     def test_draw_entity_float_value(self):
         """Test drawing entity with float value."""
         img = _draw_entity_component(
