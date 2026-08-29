@@ -1,11 +1,13 @@
 """Additional tests for components module to achieve full coverage."""
 
+import time
 import unittest
 from unittest import mock
 import io
 from PIL import Image
 import logging
 
+from trmnl_server import url_source
 from trmnl_server.components import (
     render_dashboard_image,
     _create_info_image,
@@ -1891,6 +1893,71 @@ class TestRowLineCountResolution(unittest.TestCase):
             {'type': 'entity', 'friendly_name': 'Y', 'data': None, 'large_display': False},
         ])
         self.assertEqual(got, {})
+
+
+class _FakeResponse:
+    """Minimal stand-in for the object urlopen returns as a context manager."""
+
+    def __init__(self, body: bytes, delay: float = 0.0):
+        self._body = body
+        self._delay = delay
+
+    def __enter__(self):
+        if self._delay:
+            time.sleep(self._delay)
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n: int = -1) -> bytes:
+        return self._body[:n] if n and n > 0 else self._body
+
+
+class TestUrlComponentRendering(unittest.TestCase):
+    """Integration: a url component through render_dashboard_image."""
+
+    def setUp(self):
+        url_source.reset_cache()
+
+    def test_renders_extracted_value(self):
+        """A warm cache renders the extracted text into the dashboard image."""
+        dashboard = {
+            "name": "d",
+            "components": [
+                {
+                    "type": "url",
+                    "friendly_name": "Price",
+                    "url": "http://e.com/a",
+                    "json_path": ".data.amount",
+                }
+            ],
+        }
+        with mock.patch.object(
+            url_source, "urlopen", return_value=_FakeResponse(b'{"data": {"amount": "42"}}')
+        ):
+            render_dashboard_image(dashboard, mock_logger)   # cold: schedules the fetch
+            url_source._wait_for_pending()
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        self.assertIsNotNone(img_io)
+        self.assertGreater(len(img_io.getvalue()), 0)
+
+    def test_cold_render_does_not_block(self):
+        """A slow endpoint does not delay the render thread."""
+        dashboard = {
+            "name": "d",
+            "components": [
+                {"type": "url", "friendly_name": "Price", "url": "http://e.com/a"}
+            ],
+        }
+        with mock.patch.object(
+            url_source, "urlopen", return_value=_FakeResponse(b"42", delay=3.0)
+        ):
+            t0 = time.perf_counter()
+            render_dashboard_image(dashboard, mock_logger)
+            elapsed = time.perf_counter() - t0
+            url_source._wait_for_pending()
+        self.assertLess(elapsed, 2.0, "render must not wait for a slow fetch")
 
 
 if __name__ == '__main__':
