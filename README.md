@@ -7,7 +7,7 @@ A Python HTTP server that fetches data from Home Assistant and renders black-and
 ## Features
 
 - **Per-device scheduling**: Each device has an independent schedule mapping dashboards to time windows and days of the week.
-- **Multiple component types**: Dashboards can mix history graphs, single entity values, entity lists, calendar events, and todo lists.
+- **Multiple component types**: Dashboards can mix history graphs, single entity values, entity lists, calendar events, todo lists, and values scraped from external URLs.
 - **Sleep windows**: Devices can be configured with a sleep window; during sleep the server returns a refresh rate equal to the seconds until wake-up.
 - **Home Assistant integration**: Fetches entity state, history, calendar events, and todo lists from the Home Assistant API.
 - **E-ink optimized**: All images are rendered in black and white at double resolution then downscaled.
@@ -131,6 +131,7 @@ If `firmware:` is omitted, `/api/display` always returns `update_firmware: false
 | `entities` | List of current state values for multiple entities | `friendly_name`, `entities` (list of `entity_name`/`friendly_name`) |
 | `calendar` | Upcoming calendar events | `friendly_name`, `arguments.calendar_id`, `arguments.days` |
 | `todo_list` | Incomplete items from a Home Assistant todo list | `entity_name`, `friendly_name` |
+| `url` | Text value fetched from an external HTTP(S) URL, optionally extracted with a JSON path and/or regex | `url`, `friendly_name` |
 
 Set `large_display: true` on one component to give it the top half of the screen; remaining components are tiled along the bottom.
 
@@ -146,6 +147,35 @@ Set `large_display: true` on one component to give it the top half of the screen
     friendly_name: "Living Room Temp"
     type: entity
   ```
+
+#### `url` component
+
+Fetches a value from an arbitrary HTTP(S) URL instead of Home Assistant.
+
+- **`url`** (required): the URL to fetch. Only `http`/`https` schemes are accepted; anything else is refused.
+- **`json_path`** (optional): a basic jq-style path applied to a JSON response — dot-separated keys and bracketed integer indices, e.g. `.data.items[0].name` (the leading dot is optional). A missing key, an out-of-range index, or a step that walks into something that isn't a container yields no value, and the panel shows "No data".
+- **`regex`** (optional): applied to the extracted text with `re.search`. Returns capture group 1 if the pattern defines a group, otherwise the whole match. No match yields no value.
+- **`cache_ttl`** (optional, default `300` seconds): how long a fetched response is reused before a background refresh is scheduled.
+- **`timeout`** (optional, default `10` seconds, capped at `60`): the socket timeout for the background fetch only. It never bounds rendering — rendering never waits on a fetch.
+- **`large_display`** works the same as for any other component type.
+
+Extraction order is `json_path` first (if set), then `regex` applied to that result, then — if neither is set — the raw response body (stripped) is rendered. Both can be combined to pull a JSON field and then scrape inside it. Unlike `entity`, the extracted value is always rendered as text; it is never cast to a number.
+
+Fetching always happens on a background thread and never blocks rendering: a panel shows "No data" until its first fetch completes. If the source later goes down, the last successfully fetched value keeps rendering rather than blanking — a failing URL is retried at most once per `cache_ttl`. Two components pointing at the same URL share a single fetch; each judges its own freshness against its own `cache_ttl`. Responses are capped at 1 MiB.
+
+**Known limitation**: the server prefetches every `url` component at startup, but only from the config as read at that moment. A `url` component added to a *running* server's config gets no prefetch, so its panel shows "No data" until the first render-triggered fetch completes — bounded by the device's `refresh_rate` (typically 600s). It self-heals on the following refresh cycle.
+
+**Auth**: request headers are not configurable. Put an API key in the URL's query string. URLs are redacted in log messages — only scheme, host and path are logged, never the query string — so keys are not written to the persisted log file.
+
+Example — pull a temperature field out of a JSON weather API:
+```yaml
+- friendly_name: "Outside Temp (external)"
+  type: url
+  url: "https://api.example.com/weather?key=YOUR_KEY"
+  json_path: ".current.temp_f"
+  cache_ttl: 600
+  timeout: 5
+```
 
 ## Usage
 

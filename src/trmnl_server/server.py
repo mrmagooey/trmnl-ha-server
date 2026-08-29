@@ -116,6 +116,10 @@ def main() -> None:
         signal.signal(signal.SIGINT, _shutdown)
 
         try:
+            from .config import read_config
+            from .url_source import prefetch
+            prefetch(read_config(logger), logger)
+
             logger.info(f"serving at port {port}")
             httpd.serve_forever()
         finally:

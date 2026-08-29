@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- New `url` component type fetches a value from an arbitrary http(s) URL and renders it as text, with optional `json_path` (a basic jq-style path, e.g. `.data.items[0].name`) and `regex` extraction — `json_path` runs first when set, then `regex` against its result, falling back to the raw response body when neither is set. Fetches run on a background thread pool and are cached (`cache_ttl`, default 300 seconds), so rendering never blocks on the network: a panel shows "No data" until its first fetch completes, and if a source later goes down the last successfully fetched value keeps rendering rather than blanking. Request headers aren't configurable, so an API key belongs in the URL's query string; URLs are redacted to scheme/host/path in log output so keys are never written to the persisted log file.
+
 ## [1.7.1] - 2026-08-28
 
 ### Fixed

@@ -82,6 +82,7 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 │   ├── api.py           # HTTP request handlers (APICalls class)
 │   ├── components.py    # Image rendering functions for all component types
 │   ├── hass_client.py   # Home Assistant API client
+│   ├── url_source.py    # Background-cached fetch/extract for url-type components
 │   ├── config.py        # Configuration loading and validation
 │   ├── state.py         # Server state management
 │   ├── models.py        # Type definitions (TypedDict, Protocol)
@@ -116,4 +117,5 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 ## Component Notes
 - `history_graph` components accept an optional `hours` field (default 24) controlling the rolling window width; stale entities hold their last value as a dotted line to "now".
 - `todo_list` components accept an optional `columns` field (default 1). Overflowing lists paginate across refreshes (page state held in `ServerState`, in-memory) and show a count + page indicator.
+- `url` components fetch and extract a value from an arbitrary http(s) URL (`url_source.py`). Fetches run on a background thread pool and are cached (`cache_ttl`, default 300s, `timeout` default 10s capped at 60s) so rendering never blocks on the network; `json_path` (jq-style) runs before `regex`, with the raw stripped body used when neither is set, and the value is rendered as text (never cast to a number, unlike `entity`). A failing URL is retried at most once per `cache_ttl` and keeps rendering its last good value; `prefetch()` warms the cache at startup from the config as read at that moment only, so a `url` component added to a running server has no prefetch and shows "No data" until the next render-triggered fetch.
 - When no schedule entry is visible, `/api/display` returns the time until the next entry becomes visible (`_seconds_until_next_visible` in `config.py`), so the device sleeps until the next dashboard opens; it falls back to the 600s default if nothing is upcoming within ~8 days.

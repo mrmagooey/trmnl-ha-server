@@ -1385,7 +1385,7 @@ def tile_components(
                 title_font_size=title_font_size,
                 title_lines=title_lines,
             )
-        elif component_type == 'entity':
+        elif component_type in ('entity', 'url'):
             return _draw_entity_component(
                 friendly_name,
                 data,  # type: ignore[arg-type]
@@ -1636,6 +1636,9 @@ def render_dashboard_image(
                     'state': state,
                 })
             data = entity_states
+        elif component_type == 'url':
+            from .url_source import fetch_url_value
+            data = fetch_url_value(component, logger)
         elif component_type == 'todo_list':
             from .hass_client import _fetch_todo_list
             entity_name = component.get('entity_name', '')

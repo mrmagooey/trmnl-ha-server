@@ -1,5 +1,6 @@
 """Tests for config module."""
 
+import logging
 import random
 import unittest
 from unittest import mock
@@ -13,6 +14,7 @@ from trmnl_server.config import (
     find_device,
     _aligned_refresh_rate,
     _seconds_until_next_visible,
+    _validate_config,
 )
 
 
@@ -533,6 +535,154 @@ class TestSecondsUntilNextVisible(unittest.TestCase):
                 f"mismatch: now={now} schedule={sched}",
             )
         self.assertGreater(compared, 10, "parity sweep compared too few cases to be meaningful")
+
+
+class TestUrlComponentValidation(unittest.TestCase):
+    """Validation for the url component type."""
+
+    def test_url_is_a_valid_component_type(self):
+        """A well-formed url component produces no warnings."""
+        logger = mock.Mock(spec=logging.Logger)
+        config = {
+            "dashboards": [
+                {
+                    "name": "d",
+                    "components": [
+                        {"type": "url", "url": "https://e.com/a", "friendly_name": "X"}
+                    ],
+                }
+            ]
+        }
+        _validate_config(config, logger)
+        logger.warning.assert_not_called()
+
+    def test_missing_url_warns(self):
+        """A url component without a url is flagged."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {"dashboards": [{"name": "d", "components": [{"type": "url"}]}]}, logger
+        )
+        self.assertTrue(logger.warning.called)
+
+    def test_non_http_scheme_warns(self):
+        """A file:// url is flagged at config load."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {"name": "d", "components": [{"type": "url", "url": "file:///etc/passwd"}]}
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+
+    def test_uncompilable_regex_warns(self):
+        """A broken regex is caught at config load, not at render time."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "https://e.com/a", "regex": "(["}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+
+    def test_invalid_cache_ttl_warns(self):
+        """A non-positive cache_ttl is flagged."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "https://e.com/a", "cache_ttl": 0}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+
+    def test_validation_warning_never_leaks_the_query_string(self):
+        """Config warnings redact the url, like url_source's logs do."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "https://e.com/a?apikey=SECRET", "regex": "(["}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        logged = " ".join(str(c) for c in logger.warning.call_args_list)
+        self.assertNotIn("SECRET", logged)
+
+    def test_unbalanced_bracket_url_warns_without_raising(self):
+        """A url that makes urlsplit raise ValueError is flagged, not raised."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "http://[api-host]/data"}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+
+    def test_non_string_url_warns_without_raising(self):
+        """A non-string url (e.g. bad YAML) is flagged, not raised."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {"name": "d", "components": [{"type": "url", "url": 12345}]}
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+        logged = " ".join(str(c) for c in logger.warning.call_args_list)
+        self.assertNotIn("missing 'url'", logged, "url is present, just the wrong type")
+
+    def test_unbalanced_bracket_url_never_leaks_the_query_string(self):
+        """A malformed url with a query string is not echoed into the warning."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "http://[api-host]/data?apikey=SECRET"}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        logged = " ".join(str(c) for c in logger.warning.call_args_list)
+        self.assertNotIn("SECRET", logged)
 
 
 if __name__ == '__main__':
