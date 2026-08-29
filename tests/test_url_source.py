@@ -379,6 +379,38 @@ class TestGetUrlText(unittest.TestCase):
         self.assertNotIn("SECRET", logged)
         self.assertIn("e.com", logged)
 
+    def test_unbalanced_bracket_url_does_not_raise(self):
+        """A URL that makes urlsplit raise ValueError is refused, not raised."""
+        with mock.patch.object(url_source, "urlopen") as m:
+            self.assertIsNone(
+                get_url_text(
+                    "http://[api-host]/data", cache_ttl=300, timeout=10, logger=mock_logger
+                )
+            )
+            url_source._wait_for_pending()
+            m.assert_not_called()
+
+    def test_non_string_url_does_not_raise(self):
+        """A non-string url (e.g. from malformed YAML) is refused, not raised."""
+        with mock.patch.object(url_source, "urlopen") as m:
+            self.assertIsNone(
+                get_url_text(12345, cache_ttl=300, timeout=10, logger=mock_logger)
+            )
+            url_source._wait_for_pending()
+            m.assert_not_called()
+
+    def test_unparseable_url_logs_never_contain_the_query_string(self):
+        """An unparseable URL with a query string is never logged verbatim."""
+        logger = mock.Mock(spec=logging.Logger)
+        get_url_text(
+            "http://[api-host]/data?apikey=SECRET",
+            cache_ttl=300,
+            timeout=10,
+            logger=logger,
+        )
+        logged = " ".join(str(c) for c in logger.warning.call_args_list)
+        self.assertNotIn("SECRET", logged)
+
 
 class TestFetchUrlValue(unittest.TestCase):
     """Tests for the component-level entry point."""
@@ -422,6 +454,22 @@ class TestFetchUrlValue(unittest.TestCase):
             self.assertIsNone(fetch_url_value(component, mock_logger))
             url_source._wait_for_pending()
             self.assertEqual(fetch_url_value(component, mock_logger), "hi")
+
+    def test_unbalanced_bracket_url_returns_none(self):
+        """A malformed url in the component config never reaches urlopen."""
+        component = {"type": "url", "url": "http://[api-host]/data"}
+        with mock.patch.object(url_source, "urlopen") as m:
+            self.assertIsNone(fetch_url_value(component, mock_logger))
+            url_source._wait_for_pending()
+            m.assert_not_called()
+
+    def test_non_string_url_returns_none(self):
+        """A non-string url in the component config never reaches urlopen."""
+        component = {"type": "url", "url": 12345}
+        with mock.patch.object(url_source, "urlopen") as m:
+            self.assertIsNone(fetch_url_value(component, mock_logger))
+            url_source._wait_for_pending()
+            m.assert_not_called()
 
 
 class TestPrefetch(unittest.TestCase):

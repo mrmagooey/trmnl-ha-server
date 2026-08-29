@@ -632,6 +632,58 @@ class TestUrlComponentValidation(unittest.TestCase):
         logged = " ".join(str(c) for c in logger.warning.call_args_list)
         self.assertNotIn("SECRET", logged)
 
+    def test_unbalanced_bracket_url_warns_without_raising(self):
+        """A url that makes urlsplit raise ValueError is flagged, not raised."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "http://[api-host]/data"}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+
+    def test_non_string_url_warns_without_raising(self):
+        """A non-string url (e.g. bad YAML) is flagged, not raised."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {"name": "d", "components": [{"type": "url", "url": 12345}]}
+                ]
+            },
+            logger,
+        )
+        self.assertTrue(logger.warning.called)
+        logged = " ".join(str(c) for c in logger.warning.call_args_list)
+        self.assertNotIn("missing 'url'", logged, "url is present, just the wrong type")
+
+    def test_unbalanced_bracket_url_never_leaks_the_query_string(self):
+        """A malformed url with a query string is not echoed into the warning."""
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config(
+            {
+                "dashboards": [
+                    {
+                        "name": "d",
+                        "components": [
+                            {"type": "url", "url": "http://[api-host]/data?apikey=SECRET"}
+                        ],
+                    }
+                ]
+            },
+            logger,
+        )
+        logged = " ".join(str(c) for c in logger.warning.call_args_list)
+        self.assertNotIn("SECRET", logged)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -290,7 +290,15 @@ def get_url_text(
     """
     current_time = now if now is not None else time.time()
 
-    if urlsplit(url).scheme not in ALLOWED_SCHEMES:
+    if not isinstance(url, str):
+        logger.warning("Refusing to fetch: url is not a string.")
+        return None
+    try:
+        scheme = urlsplit(url).scheme
+    except ValueError:
+        logger.warning("Refusing to fetch %s: unparseable URL.", _redact(url))
+        return None
+    if scheme not in ALLOWED_SCHEMES:
         logger.warning("Refusing to fetch %s: unsupported scheme.", _redact(url))
         return None
 

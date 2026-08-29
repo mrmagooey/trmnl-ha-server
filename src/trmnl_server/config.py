@@ -99,12 +99,19 @@ def _validate_url_component(
     live in its query string and warnings are written to a persisted log file.
     """
     url = component.get("url")
-    if not url or not isinstance(url, str):
+    if not url:
         logger.warning("config: %s component[%d] type 'url' is missing 'url'", tag, index)
-    elif urlsplit(url).scheme not in ("http", "https"):
-        logger.warning(
-            "config: %s component[%d] 'url' must be an http or https URL", tag, index
-        )
+    elif not isinstance(url, str):
+        logger.warning("config: %s component[%d] 'url' must be a string", tag, index)
+    else:
+        try:
+            scheme = urlsplit(url).scheme
+        except ValueError:
+            scheme = None
+        if scheme not in ("http", "https"):
+            logger.warning(
+                "config: %s component[%d] 'url' must be an http or https URL", tag, index
+            )
 
     pattern = component.get("regex")
     if pattern is not None:
