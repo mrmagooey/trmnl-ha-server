@@ -8,6 +8,7 @@
 ### Fixed
 - Requesting `/static/<dashboard>.png` without an `ID` header returned HTTP 500 instead of an image. The per-device rotation lookup read `device_config` unconditionally, but that variable was only assigned for requests that carried a device ID, so an ID-less request raised `UnboundLocalError`. Such a request now renders the dashboard with no device-specific rotation applied.
 - A long panel value with no spaces in it — a JSON object, a hash, an id — was clipped at both tile edges instead of being truncated. Word wrapping splits on spaces, so such a value stayed on one over-wide line and was centred at a negative offset, cutting off its start as well as its end. Any line that still does not fit after wrapping is now ellipsized, so the value reads from the beginning and ends in `…`. Values that already fit render identically.
+- Entity-list rows and calendar events with unbreakable text — a JSON object, a hash, an id — ran off the right edge of their panel. Neither renderer wraps its rows, so once the font shrink loop reached its floor the text was drawn past the tile boundary and clipped. Such rows are now truncated with a trailing ellipsis, matching how todo items already behaved.
 
 ## [1.7.1] - 2026-08-28
 

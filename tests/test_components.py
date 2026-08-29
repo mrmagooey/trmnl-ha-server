@@ -482,6 +482,27 @@ class TestDrawCalendarComponent(unittest.TestCase):
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
     
+    def test_long_unbroken_event_is_ellipsized_not_clipped(self):
+        """A calendar event with an unbreakable summary is truncated, not clipped.
+
+        The font shrinks to its floor and the row is then drawn at a fixed x
+        with no wrapping, so without an ellipsis it runs off the right edge.
+        """
+        events = [
+            {
+                'summary': 'a7f3e9c1b5d84a2e6f0c9b7d3e1a5f8c2b6d0e4a9c7f1b3d5e8a2c6f0b4d7e9a1c3f5' * 2,
+                'start': {'dateTime': '2025-01-15T10:00:00+00:00'},
+                'end': {'dateTime': '2025-01-15T11:00:00+00:00'},
+            },
+        ]
+
+        img = _draw_calendar_component("My Calendar", events, 400, 300, mock_logger)
+
+        width, height = img.size
+        # getextrema()[0] is the darkest pixel; 255 means the strip is all white.
+        darkest = img.crop((width - 2, 0, width, height)).convert("L").getextrema()[0]
+        self.assertEqual(darkest, 255, "event text reached the right tile edge")
+
     def test_draw_calendar_with_events(self):
         """Test drawing calendar with events."""
         events = [
@@ -544,6 +565,26 @@ class TestDrawEntitiesComponent(unittest.TestCase):
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
     
+    def test_long_unbroken_entity_state_is_ellipsized_not_clipped(self):
+        """An entity row with an unbreakable state is truncated, not clipped.
+
+        The font shrinks to its floor and the row is then drawn at a fixed x
+        with no wrapping, so without an ellipsis it runs off the right edge.
+        """
+        entity_states = [
+            {
+                'friendly_name': 'Blob',
+                'state': 'a7f3e9c1b5d84a2e6f0c9b7d3e1a5f8c2b6d0e4a9c7f1b3d5e8a2c6f0b4d7e9a1c3f5' * 2,
+            },
+        ]
+
+        img = _draw_entities_component("Sensors", entity_states, 400, 300, mock_logger)
+
+        width, height = img.size
+        # getextrema()[0] is the darkest pixel; 255 means the strip is all white.
+        darkest = img.crop((width - 2, 0, width, height)).convert("L").getextrema()[0]
+        self.assertEqual(darkest, 255, "entity row reached the right tile edge")
+
     def test_draw_entities_with_data(self):
         """Test drawing entities list with data."""
         entity_states = [
