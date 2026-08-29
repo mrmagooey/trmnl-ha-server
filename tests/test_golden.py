@@ -19,6 +19,7 @@ from unittest import mock
 from PIL import Image, ImageChops
 
 from trmnl_server.components import render_dashboard_image
+from trmnl_server import url_source
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 UPDATE = os.environ.get("UPDATE_GOLDEN") == "1"
@@ -60,6 +61,22 @@ def mock_datetime(time_str: str = "12:00"):
     m = mock.MagicMock()
     m.now.return_value.astimezone.return_value.strftime.return_value = time_str
     return m
+
+
+class _FakeResponse:
+    """Minimal stand-in for the object urlopen returns as a context manager."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n: int = -1) -> bytes:
+        return self._body[:n] if n and n > 0 else self._body
 
 
 class TestGoldenImages(unittest.TestCase):
@@ -183,6 +200,30 @@ class TestGoldenImages(unittest.TestCase):
             img_io = render_dashboard_image(dashboard, mock_logger)
 
         assert_golden(img_io, 'entity_dashboard')
+
+    def test_url_panel(self):
+        """A url component renders its extracted value like an entity panel."""
+        url_source.reset_cache()
+        dashboard = {
+            'name': 'url_panel',
+            'title': 'URL',
+            'components': [
+                {
+                    'type': 'url',
+                    'friendly_name': 'Bitcoin',
+                    'url': 'http://e.com/price',
+                    'json_path': '.data.amount',
+                },
+            ],
+        }
+        with mock.patch.object(
+            url_source, 'urlopen', return_value=_FakeResponse(b'{"data": {"amount": "64231"}}')
+        ):
+            render_dashboard_image(dashboard, mock_logger)  # cold: schedules the fetch
+            url_source._wait_for_pending()
+            with mock.patch('datetime.datetime', mock_datetime()):
+                img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'url_panel')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_title_size_harmonisation(self, mock_get_entity_state):
