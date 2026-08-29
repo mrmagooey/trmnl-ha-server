@@ -288,9 +288,10 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         config = read_config(self.logger)
         dashboards = config.get('dashboards', [])
 
+        device_config: DeviceConfig | None = None
         if device_id is not None:
             devices: list[DeviceConfig] = config.get('devices', [])
-            device_config: DeviceConfig | None = find_device(devices, device_id)
+            device_config = find_device(devices, device_id)
             label: str = self._device_label(device_config, device_id)
             if device_config is not None:
                 schedule = device_config.get('schedule', [])

@@ -194,6 +194,30 @@ class TestAPISimple(unittest.TestCase):
         self.assertFalse(result)
         handler.logger.warning.assert_called()
 
+    @mock.patch('trmnl_server.api.render_dashboard_image')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_static_png_without_device_id_header_renders(self, mock_read_config, mock_render):
+        """A /static/<dashboard>.png request with no ID header renders instead of raising.
+
+        Regression: device_config was only assigned inside the `device_id is not
+        None` branch but read unconditionally when resolving the rotation, so an
+        ID-less request raised UnboundLocalError and the server returned a 500.
+        """
+        mock_read_config.return_value = {
+            'devices': [],
+            'dashboards': [{'name': 'morning', 'components': [{'type': 'entity'}]}],
+        }
+        mock_render.return_value = BytesIO(b'png-bytes')
+        handler = self.create_handler('/static/morning.png')
+        handler._send_png = mock.Mock(return_value=None)
+
+        result = handler._handle_static_png()
+
+        self.assertTrue(result)
+        handler._send_png.assert_called_once()
+        # No device, so no per-device rotation is applied.
+        self.assertIsNone(mock_render.call_args.args[3])
+
     @mock.patch.object(APICalls, '_handle_api_setup')
     def test_post_setup(self, mock_handle_setup):
         """Test POST request to /api/setup (TRMNL firmware uses POST)."""

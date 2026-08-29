@@ -5,6 +5,9 @@
 ### Added
 - New `url` component type fetches a value from an arbitrary http(s) URL and renders it as text, with optional `json_path` (a basic jq-style path, e.g. `.data.items[0].name`) and `regex` extraction — `json_path` runs first when set, then `regex` against its result, falling back to the raw response body when neither is set. Fetches run on a background thread pool and are cached (`cache_ttl`, default 300 seconds), so rendering never blocks on the network: a panel shows "No data" until its first fetch completes, and if a source later goes down the last successfully fetched value keeps rendering rather than blanking. Request headers aren't configurable, so an API key belongs in the URL's query string; URLs are redacted to scheme/host/path in log output so keys are never written to the persisted log file.
 
+### Fixed
+- Requesting `/static/<dashboard>.png` without an `ID` header returned HTTP 500 instead of an image. The per-device rotation lookup read `device_config` unconditionally, but that variable was only assigned for requests that carried a device ID, so an ID-less request raised `UnboundLocalError`. Such a request now renders the dashboard with no device-specific rotation applied.
+
 ## [1.7.1] - 2026-08-28
 
 ### Fixed
