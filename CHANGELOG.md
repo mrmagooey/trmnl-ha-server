@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-08-28
+
 ### Fixed
 - Rendering is now reproducible across machines. Pillow selects its text-shaping engine at import time depending on whether the host happens to have `libfribidi` installed, and the two engines produce glyph widths differing by a fraction of a percent — enough to change the chosen title font size and every rendered pixel. The basic layout engine is now forced explicitly. The shipped Docker image already used it, so add-on rendering is unchanged.
+- CI could not install dependencies (and so never ran the tests or published an image) since 1.5.0: `uv` was matching the runner's preinstalled Python 3.12.3 against this project's `>=3.12.5` requirement instead of fetching a compliant interpreter.
 
 ## [1.7.0] - 2026-08-28
 
