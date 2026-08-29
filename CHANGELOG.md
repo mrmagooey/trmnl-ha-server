@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- The "No dashboard is scheduled for display." placeholder (and the device-ID image) ignored rotation, so a rotated device showed it sideways or upside down. Only dashboard renders passed through the rotation step; the plain info images were served straight out of the renderer. They now use the same rotation as the dashboards would: the device's `rotate`, or — when that is unset — the rotation its scheduled dashboards agree on, so a device configured only with `portrait: true` on its dashboards is covered too. The placeholder's image URL now carries the device ID (`/static/<id>/no_dashboard_visible.png`) so the rotation can be resolved without relying on the `ID` header.
+
 ## [1.8.0] - 2026-08-28
 
 ### Added

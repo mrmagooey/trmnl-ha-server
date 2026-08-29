@@ -285,6 +285,31 @@ def _todo_header_height(title_font_size: int | None, title_lines: int, logger: "
     )
 
 
+def _dashboard_rotation(dashboard: DashboardConfig) -> int | None:
+    """Returns the rotation a dashboard asks for, or None for landscape."""
+    rotate: int | None = dashboard.get('rotate')
+    if rotate is None and dashboard.get('portrait'):
+        rotate = 90
+    return rotate
+
+
+def _rotate_image(
+    img: Image.Image,
+    rotate: int | None,
+    logger: "Logger",
+) -> Image.Image:
+    """Applies a configured rotation; unsupported values are logged and ignored.
+
+    Used for every image served to a device — dashboards and the plain info
+    placeholders alike — so a rotated device never gets one of them sideways.
+    """
+    if rotate in (90, -90, 180):
+        return img.rotate(rotate, expand=True)
+    if rotate is not None:
+        logger.warning("Unsupported rotate value %r — must be 90, -90, or 180. Skipping rotation.", rotate)
+    return img
+
+
 def _create_info_image(
     message: str | None,
     width: int,
@@ -1731,13 +1756,8 @@ def render_dashboard_image(
         draw.line([(0, TOP_MARGIN - 1), (WIDTH, TOP_MARGIN - 1)], fill='black', width=1)
 
     # Rotate image if requested (device-level overrides dashboard-level)
-    rotate = device_rotate if device_rotate is not None else dashboard.get('rotate')
-    if rotate is None and dashboard.get('portrait'):
-        rotate = 90
-    if rotate in (90, -90, 180):
-        final_img = final_img.rotate(rotate, expand=True)
-    elif rotate is not None:
-        logger.warning("Unsupported rotate value %r — must be 90, -90, or 180. Skipping rotation.", rotate)
+    rotate = device_rotate if device_rotate is not None else _dashboard_rotation(dashboard)
+    final_img = _rotate_image(final_img, rotate, logger)
 
     # Save to memory
     img_io = BytesIO()

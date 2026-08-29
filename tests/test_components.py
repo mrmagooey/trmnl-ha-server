@@ -11,6 +11,8 @@ from trmnl_server import url_source
 from trmnl_server.components import (
     render_dashboard_image,
     _create_info_image,
+    _dashboard_rotation,
+    _rotate_image,
     tile_components,
     eink_display,
     _draw_dashed_line,
@@ -102,6 +104,46 @@ class TestCreateInfoImage(unittest.TestCase):
         
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (200, 100))
+
+
+class TestRotationHelpers(unittest.TestCase):
+    """Tests for _dashboard_rotation and _rotate_image."""
+
+    def test_dashboard_rotation_portrait_is_90(self):
+        self.assertEqual(_dashboard_rotation({'name': 'x', 'portrait': True}), 90)
+
+    def test_dashboard_rotation_explicit_wins_over_portrait(self):
+        self.assertEqual(_dashboard_rotation({'name': 'x', 'portrait': True, 'rotate': 180}), 180)
+
+    def test_dashboard_rotation_none_when_unset(self):
+        self.assertIsNone(_dashboard_rotation({'name': 'x'}))
+
+    def test_rotate_image_quarter_turns_swap_dimensions(self):
+        for rotate in (90, -90):
+            with self.subTest(rotate=rotate):
+                img = _rotate_image(Image.new('RGB', (800, 480)), rotate, mock_logger)
+                self.assertEqual(img.size, (480, 800))
+
+    def test_rotate_image_180_flips_content(self):
+        original = Image.new('RGB', (4, 2), 'white')
+        original.putpixel((0, 0), (0, 0, 0))
+
+        rotated = _rotate_image(original, 180, mock_logger)
+
+        self.assertEqual(rotated.size, (4, 2))
+        self.assertEqual(rotated.getpixel((3, 1)), (0, 0, 0))
+        self.assertEqual(rotated.getpixel((0, 0)), (255, 255, 255))
+
+    def test_rotate_image_none_returns_image_unchanged(self):
+        original = Image.new('RGB', (800, 480))
+        self.assertIs(_rotate_image(original, None, mock_logger), original)
+
+    def test_rotate_image_unsupported_value_warns_and_skips(self):
+        logger = mock.Mock(spec=logging.Logger)
+        original = Image.new('RGB', (800, 480))
+
+        self.assertIs(_rotate_image(original, 45, logger), original)
+        logger.warning.assert_called_once()
 
 
 class TestDrawGraphComponent(unittest.TestCase):
