@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Rendering is now reproducible across machines. Pillow selects its text-shaping engine at import time depending on whether the host happens to have `libfribidi` installed, and the two engines produce glyph widths differing by a fraction of a percent — enough to change the chosen title font size and every rendered pixel. The basic layout engine is now forced explicitly. The shipped Docker image already used it, so add-on rendering is unchanged.
+
 ## [1.7.0] - 2026-08-28
 
 ### Added

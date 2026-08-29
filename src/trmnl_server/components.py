@@ -36,6 +36,18 @@ TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
 NOTO_FONT: str = str(Path(__file__).parent / "assets" / "NotoSans-Regular.ttf")
+
+# Pillow picks its text-shaping engine at import time: it uses raqm/HarfBuzz if
+# it can dlopen the system libfribidi, and its own basic layout otherwise.
+# Pillow's wheels do not bundle libfribidi, so the engine depends on whatever
+# happens to be installed on the host — present on GitHub's ubuntu-latest
+# runners, absent from our shipped Docker image and from local dev. The two
+# engines produce glyph widths that differ by a fraction of a percent, which is
+# enough to flip a TITLE_SIZE_LADDER decision and change every rendered pixel.
+# Force basic layout everywhere so rendering is reproducible. This app renders
+# Latin text only; raqm's advantage is complex-script shaping (bidi, Arabic,
+# Indic ligatures), which would need revisiting if that ever changes.
+ImageFont.core.HAVE_RAQM = False
 _font_warned: list[bool] = [False]  # logged once to avoid repetition per render
 
 
