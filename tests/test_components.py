@@ -24,7 +24,14 @@ from trmnl_server.components import (
     _load_font,
     _todo_capacity,
     _fit_title_size,
+    _fit_body_size,
+    _panel_body_fit,
+    _calendar_row_texts,
+    _entities_row_parts,
+    _todo_row_texts,
     _ellipsize,
+    _ellipsize_prefix,
+    BODY_SIZE_LADDER,
     _panel_title_text,
     _incomplete_items,
     _wrap_title,
@@ -1465,7 +1472,8 @@ class TestRowTitleSizeHarmonisation(unittest.TestCase):
             return Image.new('RGB', (width, height), color='white')
 
         def fake_todo_draw(friendly_name, items, width, height, logger, *,
-                            columns=1, page=0, title_font_size=None, title_lines=1):
+                            columns=1, page=0, title_font_size=None, title_lines=1,
+                            body_font_size=None):
             captured.append((friendly_name, title_font_size, title_lines))
             return Image.new('RGB', (width, height), color='white')
 
@@ -2057,6 +2065,364 @@ class _FakeResponse:
 
     def read(self, n: int = -1) -> bytes:
         return self._body[:n] if n and n > 0 else self._body
+
+
+def _ink_row_bands(img, top):
+    """Y-extents of the horizontal bands of ink below `top`.
+
+    Each drawn text row produces one band, so the gaps between consecutive
+    band starts are the row pitch actually rendered.
+    """
+    grey = img.convert('L')
+    width, height = grey.size
+    bands = []
+    start = None
+    for y in range(top, height):
+        has_ink = min(grey.crop((0, y, width, y + 1)).getdata()) < 128
+        if has_ink and start is None:
+            start = y
+        elif not has_ink and start is not None:
+            bands.append((start, y))
+            start = None
+    if start is not None:
+        bands.append((start, height))
+    return bands
+
+
+class TestFitBodySize(unittest.TestCase):
+    """Unit tests for the shared body-text size resolver."""
+
+    SHORT = ["Hall: 20.0", "Kitchen: 21.5"]
+    LONG = ["Back Garden Soil Moisture Sensor: 12.34"]
+
+    def test_short_texts_in_a_wide_budget_get_the_top_rung(self):
+        self.assertEqual(_fit_body_size(self.SHORT, 5000, mock_logger), BODY_SIZE_LADDER[0])
+
+    def test_empty_group_gets_the_top_rung(self):
+        self.assertEqual(_fit_body_size([], 100, mock_logger), BODY_SIZE_LADDER[0])
+
+    def test_only_ever_returns_ladder_values(self):
+        for budget in range(20, 1200, 37):
+            self.assertIn(_fit_body_size(self.SHORT + self.LONG, budget, mock_logger),
+                          BODY_SIZE_LADDER)
+
+    def test_floors_at_the_smallest_rung_when_nothing_fits(self):
+        self.assertEqual(_fit_body_size(self.LONG, 5, mock_logger), BODY_SIZE_LADDER[-1])
+
+    def test_wider_budget_never_yields_a_smaller_size(self):
+        sizes = [_fit_body_size(self.SHORT + self.LONG, b, mock_logger)
+                 for b in range(50, 1200, 25)]
+        self.assertEqual(sizes, sorted(sizes))
+
+    def test_one_long_row_drags_the_whole_group_down(self):
+        """The group is sized for its widest member — that is the point."""
+        budget = 480
+        alone = _fit_body_size(self.SHORT, budget, mock_logger)
+        together = _fit_body_size(self.SHORT + self.LONG, budget, mock_logger)
+        self.assertLess(together, alone)
+        self.assertEqual(together, _fit_body_size(self.LONG, budget, mock_logger))
+
+
+class TestEllipsizePrefix(unittest.TestCase):
+    """Unit tests for suffix-preserving truncation of "<name>: <state>" rows."""
+
+    def setUp(self):
+        from PIL import ImageDraw
+        self.img = Image.new('RGB', (10, 10))
+        self.d = ImageDraw.Draw(self.img)
+        self.font = _load_font(24, mock_logger)
+
+    def test_row_that_fits_is_returned_unchanged(self):
+        self.assertEqual(
+            _ellipsize_prefix("Hall", ": 20.0", self.font, 1000, self.d),
+            "Hall: 20.0",
+        )
+
+    def test_state_survives_when_the_name_is_too_long(self):
+        result = _ellipsize_prefix(
+            "Back Garden Soil Moisture Sensor", ": 12.34", self.font, 200, self.d
+        )
+        self.assertTrue(result.endswith(": 12.34"), result)
+        self.assertIn('…', result)
+
+    def test_truncated_result_actually_fits_max_width(self):
+        max_width = 200
+        result = _ellipsize_prefix(
+            "Back Garden Soil Moisture Sensor", ": 12.34", self.font, max_width, self.d
+        )
+        bbox = self.d.textbbox((0, 0), result, font=self.font)
+        self.assertLessEqual(bbox[2] - bbox[0], max_width)
+
+    def test_falls_back_to_plain_truncation_when_the_suffix_alone_overflows(self):
+        """Too narrow to keep the state: degrade to _ellipsize's own behaviour."""
+        self.assertEqual(
+            _ellipsize_prefix("Name", ": 12.34", self.font, 10, self.d),
+            _ellipsize("Name: 12.34", self.font, 10, self.d),
+        )
+
+
+class TestBodySizeHarmonisation(unittest.TestCase):
+    """Rows inside one panel must share a single text size and row pitch.
+
+    Before this, every row ran its own shrink loop, so a single list could
+    render at four different sizes with the spacing between rows tracking each
+    row's own ink height.
+    """
+
+    MIXED = [
+        {'friendly_name': 'Kitchen', 'state': 21.5},
+        {'friendly_name': 'Living Room Temperature', 'state': 19.8},
+        {'friendly_name': 'Hall', 'state': 20.0},
+        {'friendly_name': 'Back Garden Soil Moisture Sensor', 'state': 12.34},
+    ]
+
+    def test_entity_list_rows_share_one_pitch(self):
+        img = _draw_entities_component('Sensors', list(self.MIXED), 266, 220, mock_logger)
+        bands = _ink_row_bands(img, 50)
+        self.assertEqual(len(bands), len(self.MIXED))
+        pitches = [bands[i + 1][0] - bands[i][0] for i in range(len(bands) - 1)]
+        self.assertEqual(len(set(pitches)), 1, f"ragged row pitch: {pitches}")
+
+    def test_entity_list_keeps_the_state_when_the_name_is_truncated(self):
+        """A narrow panel truncates the name; the value must still be readable."""
+        img = _draw_entities_component(
+            'Sensors',
+            [{'friendly_name': 'Back Garden Soil Moisture Sensor', 'state': 12.34}],
+            266, 220, mock_logger,
+        )
+        # The value is drawn at the right of the row, so ink must reach past the
+        # midpoint of the content area rather than stopping at a truncated name.
+        row = img.crop((0, 50, img.size[0], img.size[1])).convert('L')
+        from PIL import ImageChops
+        bbox = ImageChops.invert(row).getbbox()
+        self.assertIsNotNone(bbox)
+        self.assertGreater(bbox[2], img.size[0] * 0.7)
+
+    def test_calendar_events_share_one_pitch(self):
+        events = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
+            {'summary': 'Quarterly planning review with the wider platform team',
+             'start': {'dateTime': '2024-01-02T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
+            {'summary': 'Dentist', 'start': {'date': '2024-01-03'}},
+        ]
+        img = _draw_calendar_component('Calendar', events, 400, 220, mock_logger)
+        bands = _ink_row_bands(img, 50)
+        self.assertEqual(len(bands), len(events))
+        pitches = [bands[i + 1][0] - bands[i][0] for i in range(len(bands) - 1)]
+        self.assertEqual(len(set(pitches)), 1, f"ragged row pitch: {pitches}")
+
+    def test_todo_summaries_share_one_baseline(self):
+        """Mixed-length todo items align on one baseline instead of stepping."""
+        items = [
+            {'summary': 'Milk', 'status': 'needs_action'},
+            {'summary': 'Book the annual car service appointment', 'status': 'needs_action'},
+            {'summary': 'Bins', 'status': 'needs_action'},
+        ]
+        img = _draw_todo_list_component('Todo', items, 400, 220, mock_logger, columns=1)
+        # Crop away the checkboxes (which end at x=39) so only the summary text
+        # is measured, keeping every summary's leading capital in frame — with a
+        # shared size those capitals give a shared ink top.
+        text_only = img.crop((44, 50, img.size[0], img.size[1]))
+        bands = _ink_row_bands(text_only, 0)
+        self.assertEqual(len(bands), len(items))
+        pitches = [bands[i + 1][0] - bands[i][0] for i in range(len(bands) - 1)]
+        self.assertEqual(len(set(pitches)), 1, f"ragged row pitch: {pitches}")
+
+
+class TestPanelBodyFit(unittest.TestCase):
+    """Unit tests for the per-panel body-size probe used by the row resolver."""
+
+    LONG_ROWS = [
+        {'friendly_name': 'Kitchen', 'state': 21.5},
+        {'friendly_name': 'Back Garden Soil Moisture Sensor', 'state': 12.34},
+    ]
+    SHORT_ROWS = [
+        {'friendly_name': 'Hall', 'state': 20.0},
+        {'friendly_name': 'Attic', 'state': 18.0},
+    ]
+
+    def test_panels_without_body_rows_return_none(self):
+        """Only list-style panels have rows to harmonise."""
+        for render_data in (
+            {'type': 'entity', 'data': '21.5'},
+            {'type': 'url', 'data': '42'},
+            {'type': 'history_graph', 'data': [(1, 2.0)]},
+        ):
+            self.assertIsNone(_panel_body_fit(render_data, 400, mock_logger),
+                              render_data['type'])
+
+    def test_missing_or_empty_data_returns_none(self):
+        """Those panels draw a fixed-size placeholder, not rows."""
+        for data in (None, [], {}):
+            self.assertIsNone(
+                _panel_body_fit({'type': 'entities', 'data': data}, 400, mock_logger)
+            )
+            self.assertIsNone(
+                _panel_body_fit({'type': 'calendar', 'data': data}, 400, mock_logger)
+            )
+
+    def test_todo_with_only_completed_items_returns_none(self):
+        render_data = {
+            'type': 'todo_list',
+            'data': [{'summary': 'done', 'status': 'completed'}],
+        }
+        self.assertIsNone(_panel_body_fit(render_data, 400, mock_logger))
+
+    def test_long_rows_probe_smaller_than_short_rows(self):
+        long_fit = _panel_body_fit(
+            {'type': 'entities', 'data': self.LONG_ROWS}, 400, mock_logger)
+        short_fit = _panel_body_fit(
+            {'type': 'entities', 'data': self.SHORT_ROWS}, 400, mock_logger)
+        self.assertIn(long_fit, BODY_SIZE_LADDER)
+        self.assertIn(short_fit, BODY_SIZE_LADDER)
+        self.assertLess(long_fit, short_fit)
+
+    def test_todo_columns_narrow_the_budget(self):
+        """More columns means less width per item, so never a bigger size."""
+        items = [{'summary': 'Book the annual car service appointment',
+                  'status': 'needs_action'}]
+        one = _panel_body_fit(
+            {'type': 'todo_list', 'data': items, 'columns': 1}, 400, mock_logger)
+        two = _panel_body_fit(
+            {'type': 'todo_list', 'data': items, 'columns': 2}, 400, mock_logger)
+        self.assertLessEqual(two, one)
+
+    def test_probe_matches_what_the_panel_draws_alone(self):
+        """The probe must predict the size the draw function picks unaided.
+
+        If these drift, the row resolver would harmonise on a size no panel
+        actually wanted.
+        """
+        from PIL import ImageChops
+        render_data = {'type': 'entities', 'data': self.LONG_ROWS}
+        probed = _panel_body_fit(render_data, 400, mock_logger)
+        alone = _draw_entities_component(
+            'Sensors', list(self.LONG_ROWS), 400, 220, mock_logger)
+        forced = _draw_entities_component(
+            'Sensors', list(self.LONG_ROWS), 400, 220, mock_logger,
+            body_font_size=probed)
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
+
+class TestRowBodySizeHarmonisation(unittest.TestCase):
+    """Panels sharing a layout row must agree on one body text size."""
+
+    @staticmethod
+    def _entities(name, rows):
+        return {'type': 'entities', 'friendly_name': name, 'data': rows,
+                'large_display': False}
+
+    LONG = [
+        {'friendly_name': 'Kitchen', 'state': 21.5},
+        {'friendly_name': 'Back Garden Soil Moisture Sensor', 'state': 12.34},
+    ]
+    SHORT = [
+        {'friendly_name': 'Hall', 'state': 20.0},
+        {'friendly_name': 'Attic', 'state': 18.0},
+    ]
+
+    def _captured_body_sizes(self, render_data):
+        captured = {}
+
+        def fake_entities_draw(friendly_name, entity_states, width, height, logger, *,
+                               title_font_size=None, title_lines=1, body_font_size=None):
+            captured[friendly_name] = body_font_size
+            return Image.new('RGB', (width, height), color='white')
+
+        with mock.patch('trmnl_server.components._draw_entities_component',
+                        side_effect=fake_entities_draw):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+        return captured
+
+    def test_neighbours_in_a_row_share_one_body_size(self):
+        """A 2x2 grid: the long-rowed panel pulls its row-mate down with it."""
+        captured = self._captured_body_sizes([
+            self._entities('A', list(self.LONG)),
+            self._entities('B', list(self.SHORT)),
+            self._entities('C', list(self.SHORT)),
+            self._entities('D', list(self.SHORT)),
+        ])
+        self.assertEqual(captured['A'], captured['B'])
+        self.assertEqual(captured['C'], captured['D'])
+        # ...and only that row: the all-short bottom row keeps the top rung.
+        self.assertLess(captured['A'], captured['C'])
+        self.assertEqual(captured['C'], BODY_SIZE_LADDER[0])
+
+    def test_every_resolved_size_is_a_ladder_rung(self):
+        captured = self._captured_body_sizes([
+            self._entities(n, list(self.LONG if n == 'A' else self.SHORT))
+            for n in ('A', 'B', 'C', 'D')
+        ])
+        for name, size in captured.items():
+            self.assertIn(size, BODY_SIZE_LADDER, name)
+
+    def test_row_of_panels_without_body_rows_passes_none(self):
+        """An entity panel beside an empty list leaves the size unresolved."""
+        captured = self._captured_body_sizes([
+            self._entities('A', []),
+            self._entities('B', []),
+            self._entities('C', []),
+            self._entities('D', []),
+        ])
+        self.assertEqual(set(captured.values()), {None})
+
+    def test_mixed_row_ignores_panels_without_rows(self):
+        """A big-value entity panel must not affect its row-mate's body size."""
+        alone = self._captured_body_sizes([
+            self._entities('A', list(self.SHORT)),
+            self._entities('B', list(self.SHORT)),
+            self._entities('C', list(self.SHORT)),
+            self._entities('D', list(self.SHORT)),
+        ])
+        mixed = self._captured_body_sizes([
+            self._entities('A', list(self.SHORT)),
+            {'type': 'entity', 'friendly_name': 'V', 'data': '21.5',
+             'large_display': False},
+            self._entities('C', list(self.SHORT)),
+            self._entities('D', list(self.SHORT)),
+        ])
+        self.assertEqual(mixed['A'], alone['A'])
+
+
+class TestBodyRowTextBuilders(unittest.TestCase):
+    """The row resolver and the draw functions must build identical strings."""
+
+    def test_entities_row_parts_splits_name_from_state(self):
+        parts = _entities_row_parts([{'friendly_name': 'Hall', 'state': 20.0}])
+        self.assertEqual(parts, [('Hall', ': 20.00')])
+
+    def test_entities_row_parts_defaults_missing_state(self):
+        self.assertEqual(_entities_row_parts([{'friendly_name': 'X'}]),
+                         [('X', ': N/A')])
+
+    def test_calendar_row_texts_sorts_and_formats(self):
+        events = [
+            {'summary': 'Later', 'start': {'date': '2024-01-03'}},
+            {'summary': 'Earlier',
+             'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
+        ]
+        texts = _calendar_row_texts(events, mock_logger)
+        self.assertEqual(len(texts), 2)
+        self.assertIn('Earlier', texts[0])
+        self.assertIn('All day: Later', texts[1])
+
+    def test_calendar_row_texts_handles_a_startless_event(self):
+        self.assertEqual(
+            _calendar_row_texts([{'summary': 'Mystery', 'start': {}}], mock_logger),
+            ['Unknown: Mystery'],
+        )
+
+    def test_todo_row_texts_covers_every_page(self):
+        """Sizing is deliberately not page-scoped, so text cannot resize as it cycles."""
+        items = [{'summary': f'Task {i}', 'status': 'needs_action'} for i in range(40)]
+        items.append({'summary': 'done already', 'status': 'completed'})
+        texts = _todo_row_texts(items)
+        self.assertEqual(len(texts), 40)
+        self.assertNotIn('done already', texts)
 
 
 class TestUrlComponentRendering(unittest.TestCase):

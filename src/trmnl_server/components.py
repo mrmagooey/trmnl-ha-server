@@ -32,6 +32,11 @@ TITLE_LINE_SPACING: int = 4
 TITLE_BAND_GAP: int = 4
 # A title band may not consume more than this share of its tile's height.
 TITLE_BAND_MAX_PERCENT: int = 45
+# Body text (entity-list rows, calendar events, todo items) is quantised to
+# these sizes for the same reason titles are: every row in a panel lands on one
+# rung instead of each row shrinking to its own arbitrary fit, which otherwise
+# renders a single list at three or four different sizes.
+BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -85,6 +90,93 @@ def _incomplete_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
+def _calendar_row_texts(events: list[CalendarEvent], logger: "Logger") -> list[str]:
+    """Builds the one-line strings a calendar panel draws, in display order.
+
+    Sorts `events` in place, as the draw function has always done. Shared with
+    the row-level body-size resolver so the size is measured against exactly
+    the strings that will be drawn.
+
+    Args:
+        events: Calendar events for the panel
+        logger: Logger instance
+
+    Returns:
+        One formatted string per event
+    """
+    from datetime import date as dt_date
+    from pprint import pformat as pf
+
+    def get_sort_key(event: CalendarEvent) -> str:
+        start = event.get('start', {})
+        return start.get('dateTime') or start.get('date') or 'z'
+    events.sort(key=get_sort_key)
+
+    texts: list[str] = []
+    for event in events:
+        logger.debug("calendar event: %s", pf(event))
+        summary: str = event.get('summary', 'No summary')
+        start = event.get('start', {})
+        end = event.get('end', {})
+
+        start_date_time = start.get('dateTime')
+        start_date = start.get('date')
+        end_date_time = end.get('dateTime')
+        if start_date_time:  # Timed event
+            start_dt: datetime = datetime.fromisoformat(start_date_time).astimezone()
+            end_dt: datetime = datetime.fromisoformat(end_date_time).astimezone() if end_date_time else start_dt
+            day_name: str = start_dt.strftime('%A')
+            texts.append(
+                f"{day_name} {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}: {summary}"
+            )
+        elif start_date:  # All-day event
+            start_date_obj = dt_date.fromisoformat(start_date)
+            day_name = start_date_obj.strftime('%A')
+            texts.append(f"{day_name} All day: {summary}")
+        else:
+            texts.append(f"Unknown: {summary}")
+    return texts
+
+
+def _entities_row_parts(
+    entity_states: list[dict[str, str | float | None]],
+) -> list[tuple[str, str]]:
+    """Splits each entity-list row into its (name, ": state") halves.
+
+    Kept as halves because the name is the part that gets truncated when a row
+    will not fit; see _ellipsize_prefix.
+
+    Args:
+        entity_states: Entity state dictionaries for the panel
+
+    Returns:
+        One (name, tail) pair per entity, in display order
+    """
+    parts: list[tuple[str, str]] = []
+    for entity in entity_states:
+        name = str(entity.get('friendly_name', ''))  # type: ignore[arg-type]
+        state: str | float | None = entity.get('state', 'N/A')
+        state_str: str = f"{state:.2f}" if isinstance(state, float) else str(state)
+        parts.append((name, f": {state_str}"))
+    return parts
+
+
+def _todo_row_texts(items: list[dict[str, str]]) -> list[str]:
+    """Returns every incomplete todo summary, in list order.
+
+    Deliberately not page-scoped: a paginating panel shows a different page on
+    each refresh, and sizing per page would make the text jump between sizes as
+    it cycles.
+
+    Args:
+        items: Raw todo items for the panel
+
+    Returns:
+        One summary string per incomplete item
+    """
+    return [item.get('summary', '') for item in _incomplete_items(items)]
+
+
 def _panel_title_text(render_data: "RenderData") -> str:
     """Returns the title string a panel will actually draw.
 
@@ -127,6 +219,57 @@ def _panel_draws_a_title(render_data: "RenderData") -> bool:
     if render_data.get('type') == 'history_graph' and not data:
         return False
     return True
+
+
+def _panel_body_fit(
+    render_data: "RenderData",
+    tile_width: int,
+    logger: "Logger",
+) -> int | None:
+    """The body size a panel would pick for itself, or None if it draws no rows.
+
+    The body-text counterpart of `_fit_title_size` at the panel level. Only the
+    list-style panels have body rows to harmonise: `entity`/`url` draw a single
+    value sized to fill the tile, and `history_graph` draws no body text at all.
+    A panel whose data is empty (or absent) draws a fixed-size placeholder
+    message instead of rows, so it must not drag its neighbours down.
+
+    The widths below must match the content widths the draw functions compute,
+    since the resolved size is what they will draw with.
+
+    Args:
+        render_data: Component render data
+        tile_width: Unscaled width of the tile the panel will occupy
+        logger: Logger instance
+
+    Returns:
+        A size from BODY_SIZE_LADDER, or None if the panel draws no body rows
+    """
+    data = render_data.get('data')
+    if not data:
+        return None
+
+    panel_type = render_data.get('type')
+    if panel_type == 'entities':
+        texts = [name + tail for name, tail in _entities_row_parts(data)]  # type: ignore[arg-type]
+        budget = (tile_width - 40) * COMPONENT_SCALE
+    elif panel_type == 'calendar':
+        texts = _calendar_row_texts(data, logger)  # type: ignore[arg-type]
+        budget = (tile_width - 40) * COMPONENT_SCALE
+    elif panel_type == 'todo_list':
+        texts = _todo_row_texts(data)  # type: ignore[arg-type]
+        cols = render_data.get('columns', 1)
+        cols = cols if isinstance(cols, int) and cols > 0 else 1
+        # Mirrors _draw_todo_list_component: checkbox inset + checkbox + gap,
+        # then a trailing gap, inside one column of the tile.
+        col_width = (tile_width * COMPONENT_SCALE) // cols
+        budget = col_width - (15 + 24 + 8) * COMPONENT_SCALE - 8 * COMPONENT_SCALE
+    else:
+        return None
+
+    if not texts:
+        return None
+    return _fit_body_size(texts, budget, logger)
 
 
 def _fit_title_size(
@@ -175,6 +318,37 @@ def _fit_title_size(
     return TITLE_SIZE_LADDER[-1]
 
 
+def _fit_body_size(
+    texts: list[str],
+    max_width: int,
+    logger: "Logger",
+) -> int:
+    """Picks the largest ladder rung at which every one of texts fits max_width.
+
+    The body-text counterpart of _fit_title_size: one size is resolved for the
+    whole group so a panel's rows share it, and it is quantised to a ladder so
+    the sizes stay comparable rather than landing wherever each string's own
+    shrink loop happened to stop.
+
+    Args:
+        texts: The strings that will be drawn, one per row
+        max_width: Available width in SCALED pixels (unlike _fit_title_size,
+            which takes an unscaled tile width, because every caller here
+            already has a scaled content width to hand)
+        logger: Logger instance
+
+    Returns:
+        An unscaled size from BODY_SIZE_LADDER; the smallest rung when no rung
+        fits every text. Callers ellipsize the rows that still overflow there —
+        one over-long row must not shrink the whole panel into illegibility.
+    """
+    for size in BODY_SIZE_LADDER:
+        font = _load_font(size * COMPONENT_SCALE, logger)
+        if all(font.getbbox(t)[2] - font.getbbox(t)[0] <= max_width for t in texts):
+            return size
+    return BODY_SIZE_LADDER[-1]
+
+
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:
     """Truncates text with a trailing ellipsis until it fits max_width.
 
@@ -200,6 +374,43 @@ def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "Imag
             break
         truncated = truncated[:-1]
     return (truncated + '…') if truncated else '…'
+
+
+def _ellipsize_prefix(
+    prefix: str,
+    suffix: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: int,
+    d: "ImageDraw.ImageDraw",
+) -> str:
+    """Ellipsizes prefix so that prefix + suffix fits max_width, keeping suffix.
+
+    Entity-list rows read "<name>: <state>", and the state is the half worth
+    reading. Plain _ellipsize eats a row from the right, which under a fixed
+    body size would leave a truncated name and no value at all.
+
+    Args:
+        prefix: The part that may be truncated
+        suffix: The part that must survive intact if at all possible
+        font: The font the row will be drawn with
+        max_width: Available width, in the same units as textbbox
+        d: A drawing context used only for text measurement
+
+    Returns:
+        prefix + suffix unchanged when it already fits; otherwise a truncated
+        prefix plus '…' plus the whole suffix. Falls back to truncating the
+        joined string when the suffix alone does not fit.
+    """
+    joined: str = prefix + suffix
+    bbox = d.textbbox((0, 0), joined, font=font)
+    if bbox[2] - bbox[0] <= max_width:
+        return joined
+
+    suffix_bbox = d.textbbox((0, 0), suffix, font=font)
+    suffix_width: int = suffix_bbox[2] - suffix_bbox[0]
+    if suffix_width >= max_width:
+        return _ellipsize(joined, font, max_width, d)
+    return _ellipsize(prefix, font, max_width - suffix_width, d) + suffix
 
 
 def _wrap_title(
@@ -912,6 +1123,7 @@ def _draw_calendar_component(
     *,
     title_font_size: int | None = None,
     title_lines: int = 1,
+    body_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a calendar component.
 
@@ -921,6 +1133,8 @@ def _draw_calendar_component(
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
+        body_font_size: Event-row size resolved by the caller so every panel in
+            the layout row agrees. When None, this panel picks its own rung.
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
         title_lines: Number of title lines to wrap onto. At 1 (the default)
@@ -929,8 +1143,6 @@ def _draw_calendar_component(
     Returns:
         Rendered PIL Image
     """
-    from datetime import date as dt_date
-
     scale: int = COMPONENT_SCALE
     large_width: int = width * scale
     large_height: int = height * scale
@@ -986,63 +1198,37 @@ def _draw_calendar_component(
         text_width = text_bbox[2] - text_bbox[0]
         d.text(((large_width - text_width) / 2, y_pos), msg, font=font_event, fill='black')
     else:
-        # Sort events
-        def get_sort_key(event: CalendarEvent) -> str:
-            start = event.get('start', {})
-            return start.get('dateTime') or start.get('date') or 'z'
-        events.sort(key=get_sort_key)
+        event_strings: list[str] = _calendar_row_texts(events, logger)
 
-        for event in events:
-            from pprint import pformat as pf
-            logger.debug("calendar event: %s", pf(event))
-            summary: str = event.get('summary', 'No summary')
-            start = event.get('start', {})
-            end = event.get('end', {})
+        padding: int = 40 * scale
+        content_width: int = large_width - padding
 
-            # Format event string
-            start_date_time = start.get('dateTime')
-            start_date = start.get('date')
-            end_date_time = end.get('dateTime')
-            if start_date_time:  # Timed event
-                start_dt: datetime = datetime.fromisoformat(start_date_time).astimezone()
-                end_dt: datetime = datetime.fromisoformat(end_date_time).astimezone() if end_date_time else start_dt
-                day_name: str = start_dt.strftime('%A')
-                event_str: str = f"{day_name} {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}: {summary}"
-            elif start_date:  # All-day event
-                start_date_obj = dt_date.fromisoformat(start_date)
-                day_name = start_date_obj.strftime('%A')
-                event_str = f"{day_name} All day: {summary}"
-            else:
-                event_str = f"Unknown: {summary}"
+        # One size for every event in the panel, resolved before anything is
+        # drawn, so a single long summary no longer renders at half the size of
+        # the event above it. The caller may supply a size agreed across the
+        # whole layout row instead.
+        font_row = _load_font(
+            (body_font_size if body_font_size is not None
+             else _fit_body_size(event_strings, content_width, logger)) * scale,
+            logger,
+        )
+        # A single shared row advance: even at one font size the per-row ink
+        # height still swings with ascenders and descenders, which is what made
+        # the old spacing ragged.
+        row_probe = d.textbbox((0, 0), "Ag", font=font_row)
+        row_advance: int = (row_probe[3] - row_probe[1]) + line_spacing
 
-            # Adjust font size
-            font_size: int = 28 * scale
-            padding: int = 40 * scale
-            try:
-                dynamic_font_event = ImageFont.truetype(NOTO_FONT, font_size)
-                event_bbox = d.textbbox((0, 0), event_str, font=dynamic_font_event)
-                event_width: int = event_bbox[2] - event_bbox[0]
-
-                while event_width > large_width - padding:
-                    font_size -= 2
-                    if font_size <= 8:
-                        break
-                    dynamic_font_event = ImageFont.truetype(NOTO_FONT, font_size)
-                    event_bbox = d.textbbox((0, 0), event_str, font=dynamic_font_event)
-                    event_width = event_bbox[2] - event_bbox[0]
-            except IOError:
-                dynamic_font_event = ImageFont.load_default()
-
-            # The shrink loop gives up at its font-size floor, so an event that
-            # is still too wide there — an unbreakable summary — would be drawn
-            # off the right edge. Rows are not wrapped, so truncate instead.
+        for event_str in event_strings:
+            # The ladder floor can still leave an event too wide — an
+            # unbreakable summary. Rows are not wrapped, so truncate instead.
             # _ellipsize returns a fitting string unchanged.
-            event_str = _ellipsize(event_str, dynamic_font_event, large_width - padding, d)
-
-            d.text((20 * scale, y_pos), event_str, font=dynamic_font_event, fill='black')
-            event_bbox = d.textbbox((0, 0), event_str, font=dynamic_font_event)
-            event_height: int = event_bbox[3] - event_bbox[1]
-            y_pos += event_height + line_spacing
+            d.text(
+                (20 * scale, y_pos),
+                _ellipsize(event_str, font_row, content_width, d),
+                font=font_row,
+                fill='black',
+            )
+            y_pos += row_advance
 
             if y_pos > large_height - 30 * scale:
                 break
@@ -1059,6 +1245,7 @@ def _draw_entities_component(
     *,
     title_font_size: int | None = None,
     title_lines: int = 1,
+    body_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a list of entities and their states.
 
@@ -1068,6 +1255,8 @@ def _draw_entities_component(
         width: Component width in pixels
         height: Component height in pixels
         logger: Logger instance
+        body_font_size: List-row size resolved by the caller so every panel in
+            the layout row agrees. When None, this panel picks its own rung.
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
         title_lines: Number of title lines to wrap onto. At 1 (the default)
@@ -1131,45 +1320,36 @@ def _draw_entities_component(
         text_width = text_bbox[2] - text_bbox[0]
         d.text(((large_width - text_width) / 2, y_pos), msg, font=font_list, fill='black')
     else:
-        for entity in entity_states:
-            name = str(entity.get('friendly_name', ''))  # type: ignore[arg-type]
-            state: str | float | None = entity.get('state', 'N/A')
+        padding: int = 40 * scale
+        content_width: int = large_width - padding
 
-            if isinstance(state, float):
-                state_str: str = f"{state:.2f}"
-            else:
-                state_str = str(state)
+        rows: list[tuple[str, str]] = _entities_row_parts(entity_states)
 
-            list_str: str = f"{name}: {state_str}"
+        # One size for the whole list, resolved before anything is drawn. The
+        # caller may supply a size agreed across the whole layout row instead.
+        font_row = _load_font(
+            (body_font_size if body_font_size is not None else _fit_body_size(
+                [name + tail for name, tail in rows], content_width, logger
+            )) * scale,
+            logger,
+        )
+        # A single shared row advance: even at one font size the per-row ink
+        # height still swings with ascenders and descenders, which is what made
+        # the old spacing ragged.
+        row_probe = d.textbbox((0, 0), "Ag", font=font_row)
+        row_advance: int = (row_probe[3] - row_probe[1]) + line_spacing
 
-            # Adjust font size
-            font_size: int = 28 * scale
-            padding: int = 40 * scale
-            try:
-                dynamic_font_list = ImageFont.truetype(NOTO_FONT, font_size)
-                list_bbox = d.textbbox((0, 0), list_str, font=dynamic_font_list)
-                list_width: int = list_bbox[2] - list_bbox[0]
-
-                while list_width > large_width - padding:
-                    font_size -= 2
-                    if font_size <= 8:
-                        break
-                    dynamic_font_list = ImageFont.truetype(NOTO_FONT, font_size)
-                    list_bbox = d.textbbox((0, 0), list_str, font=dynamic_font_list)
-                    list_width = list_bbox[2] - list_bbox[0]
-            except IOError:
-                dynamic_font_list = ImageFont.load_default()
-
-            # The shrink loop gives up at its font-size floor, so a row that is
-            # still too wide there — an unbreakable state value — would be drawn
-            # off the right edge. Rows are not wrapped, so truncate instead.
-            # _ellipsize returns a fitting string unchanged.
-            list_str = _ellipsize(list_str, dynamic_font_list, large_width - padding, d)
-
-            d.text((20 * scale, y_pos), list_str, font=dynamic_font_list, fill='black')
-            list_bbox = d.textbbox((0, 0), list_str, font=dynamic_font_list)
-            list_height: int = list_bbox[3] - list_bbox[1]
-            y_pos += list_height + line_spacing
+        for name, tail in rows:
+            # The ladder floor can still leave a row too wide. Rows are not
+            # wrapped, so truncate the name and keep the state visible;
+            # _ellipsize_prefix returns a fitting row unchanged.
+            d.text(
+                (20 * scale, y_pos),
+                _ellipsize_prefix(name, tail, font_row, content_width, d),
+                font=font_row,
+                fill='black',
+            )
+            y_pos += row_advance
 
             if y_pos > large_height - 30 * scale:
                 break
@@ -1219,6 +1399,7 @@ def _draw_todo_list_component(
     page: int = 0,
     title_font_size: int | None = None,
     title_lines: int = 1,
+    body_font_size: int | None = None,
 ) -> Image.Image:
     """Draws a todo list with checkboxes, columns, and pagination.
 
@@ -1235,6 +1416,8 @@ def _draw_todo_list_component(
         logger: Logger instance
         columns: Number of columns (>= 1; invalid coerced to 1)
         page: Page index to render (wrapped modulo the page count)
+        body_font_size: Item size resolved by the caller so every panel in the
+            layout row agrees. When None, this panel picks its own rung.
         title_font_size: Title size resolved by the caller. When None, the
             title shrinks to fit this component's own width.
         title_lines: Number of title lines to wrap onto. At 1 (the default)
@@ -1318,7 +1501,26 @@ def _draw_todo_list_component(
     checkbox_size: int = 24 * scale
     col_width: int = large_width // cols
 
-    for i, item in enumerate(page_items):
+    # Every column is the same width, so one size serves the whole page and the
+    # summaries no longer step between sizes down a single column. The caller
+    # may supply a size agreed across the whole layout row instead.
+    text_offset: int = 15 * scale + checkbox_size + 8 * scale
+    available_width: int = col_width - text_offset - 8 * scale
+    summaries: list[str] = [item.get('summary', '') for item in page_items]
+    font_item_row = _load_font(
+        (body_font_size if body_font_size is not None
+         # Sized against every incomplete item, not just this page's: the
+         # panel re-renders on a different page each refresh, and sizing per
+         # page would make the text jump between sizes as it cycles.
+         else _fit_body_size(_todo_row_texts(items), available_width, logger)) * scale,
+        logger,
+    )
+    # Shared vertical offset within the checkbox row: centring each summary on
+    # its own ink box would leave baselines stepping up and down the column.
+    item_probe = d.textbbox((0, 0), "Ag", font=font_item_row)
+    text_dy: int = (checkbox_size - (item_probe[3] - item_probe[1])) // 2
+
+    for i, raw_summary in enumerate(summaries):
         col: int = i // rows_per_column
         row: int = i % rows_per_column
         col_x: int = col * col_width
@@ -1331,35 +1533,11 @@ def _draw_todo_list_component(
             width=2,
         )
 
-        text_x: int = checkbox_x + checkbox_size + 8 * scale
-        available_width: int = col_width - (text_x - col_x) - 8 * scale
-        summary: str = item.get('summary', '')
+        text_x: int = col_x + text_offset
+        # Still too wide at the ladder floor -> ellipsis-truncate.
+        summary: str = _ellipsize(raw_summary, font_item_row, available_width, d)
 
-        # Shrink to fit the column width; ellipsis-truncate at the floor.
-        font_size: int = 28 * scale
-        try:
-            dyn_font = ImageFont.truetype(NOTO_FONT, font_size)
-            text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
-            while (text_bbox[2] - text_bbox[0]) > available_width and font_size > 16:
-                font_size -= 2
-                dyn_font = ImageFont.truetype(NOTO_FONT, font_size)
-                text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
-            # Still too wide at the floor -> ellipsis-truncate.
-            if (text_bbox[2] - text_bbox[0]) > available_width:
-                truncated = summary
-                while truncated:
-                    trunc_bbox = d.textbbox((0, 0), truncated + '…', font=dyn_font)
-                    if (trunc_bbox[2] - trunc_bbox[0]) <= available_width:
-                        break
-                    truncated = truncated[:-1]
-                summary = (truncated + '…') if truncated else '…'
-                text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
-        except IOError:
-            dyn_font = ImageFont.load_default()
-            text_bbox = d.textbbox((0, 0), summary, font=dyn_font)
-
-        text_y: int = y + (checkbox_size - (text_bbox[3] - text_bbox[1])) // 2
-        d.text((text_x, text_y), summary, font=dyn_font, fill='black')
+        d.text((text_x, y + text_dy), summary, font=font_item_row, fill='black')
 
     return img.resize((width, height), Image.LANCZOS)
 
@@ -1425,6 +1603,7 @@ def tile_components(
         tile_height: int,
         title_font_size: int,
         title_lines: int = 1,
+        body_font_size: int | None = None,
     ) -> Image.Image:
         component_type: str = render_data['type']
         friendly_name: str = render_data.get('friendly_name', '')
@@ -1469,6 +1648,7 @@ def tile_components(
                 logger,
                 title_font_size=title_font_size,
                 title_lines=title_lines,
+                body_font_size=body_font_size,
             )
         elif component_type == 'entities':
             return _draw_entities_component(
@@ -1479,6 +1659,7 @@ def tile_components(
                 logger,
                 title_font_size=title_font_size,
                 title_lines=title_lines,
+                body_font_size=body_font_size,
             )
         elif component_type == 'todo_list':
             todo_columns = render_data.get('columns', 1)
@@ -1500,6 +1681,7 @@ def tile_components(
                 page=page,
                 title_font_size=title_font_size,
                 title_lines=title_lines,
+                body_font_size=body_font_size,
             )
         else:
             logger.warning("Unknown component type: %s", component_type)
@@ -1597,9 +1779,23 @@ def tile_components(
         else:
             title_font_size, title_lines = s1, 1
 
+        # Body rows harmonise the same way titles do: the row settles on the
+        # smallest size any of its list-style panels needs, so a list beside a
+        # list reads as one block rather than two unrelated type sizes.
+        body_fits: list[int] = [
+            fit
+            for fit in (
+                _panel_body_fit(render_data, tile_w, logger)
+                for render_data, _, _, tile_w, _ in row
+            )
+            if fit is not None
+        ]
+        body_font_size: int | None = min(body_fits) if body_fits else None
+
         for render_data, x, y, tile_w, tile_h in row:
             component_image = _render_component(render_data, tile_w, tile_h,
-                                                title_font_size, title_lines)
+                                                title_font_size, title_lines,
+                                                body_font_size)
             if component_image:
                 final_image.paste(component_image, (x, y))
 
