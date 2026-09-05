@@ -877,9 +877,26 @@ def _draw_entity_component(
     value_height: int = value_bbox[3] - value_bbox[1]
 
     value_x: float = (large_width - value_width) / 2
-    final_y_tweak: int = y_tweak if '\n' not in value_str else 0
-    value_y: float = avail_top + (avail_h - value_height) / 2 - final_y_tweak
-    value_y = max(float(avail_top), value_y)
+    if title_lines > 1:
+        # y_tweak below is a fixed offset tuned for the single-line path,
+        # where the title overlaps the value's reserved region rather than
+        # sitting in its own band. It doesn't scale with font size, so at
+        # the large fonts a generous avail_h allows here it under-corrects
+        # and pushes the ink past the tile's bottom edge. Centre the actual
+        # ink box instead: value_bbox[1] is its offset from the anchor, so
+        # the anchor may legitimately sit above avail_top by that much
+        # without the ink itself entering the title band.
+        value_y: float = avail_top + (avail_h - value_height) / 2 - value_bbox[1]
+        min_value_y: float = avail_top - value_bbox[1]
+    else:
+        final_y_tweak: int = y_tweak if '\n' not in value_str else 0
+        value_y = avail_top + (avail_h - value_height) / 2 - final_y_tweak
+        min_value_y = float(avail_top)
+    value_y = max(min_value_y, value_y)
+    # Never let the ink extend past the bottom of the tile, whichever path
+    # produced it — a floored font size or an off-tuned offset can otherwise
+    # still push value_bbox[3] beyond avail_top + avail_h.
+    value_y = min(value_y, max(min_value_y, float(avail_top + avail_h - value_bbox[3])))
 
     d.text((value_x, value_y), value_str, font=font_value, fill='black', align='center')
 

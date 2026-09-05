@@ -291,6 +291,52 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'two_line_title_harmonisation')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_entity_value_stays_within_tile_bounds(self, mock_get_entity_state):
+        """A 3x3 grid of short tiles: no entity value may bleed past its tile.
+
+        Regression test for the value's vertical centring, which used a fixed
+        offset tuned for the single-line title layout. On short tiles the
+        resolved value font is large enough that the offset under-corrects,
+        pushing the value's ink past the tile's (and here, the image's)
+        bottom edge -- most visibly in the bottom row.
+        """
+        mock_get_entity_state.return_value = {'state': '21.5', 'attributes': {}}
+        names = [
+            'Kitchen', 'Hallway', 'Study',
+            'Bedroom', 'Office', 'Garage',
+            'Back Garden Soil Moisture Level', 'Attic', 'Basement',
+        ]
+        dashboard = {
+            'name': 'grid9',
+            'title': 'Grid',
+            'components': [
+                {'entity_name': f'sensor.{i}', 'friendly_name': name, 'type': 'entity'}
+                for i, name in enumerate(names)
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+
+        img_io.seek(0)
+        rendered = Image.open(img_io)
+        rendered.load()
+
+        # Bottom row's tiles: 3 cols x 266px, tile bottom at y=478 (WIDTH=800,
+        # HEIGHT=480, TOP_MARGIN=40, 3x3 grid -> tile_height = (480-40)//3 = 146).
+        tile_width = 800 // 3
+        tile_bottom = 40 + 146 * 3
+        for col in range(3):
+            strip = rendered.crop(
+                (col * tile_width, tile_bottom - 2, (col + 1) * tile_width, tile_bottom)
+            ).convert("L")
+            self.assertEqual(
+                strip.getextrema()[0], 255,
+                f"column {col}'s value ink reached its tile's bottom edge",
+            )
+
+        assert_golden(img_io, 'entity_value_bounds_grid')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     @mock.patch('trmnl_server.state.server_state')
     def test_entity_dashboard_with_battery(self, mock_state, mock_get_entity_state):
         """Entity dashboard with battery percentage in top-right."""

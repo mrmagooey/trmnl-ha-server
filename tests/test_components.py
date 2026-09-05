@@ -459,6 +459,30 @@ class TestDrawEntityComponent(unittest.TestCase):
         self.assertEqual(img.crop((0, 0, 2, height)).convert("L").getextrema()[0], 255)
         self.assertEqual(img.crop((width - 2, 0, width, height)).convert("L").getextrema()[0], 255)
 
+    def test_two_line_title_value_does_not_overflow_tile(self):
+        """A large value under a two-line title must not spill past the tile's bottom edge.
+
+        A two-line title reserves a band and centres the value in the space
+        left below it. That centring used a fixed offset tuned for the
+        single-line layout, where the title overlaps the value's region
+        instead of reserving its own band. On a short tile the leftover
+        space allows a large value font, and the untuned offset under-
+        corrects for it, pushing the value's ink past the tile's bottom
+        edge -- clipping it.
+        """
+        img = _draw_entity_component(
+            "Back Garden Soil Moisture Level",
+            21.5,
+            400,
+            220,
+            mock_logger,
+            title_font_size=35,
+            title_lines=2,
+        )
+        width, height = img.size
+        bottom_darkest = img.crop((0, height - 2, width, height)).convert("L").getextrema()[0]
+        self.assertEqual(bottom_darkest, 255, "value ink reached the bottom tile edge")
+
     def test_draw_entity_float_value(self):
         """Test drawing entity with float value."""
         img = _draw_entity_component(
