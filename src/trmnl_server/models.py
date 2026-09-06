@@ -45,13 +45,18 @@ class ComponentConfig(TypedDict, total=False):
     entity_name: str
     attribute: str
     friendly_name: str
-    type: Literal["history_graph", "entity", "calendar", "entities", "todo_list"]
+    type: Literal["history_graph", "entity", "calendar", "entities", "todo_list", "url"]
     arguments: CalendarArguments
     entities: list[EntityItem]
     large_display: bool
     columns: int
     hours: int
     zero_baseline: bool
+    url: str
+    json_path: str
+    regex: str
+    cache_ttl: int
+    timeout: int
 
 
 class DashboardConfig(TypedDict, total=False):

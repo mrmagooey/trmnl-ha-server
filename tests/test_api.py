@@ -167,7 +167,71 @@ class TestAPISimple(unittest.TestCase):
 
         handler._handle_static_png()
 
-        handler._serve_info_image.assert_called_once_with('Device ID: AA:BB:CC:DD:EE:FF')
+        handler._serve_info_image.assert_called_once_with(
+            'Device ID: AA:BB:CC:DD:EE:FF', 'AA:BB:CC:DD:EE:FF'
+        )
+
+    def _placeholder_size(self, config, device_id='AA:BB:CC:DD:EE:FF'):
+        """Serve /static/<id>/no_dashboard_visible.png and return the PNG's size."""
+        from PIL import Image
+
+        handler = self.create_handler(
+            f"/static/{device_id.replace(':', '-')}/no_dashboard_visible.png"
+        )
+        with mock.patch('trmnl_server.api.read_config', return_value=config):
+            self.assertTrue(handler._handle_static_png())
+        handler.wfile.seek(0)
+        with Image.open(BytesIO(handler.wfile.read())) as img:
+            return img.size
+
+    def test_placeholder_uses_device_rotation(self):
+        """The 'no dashboard scheduled' placeholder honours the device's rotate."""
+        config = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'rotate': 90}],
+            'dashboards': [],
+        }
+        self.assertEqual(self._placeholder_size(config), (480, 800))
+
+    def test_placeholder_rotated_180_keeps_landscape_size(self):
+        """A 180 rotation flips the content without changing the dimensions."""
+        config = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'rotate': 180}],
+            'dashboards': [],
+        }
+        self.assertEqual(self._placeholder_size(config), (800, 480))
+
+    def test_placeholder_falls_back_to_scheduled_dashboard_orientation(self):
+        """With no device rotate, the scheduled dashboards' portrait setting applies."""
+        config = {
+            'devices': [{
+                'id': 'AA:BB:CC:DD:EE:FF',
+                'schedule': [{'dashboard': 'morning'}, {'dashboard': 'evening'}],
+            }],
+            'dashboards': [
+                {'name': 'morning', 'portrait': True},
+                {'name': 'evening', 'rotate': 90},
+                {'name': 'other_device_dash'},
+            ],
+        }
+        self.assertEqual(self._placeholder_size(config), (480, 800))
+
+    def test_placeholder_not_rotated_when_dashboards_disagree(self):
+        """Mixed orientations have no right answer, so the placeholder stays as is."""
+        config = {
+            'devices': [{
+                'id': 'AA:BB:CC:DD:EE:FF',
+                'schedule': [{'dashboard': 'morning'}, {'dashboard': 'evening'}],
+            }],
+            'dashboards': [
+                {'name': 'morning', 'portrait': True},
+                {'name': 'evening'},
+            ],
+        }
+        self.assertEqual(self._placeholder_size(config), (800, 480))
+
+    def test_placeholder_unknown_device_is_not_rotated(self):
+        """An unknown device has no configured rotation to apply."""
+        self.assertEqual(self._placeholder_size({'devices': [], 'dashboards': []}), (800, 480))
 
     @mock.patch('trmnl_server.api.read_config')
     def test_static_png_device_not_in_schedule_returns_false(self, mock_read_config):
@@ -193,6 +257,30 @@ class TestAPISimple(unittest.TestCase):
 
         self.assertFalse(result)
         handler.logger.warning.assert_called()
+
+    @mock.patch('trmnl_server.api.render_dashboard_image')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_static_png_without_device_id_header_renders(self, mock_read_config, mock_render):
+        """A /static/<dashboard>.png request with no ID header renders instead of raising.
+
+        Regression: device_config was only assigned inside the `device_id is not
+        None` branch but read unconditionally when resolving the rotation, so an
+        ID-less request raised UnboundLocalError and the server returned a 500.
+        """
+        mock_read_config.return_value = {
+            'devices': [],
+            'dashboards': [{'name': 'morning', 'components': [{'type': 'entity'}]}],
+        }
+        mock_render.return_value = BytesIO(b'png-bytes')
+        handler = self.create_handler('/static/morning.png')
+        handler._send_png = mock.Mock(return_value=None)
+
+        result = handler._handle_static_png()
+
+        self.assertTrue(result)
+        handler._send_png.assert_called_once()
+        # No device, so no per-device rotation is applied.
+        self.assertIsNone(mock_render.call_args.args[3])
 
     @mock.patch.object(APICalls, '_handle_api_setup')
     def test_post_setup(self, mock_handle_setup):
@@ -253,6 +341,22 @@ class TestAPISimple(unittest.TestCase):
         handler.do_POST()
         self.assertEqual(handler._response_code, 500)
         handler.logger.exception.assert_called_once()
+
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=False)
+    @mock.patch('trmnl_server.api.read_config')
+    def test_api_display_placeholder_url_carries_device_id(self, mock_read_config, _vis):
+        """The placeholder URL embeds the device id so it can be rendered rotated."""
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'rotate': 90, 'schedule': [
+                {'dashboard': 'morning', 'start_time': '07:00', 'end_time': '08:00'},
+            ]}],
+            'dashboards': [],
+        }
+        handler = self.create_handler('/api/display', {'ID': 'AA:BB:CC:DD:EE:FF'})
+        handler._handle_api_display()
+        handler.wfile.seek(0)
+        response = json.loads(handler.wfile.read().decode())
+        self.assertIn('/static/AA-BB-CC-DD-EE-FF/no_dashboard_visible.png', response['image_url'])
 
     @mock.patch('trmnl_server.api._seconds_until_next_visible', return_value=4242)
     @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=False)

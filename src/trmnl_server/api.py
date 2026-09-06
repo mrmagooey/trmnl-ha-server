@@ -18,6 +18,8 @@ from .state import server_state
 from .components import (
     render_dashboard_image,
     _create_info_image,
+    _dashboard_rotation,
+    _rotate_image,
     eink_display,
     tile_components,
 )
@@ -135,7 +137,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
                             )
 
                 out_filename = "no_dashboard_visible.png"
-                image_url = f"{SERVER_NAME}/static/{out_filename}"
+                image_url = f"{SERVER_NAME}/static/{quote(device_id.replace(':', '-'), safe='')}/{out_filename}"
 
                 schedule: list[ScheduleEntry] = device_config.get('schedule', [])
                 visible_entries: list[ScheduleEntry] = [
@@ -241,11 +243,38 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(img_io.read())
 
-    def _serve_info_image(self, message: str) -> bool:
-        """Render and serve a plain text info image."""
+    def _device_rotation(self, device_id: str | None) -> int | None:
+        """Rotation to apply when there is no dashboard to take it from.
+
+        Device-level `rotate` wins; otherwise the rotation the device's
+        scheduled dashboards agree on, since a device configured only via
+        `portrait: true` on its dashboards is still physically rotated.
+        """
+        if device_id is None:
+            return None
+        config = read_config(self.logger)
+        device_config: DeviceConfig | None = find_device(config.get('devices', []), device_id)
+        if device_config is None:
+            return None
+        rotate: int | None = device_config.get('rotate')
+        if rotate is not None:
+            return rotate
+        scheduled: set[str | None] = {e.get('dashboard') for e in device_config.get('schedule', [])}
+        rotations: set[int | None] = {
+            _dashboard_rotation(d)
+            for d in config.get('dashboards', [])
+            if d.get('name') in scheduled
+        }
+        # ponytail: only when every scheduled dashboard agrees — mixed
+        # orientations have no right answer, so leave the placeholder as is.
+        return rotations.pop() if len(rotations) == 1 else None
+
+    def _serve_info_image(self, message: str, device_id: str | None = None) -> bool:
+        """Render and serve a plain text info image, rotated to suit the device."""
         from PIL import Image
 
         img: Image.Image = _create_info_image(message, 800, 480, self.logger)
+        img = _rotate_image(img, self._device_rotation(device_id), self.logger)
         temp_io = BytesIO()
         img.save(temp_io, 'PNG')
         temp_io.seek(0)
@@ -267,7 +296,7 @@ class APICalls(http.server.BaseHTTPRequestHandler):
         # /static/device_id/<id>.png — show the device its own ID
         if path.startswith('/static/device_id/'):
             path_device_id: str = path[len('/static/device_id/'):-4].replace('-', ':')
-            return self._serve_info_image(f"Device ID: {path_device_id}")
+            return self._serve_info_image(f"Device ID: {path_device_id}", path_device_id)
 
         # /static/<encoded_id>/<dashboard>.png — device ID embedded in path
         path_parts = path[len('/static/'):].split('/')
@@ -283,14 +312,15 @@ class APICalls(http.server.BaseHTTPRequestHandler):
             'device_not_found': f"Device {device_id or 'unknown'} not found.",
         }
         if dashboard_name in info_messages:
-            return self._serve_info_image(info_messages[dashboard_name])
+            return self._serve_info_image(info_messages[dashboard_name], device_id)
 
         config = read_config(self.logger)
         dashboards = config.get('dashboards', [])
 
+        device_config: DeviceConfig | None = None
         if device_id is not None:
             devices: list[DeviceConfig] = config.get('devices', [])
-            device_config: DeviceConfig | None = find_device(devices, device_id)
+            device_config = find_device(devices, device_id)
             label: str = self._device_label(device_config, device_id)
             if device_config is not None:
                 schedule = device_config.get('schedule', [])

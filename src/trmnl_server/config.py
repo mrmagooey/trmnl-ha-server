@@ -4,9 +4,11 @@ This module handles loading and validating configuration from YAML files,
 as well as dashboard visibility calculations.
 """
 
+import re
 from datetime import datetime, timedelta, time
 from os import environ
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -14,6 +16,7 @@ from .models import Config, DashboardConfig, DeviceConfig, ScheduleEntry
 
 if TYPE_CHECKING:
     from logging import Logger
+    from .models import ComponentConfig
 
 def _coerce_time(value: object) -> str:
     """Convert a time value to HH:MM string.
@@ -76,12 +79,56 @@ def _aligned_refresh_rate(
     return int(remaining)
 
 
-VALID_COMPONENT_TYPES = {"history_graph", "entity", "calendar", "entities", "todo_list"}
+VALID_COMPONENT_TYPES = {"history_graph", "entity", "calendar", "entities", "todo_list", "url"}
 VALID_DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 DAYS_MAP: dict[str, int] = {
     "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
     "Friday": 4, "Saturday": 5, "Sunday": 6,
 }
+
+
+def _validate_url_component(
+    component: "ComponentConfig",
+    tag: str,
+    index: int,
+    logger: "Logger",
+) -> None:
+    """Warn about invalid fields on a url component.
+
+    The url itself is never included in a warning: API keys are documented to
+    live in its query string and warnings are written to a persisted log file.
+    """
+    url = component.get("url")
+    if not url:
+        logger.warning("config: %s component[%d] type 'url' is missing 'url'", tag, index)
+    elif not isinstance(url, str):
+        logger.warning("config: %s component[%d] 'url' must be a string", tag, index)
+    else:
+        try:
+            scheme = urlsplit(url).scheme
+        except ValueError:
+            scheme = None
+        if scheme not in ("http", "https"):
+            logger.warning(
+                "config: %s component[%d] 'url' must be an http or https URL", tag, index
+            )
+
+    pattern = component.get("regex")
+    if pattern is not None:
+        try:
+            re.compile(pattern)
+        except (re.error, TypeError) as e:
+            logger.warning(
+                "config: %s component[%d] 'regex' does not compile: %s", tag, index, e
+            )
+
+    for key in ("cache_ttl", "timeout"):
+        value = component.get(key)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+            logger.warning(
+                "config: %s component[%d] '%s' must be a positive integer, got %r",
+                tag, index, key, value,
+            )
 
 
 def _validate_config(config: Config, logger: "Logger") -> None:
@@ -161,6 +208,8 @@ def _validate_config(config: Config, logger: "Logger") -> None:
                     "config: %s component[%d] unknown type %r. Valid types: %s",
                     tag, j, ctype, ', '.join(sorted(VALID_COMPONENT_TYPES))
                 )
+            if ctype == "url":
+                _validate_url_component(component, tag, j, logger)
 
 
 def read_config(logger: "Logger") -> Config:
