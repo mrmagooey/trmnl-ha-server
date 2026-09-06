@@ -142,6 +142,39 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'history_graph_stale_tail')
 
     @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_gap_then_recovery(self, mock_fetch_history):
+        """A gap ('unavailable') mid-series must render as a dashed hold across
+        the whole outage, not a smooth solid interpolation between the values
+        on either side of it -- the exact regression this plan fixes, pinned
+        pixel-for-pixel.
+
+        The readings are chosen so every behaviour is visible inside the plot
+        area rather than hidden on an axis: real readings on both sides of the
+        gap give solid segments, and the held value (20.0) sits a third of the
+        way up a 18.0-24.0 range instead of landing on the min or max where it
+        would be indistinguishable from the axis line.
+        """
+        mock_fetch_history.return_value = [[
+            {'state': '18.0', 'last_changed': '2024-01-15T06:00:00+00:00'},
+            {'state': '20.0', 'last_changed': '2024-01-15T08:00:00+00:00'},
+            {'state': 'unavailable', 'last_changed': '2024-01-15T09:00:00+00:00'},
+            {'state': '22.0', 'last_changed': '2024-01-15T13:00:00+00:00'},
+            {'state': '24.0', 'last_changed': '2024-01-15T15:00:00+00:00'},
+        ]]
+        dashboard = {
+            'name': 'gap_recovery',
+            'title': 'Gap Recovery',
+            'components': [
+                {'entity_name': 'sensor.temperature', 'friendly_name': 'Temperature',
+                 'type': 'history_graph', 'hours': 24},
+            ],
+        }
+        fixed_now = datetime(2024, 1, 15, 16, 0, tzinfo=timezone.utc)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+        assert_golden(img_io, 'history_graph_gap_then_recovery')
+
+    @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_history_graph_custom_hours(self, mock_fetch_history):
         """A 6h window with a recent reading renders a short tail."""
         mock_fetch_history.return_value = [[

@@ -258,6 +258,64 @@ class TestAPISimple(unittest.TestCase):
         self.assertFalse(result)
         handler.logger.warning.assert_called()
 
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_static_png_history_graph_gap_recovery_renders_end_to_end(
+        self, mock_read_config, mock_fetch_history,
+    ):
+        """End-to-end: GET a dashboard PNG for a history_graph whose entity
+        went 'unavailable' and recovered. The served image must reflect the
+        gap (differ from a control render with no gap), proving the fix is
+        wired through the full request path — config lookup, HA history
+        fetch, rendering, and e-ink conversion — not just the drawing
+        function in isolation."""
+        from datetime import datetime, timedelta, timezone
+        from PIL import Image, ImageChops
+
+        mock_read_config.return_value = {
+            'devices': [],
+            'dashboards': [{
+                'name': 'gap_dashboard',
+                'components': [
+                    {'entity_name': 'sensor.temperature', 'friendly_name': 'Temperature',
+                     'type': 'history_graph', 'hours': 24},
+                ],
+            }],
+        }
+        now = datetime.now(timezone.utc)
+        mock_fetch_history.return_value = [[
+            {'state': '18.0', 'last_changed': (now - timedelta(hours=20)).isoformat()},
+            {'state': 'unavailable', 'last_changed': (now - timedelta(hours=19)).isoformat()},
+            {'state': '25.0', 'last_changed': (now - timedelta(hours=10)).isoformat()},
+        ]]
+        handler = self.create_handler('/static/gap_dashboard.png')
+
+        result = handler._handle_static_png()
+
+        self.assertTrue(result)
+        handler.wfile.seek(0)
+        gap_img = Image.open(handler.wfile)
+        gap_img.load()
+        self.assertEqual(gap_img.size, (800, 480))
+        self.assertEqual(gap_img.mode, '1')  # eink_display converts to 1-bit b/w
+
+        # Control: same two real readings, no gap in between.
+        mock_fetch_history.return_value = [[
+            {'state': '18.0', 'last_changed': (now - timedelta(hours=20)).isoformat()},
+            {'state': '25.0', 'last_changed': (now - timedelta(hours=10)).isoformat()},
+        ]]
+        control_handler = self.create_handler('/static/gap_dashboard.png')
+        control_handler._handle_static_png()
+        control_handler.wfile.seek(0)
+        control_img = Image.open(control_handler.wfile)
+        control_img.load()
+
+        self.assertIsNotNone(
+            ImageChops.difference(gap_img, control_img).getbbox(),
+            "the served image must reflect the gap end-to-end, not render "
+            "identically to a no-gap control",
+        )
+
     @mock.patch('trmnl_server.api.render_dashboard_image')
     @mock.patch('trmnl_server.api.read_config')
     def test_static_png_without_device_id_header_renders(self, mock_read_config, mock_render):
