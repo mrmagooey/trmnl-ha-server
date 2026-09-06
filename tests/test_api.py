@@ -363,12 +363,17 @@ class TestAPISimple(unittest.TestCase):
                 f"gap_style {a!r} and {b!r} served identical images",
             )
 
-        # Unset and invalid both fall back to the default, still serving an image.
+        # An unset or unrecognised style must still serve a valid image rather
+        # than erroring the request. Deliberately not asserting pixel-equality
+        # with the 'hold' render: every render stamps the wall clock into the
+        # header, so two renders either side of a minute boundary differ for
+        # reasons that have nothing to do with gap_style. That the fallback
+        # resolves to 'hold' is pinned deterministically instead by
+        # TestResolveGapStyle and TestGapStyleDispatch in test_components.py.
         for style in (None, 'zigzag'):
-            self.assertIsNone(
-                ImageChops.difference(serve(style), served['hold']).getbbox(),
-                f"gap_style {style!r} should have fallen back to 'hold'",
-            )
+            img = serve(style)
+            self.assertEqual(img.size, (800, 480), f"gap_style {style!r}")
+            self.assertEqual(img.mode, '1', f"gap_style {style!r}")
 
     @mock.patch('trmnl_server.api.render_dashboard_image')
     @mock.patch('trmnl_server.api.read_config')
