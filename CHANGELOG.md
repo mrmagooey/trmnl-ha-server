@@ -2,11 +2,17 @@
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-09-06
+
 ### Added
 - New `gap_style` option on `history_graph` panels chooses how an outage is drawn: `hold` (the default — a dashed line holding the last known value flat across the gap), `break` (nothing drawn; the line stops and restarts), or `step` (the dashed hold plus a dashed vertical riser joining it to the recovered value, so the series reads as one connected step). Under `hold` the jump from the held value to the recovered one is left undrawn, which makes the line read as two detached pieces; `step` exists for anyone who would rather keep it visually connected, and `break` for anyone who would rather the graph draw nothing it did not measure. An entity that stops reporting and has not returned still gets its dotted tail to the right edge under every style.
 
+### Changed
+- Panel body text — entity-list rows, calendar events and todo items — now renders at one size within each panel, and at one size across all the panels sharing a layout row, matching how panel titles were already harmonised. Every row previously ran its own shrink-to-fit loop, so a single entity list could show four rows at 28, 15, 28 and 12pt with the gap between them tracking each row's own ink height. Sizes are now quantised to a ladder and a group takes the largest rung that fits all of its rows. Two consequences worth knowing: the size floor rises from roughly 10pt to 16pt, so an over-long row is truncated rather than shrunk to illegibility — entity rows truncate the name and keep the state value, which is the half worth reading — and a todo list is sized against every incomplete item rather than just the page on screen, so its text no longer changes size as it cycles pages.
+
 ### Fixed
 - A `history_graph` drew a smooth line straight through an outage. Readings Home Assistant reported as `unavailable` or `unknown` were silently discarded, so the remaining points were joined into one continuous polyline — asserting a trend across the gap that was never measured. Those states are now preserved as gap markers and the span is drawn dashed instead of interpolated.
+- A large entity value could be drawn past the bottom edge of its tile and clipped. The value's vertical centring used a fixed offset calibrated for the single-line title layout, where the title overlaps the value's region rather than sitting in its own band; once a title wrapped to two lines the space left over still admitted a very large font, and the offset — which does not scale with font size — under-corrected. The value's ink box is now centred in the space actually available to it and clamped to the tile, which also fixes a pre-existing single-line case that had gone unnoticed.
 
 ## [1.8.1] - 2026-08-29
 
