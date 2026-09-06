@@ -17,6 +17,9 @@ from trmnl_server.components import (
     eink_display,
     _draw_dashed_line,
     _build_draw_segments,
+    _resolve_gap_style,
+    GAP_STYLES,
+    GAP_STYLE_DEFAULT,
     _draw_graph_component,
     _draw_entity_component,
     _draw_calendar_component,
@@ -1255,6 +1258,178 @@ class TestTodoListPaginationRender(unittest.TestCase):
         img = _draw_todo_list_component("L", [], 400, 300, mock_logger)
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
+
+
+class TestGapStyles(unittest.TestCase):
+    """The three ways a panel may depict an outage between two readings."""
+
+    @staticmethod
+    def _points():
+        from datetime import datetime
+        def T(h):
+            return datetime(2025, 1, 15, h, 0)
+        # 20.0 at 08:00, outage, recovers at 22.0 at 13:00, last reading 15:00.
+        return [(T(6), 18.0), (T(8), 20.0), (T(9), None),
+                (T(13), 22.0), (T(15), 24.0)], T(16)
+
+    def test_default_is_hold(self):
+        self.assertEqual(GAP_STYLE_DEFAULT, 'hold')
+        self.assertEqual(set(GAP_STYLES), {'hold', 'break', 'step'})
+
+    def test_omitting_the_style_matches_hold(self):
+        """The default must be byte-identical to the pre-option behaviour."""
+        points, end = self._points()
+        self.assertEqual(
+            _build_draw_segments(points, end),
+            _build_draw_segments(points, end, 'hold'),
+        )
+
+    def test_hold_spans_the_outage_flat_without_a_riser(self):
+        points, end = self._points()
+        segs = _build_draw_segments(points, end, 'hold')
+        gap = [s for s in segs if s[0].hour == 8 and s[2].hour == 13]
+        self.assertEqual(len(gap), 1)
+        t0, v0, t1, v1, dashed = gap[0]
+        self.assertTrue(dashed)
+        self.assertEqual((v0, v1), (20.0, 20.0), "the hold must be flat")
+        self.assertFalse(
+            [s for s in segs if s[0] == s[2]], "hold must not emit a riser"
+        )
+
+    def test_break_omits_the_outage_entirely(self):
+        points, end = self._points()
+        segs = _build_draw_segments(points, end, 'break')
+        self.assertEqual(
+            [], [s for s in segs if s[0].hour == 8 and s[2].hour == 13],
+            "break must draw nothing across the outage",
+        )
+        # The real readings either side are untouched.
+        self.assertIn((points[0][0], 18.0, points[1][0], 20.0, False), segs)
+        self.assertIn((points[3][0], 22.0, points[4][0], 24.0, False), segs)
+
+    def test_step_adds_a_vertical_riser_at_recovery(self):
+        points, end = self._points()
+        segs = _build_draw_segments(points, end, 'step')
+        risers = [s for s in segs if s[0] == s[2]]
+        self.assertEqual(len(risers), 1)
+        t0, v0, t1, v1, dashed = risers[0]
+        self.assertEqual(t0.hour, 13, "riser sits at the recovery instant")
+        self.assertEqual((v0, v1), (20.0, 22.0), "riser joins held to recovered")
+        self.assertTrue(dashed, "the riser is not an observed transition")
+
+    def test_step_is_hold_plus_the_riser(self):
+        """step must not otherwise differ from hold."""
+        points, end = self._points()
+        hold = _build_draw_segments(points, end, 'hold')
+        step = _build_draw_segments(points, end, 'step')
+        self.assertEqual(hold, [s for s in step if s[0] != s[2]])
+
+    def test_step_omits_the_riser_when_the_value_is_unchanged(self):
+        """Recovering at the held value needs no riser; a zero-length line."""
+        from datetime import datetime
+        def T(h):
+            return datetime(2025, 1, 15, h, 0)
+        points = [(T(8), 20.0), (T(9), None), (T(13), 20.0)]
+        segs = _build_draw_segments(points, T(13), 'step')
+        self.assertEqual([], [s for s in segs if s[0] == s[2]])
+
+    def test_every_style_keeps_the_trailing_stale_tail(self):
+        """gap_style selects between outage depictions, not the live tail."""
+        points, end = self._points()
+        for style in GAP_STYLES:
+            tail = [s for s in _build_draw_segments(points, end, style)
+                    if s[2] == end]
+            self.assertEqual(len(tail), 1, style)
+            self.assertTrue(tail[0][4], f"{style}: tail must stay dashed")
+            self.assertEqual((tail[0][1], tail[0][3]), (24.0, 24.0), style)
+
+    def test_every_style_ignores_a_gap_before_the_first_reading(self):
+        """Nothing to hold forward from, so nothing is drawn."""
+        from datetime import datetime
+        def T(h):
+            return datetime(2025, 1, 15, h, 0)
+        points = [(T(8), None), (T(9), 20.0)]
+        for style in GAP_STYLES:
+            self.assertEqual(
+                [], _build_draw_segments(points, T(9), style), style,
+            )
+
+    def test_unknown_style_falls_back_to_the_default(self):
+        points, end = self._points()
+        self.assertEqual(
+            _build_draw_segments(points, end, 'nonsense'),
+            _build_draw_segments(points, end, GAP_STYLE_DEFAULT),
+        )
+
+
+class TestResolveGapStyle(unittest.TestCase):
+    """Config validation for the gap_style option."""
+
+    def test_absent_gives_the_default(self):
+        self.assertEqual(_resolve_gap_style({}, mock_logger), GAP_STYLE_DEFAULT)
+
+    def test_each_valid_style_passes_through(self):
+        for style in GAP_STYLES:
+            self.assertEqual(
+                _resolve_gap_style({'gap_style': style}, mock_logger), style,
+            )
+
+    def test_invalid_style_warns_and_defaults(self):
+        logger = mock.Mock(spec=logging.Logger)
+        self.assertEqual(
+            _resolve_gap_style({'gap_style': 'dotted'}, logger), GAP_STYLE_DEFAULT,
+        )
+        self.assertTrue(logger.warning.called, "an invalid style must warn")
+
+    def test_non_string_style_warns_and_defaults(self):
+        logger = mock.Mock(spec=logging.Logger)
+        self.assertEqual(_resolve_gap_style({'gap_style': 3}, logger),
+                         GAP_STYLE_DEFAULT)
+        self.assertTrue(logger.warning.called)
+
+
+class TestGapStyleDispatch(unittest.TestCase):
+    """Integration: gap_style flows from config through dispatch to render."""
+
+    HISTORY = [[
+        {'state': '20.0', 'last_changed': '2024-01-15T08:00:00+00:00'},
+        {'state': 'unavailable', 'last_changed': '2024-01-15T09:00:00+00:00'},
+        {'state': '22.0', 'last_changed': '2024-01-15T10:00:00+00:00'},
+    ]]
+
+    def _forwarded_style(self, component_extra):
+        from datetime import datetime, timezone
+        with mock.patch('trmnl_server.components._draw_graph_component') as mock_draw:
+            mock_draw.return_value = Image.new('RGB', (10, 10), 'white')
+            with mock.patch('trmnl_server.hass_client._fetch_history') as mock_fetch:
+                mock_fetch.return_value = self.HISTORY
+                dashboard = {
+                    'name': 'g',
+                    'components': [{
+                        'entity_name': 'sensor.t',
+                        'friendly_name': 'Temperature',
+                        'type': 'history_graph',
+                        **component_extra,
+                    }],
+                }
+                render_dashboard_image(
+                    dashboard, mock_logger,
+                    now=datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc),
+                )
+        self.assertTrue(mock_draw.called)
+        _, kwargs = mock_draw.call_args
+        return kwargs.get('gap_style')
+
+    def test_configured_style_reaches_the_renderer(self):
+        for style in GAP_STYLES:
+            self.assertEqual(self._forwarded_style({'gap_style': style}), style)
+
+    def test_absent_style_defaults(self):
+        self.assertEqual(self._forwarded_style({}), GAP_STYLE_DEFAULT)
+
+    def test_invalid_style_defaults_rather_than_reaching_the_renderer(self):
+        self.assertEqual(self._forwarded_style({'gap_style': 'zigzag'}),
+                         GAP_STYLE_DEFAULT)
 
 
 class TestZeroBaselineDispatch(unittest.TestCase):

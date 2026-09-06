@@ -32,6 +32,10 @@ TITLE_LINE_SPACING: int = 4
 TITLE_BAND_GAP: int = 4
 # A title band may not consume more than this share of its tile's height.
 TITLE_BAND_MAX_PERCENT: int = 45
+# How a history graph depicts an outage between two real readings. See
+# _build_draw_segments for what each one draws.
+GAP_STYLES: tuple[str, ...] = ('hold', 'break', 'step')
+GAP_STYLE_DEFAULT: str = 'hold'
 # Body text (entity-list rows, calendar events, todo items) is quantised to
 # these sizes for the same reason titles are: every row in a panel lands on one
 # rung instead of each row shrinking to its own arbitrary fit, which otherwise
@@ -630,29 +634,69 @@ def _draw_dashed_line(
         pos += period
 
 
+def _resolve_gap_style(component: "ComponentConfig", logger: "Logger") -> str:
+    """Reads a history graph's gap_style setting, warning on an invalid one.
+
+    Args:
+        component: The component's configuration
+        logger: Logger instance
+
+    Returns:
+        A member of GAP_STYLES; GAP_STYLE_DEFAULT when unset or invalid
+    """
+    raw: object = component.get('gap_style', GAP_STYLE_DEFAULT)
+    if raw in GAP_STYLES:
+        return str(raw)
+    logger.warning(
+        "Invalid 'gap_style' (%r) for %s; expected one of %s. Defaulting to %r.",
+        raw, component.get('friendly_name'), ", ".join(GAP_STYLES), GAP_STYLE_DEFAULT,
+    )
+    return GAP_STYLE_DEFAULT
+
+
 def _build_draw_segments(
     data_points: list[tuple[datetime, float | None]],
     window_end: datetime,
+    gap_style: str = GAP_STYLE_DEFAULT,
 ) -> list[tuple[datetime, float, datetime, float, bool]]:
     """Splits history points into contiguous solid/dashed line segments.
 
-    Consecutive real readings are joined with a solid segment. Any gap
-    between two real readings — a None marker from an 'unavailable'/'unknown'
-    state, or simply no reading yet between the last real one and
-    `window_end` — is rendered as a dashed segment holding the last known
-    value flat, rather than interpolating a value that was never observed.
+    Consecutive real readings are joined with a solid segment. A gap between
+    two real readings — a None marker from an 'unavailable'/'unknown' state —
+    is never interpolated across, because that would draw a trend nobody
+    observed; `gap_style` chooses how it is depicted instead:
+
+    - 'hold': a dashed segment holding the last known value flat up to the
+      recovery instant. The jump from the held value to the recovered one is
+      left undrawn, so the line reads as two pieces.
+    - 'break': nothing at all. The line simply stops and restarts.
+    - 'step': as 'hold', plus a dashed vertical riser at the recovery instant
+      joining the held value to the recovered one, so the series stays
+      visually connected as a step.
+
     A gap before the very first real reading has nothing to hold forward
-    from, so it produces no segment.
+    from, so it produces no segment under any style.
+
+    The trailing hold from the last real reading to `window_end` — an entity
+    that has stopped reporting rather than a bounded outage — is drawn dashed
+    under every style. It is a documented behaviour of its own and not what
+    `gap_style` selects between.
 
     Args:
         data_points: (timestamp, value) tuples sorted by timestamp; value
             is None to mark a known data gap.
         window_end: Right edge of the plotted time window ("now").
+        gap_style: One of GAP_STYLES. Unknown values fall back to the
+            default; callers validate and warn.
 
     Returns:
-        (t0, v0, t1, v1, dashed) segments in chronological order. Dashed
-        segments always have v0 == v1 (a flat hold).
+        (t0, v0, t1, v1, dashed) segments in chronological order. Every
+        dashed segment is a flat hold (v0 == v1) except the 'step' riser,
+        which is vertical (t0 == t1).
     """
+    if gap_style not in GAP_STYLES:
+        gap_style = GAP_STYLE_DEFAULT
+
     segments: list[tuple[datetime, float, datetime, float, bool]] = []
     last_real: tuple[datetime, float] | None = None
     gap_pending: bool = False
@@ -664,7 +708,12 @@ def _build_draw_segments(
         if last_real is not None:
             t0, v0 = last_real
             if gap_pending:
-                segments.append((t0, v0, t, v0, True))
+                if gap_style != 'break':
+                    segments.append((t0, v0, t, v0, True))
+                if gap_style == 'step' and v != v0:
+                    # Zero-width in time: joins the held value to the
+                    # recovered one at the instant reporting resumed.
+                    segments.append((t, v0, t, v, True))
             else:
                 segments.append((t0, v0, t, v, False))
         last_real = (t, v)
@@ -687,6 +736,7 @@ def _draw_graph_component(
     window_start: datetime,
     window_end: datetime,
     zero_baseline: bool = False,
+    gap_style: str = GAP_STYLE_DEFAULT,
     title_font_size: int | None = None,
     title_lines: int = 1,
 ) -> Image.Image:
@@ -702,6 +752,8 @@ def _draw_graph_component(
         logger: Logger instance
         window_start: Start of the fixed time window (x-axis left bound).
         window_end: End of the fixed time window (x-axis right bound, typically "now").
+        gap_style: How to depict an outage between two real readings; one
+            of GAP_STYLES. See _build_draw_segments.
         zero_baseline: When True, include 0 in the value range and draw a thin
             horizontal zero reference line with a labeled 0 y-tick.
         title_font_size: Title size resolved by the caller. When None, the
@@ -936,7 +988,9 @@ def _draw_graph_component(
     # Draw data line: solid between consecutive real readings, dashed
     # (holding the last known value flat) across any gap — including the
     # live tail from the last reading forward to window_end ("now").
-    for seg_t0, seg_v0, seg_t1, seg_v1, dashed in _build_draw_segments(data_points, max_time):
+    for seg_t0, seg_v0, seg_t1, seg_v1, dashed in _build_draw_segments(
+        data_points, max_time, gap_style,
+    ):
         p0 = to_coords(seg_t0, seg_v0)
         p1 = to_coords(seg_t1, seg_v1)
         if dashed:
@@ -1677,6 +1731,7 @@ def tile_components(
                 window_start=window_start_val,
                 window_end=window_end_val,
                 zero_baseline=bool(render_data.get('zero_baseline', False)),
+                gap_style=str(render_data.get('gap_style', GAP_STYLE_DEFAULT)),
                 title_font_size=title_font_size,
                 title_lines=title_lines,
             )
@@ -1897,6 +1952,7 @@ def render_dashboard_image(
         graph_window: tuple[datetime, datetime] | None = None
         todo_meta: tuple[int, str] | None = None
         graph_zero_baseline: bool = False
+        graph_gap_style: str = GAP_STYLE_DEFAULT
 
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
@@ -1913,6 +1969,7 @@ def render_dashboard_image(
             history = _fetch_history(entity_name, logger, start=window_start, end=window_end)
             data = _process_history_to_points(history)
             graph_zero_baseline = bool(component.get('zero_baseline', False))
+            graph_gap_style = _resolve_gap_style(component, logger)
         elif component_type == 'entity':
             entity_name = component.get('entity_name', '')
             attribute = component.get('attribute')
@@ -1979,6 +2036,8 @@ def render_dashboard_image(
             render_entry['window_end'] = graph_window[1]
         if graph_zero_baseline:
             render_entry['zero_baseline'] = True
+        if graph_gap_style != GAP_STYLE_DEFAULT:
+            render_entry['gap_style'] = graph_gap_style
         if todo_meta is not None:
             render_entry['columns'] = todo_meta[0]
             render_entry['todo_key'] = todo_meta[1]

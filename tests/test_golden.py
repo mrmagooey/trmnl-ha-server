@@ -174,6 +174,67 @@ class TestGoldenImages(unittest.TestCase):
             img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
         assert_golden(img_io, 'history_graph_gap_then_recovery')
 
+    # Same fixture as test_history_graph_gap_then_recovery (which pins the
+    # default 'hold'), so the three goldens differ only by gap_style and can be
+    # compared against each other by eye.
+    GAP_HISTORY = [[
+        {'state': '18.0', 'last_changed': '2024-01-15T06:00:00+00:00'},
+        {'state': '20.0', 'last_changed': '2024-01-15T08:00:00+00:00'},
+        {'state': 'unavailable', 'last_changed': '2024-01-15T09:00:00+00:00'},
+        {'state': '22.0', 'last_changed': '2024-01-15T13:00:00+00:00'},
+        {'state': '24.0', 'last_changed': '2024-01-15T15:00:00+00:00'},
+    ]]
+
+    def _render_gap_style(self, style):
+        dashboard = {
+            'name': 'gap_recovery',
+            'title': 'Gap Recovery',
+            'components': [
+                {'entity_name': 'sensor.temperature', 'friendly_name': 'Temperature',
+                 'type': 'history_graph', 'hours': 24, 'gap_style': style},
+            ],
+        }
+        fixed_now = datetime(2024, 1, 15, 16, 0, tzinfo=timezone.utc)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            return render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_gap_style_break(self, mock_fetch_history):
+        """gap_style: break -- the line stops at the outage and restarts after
+        it, with nothing drawn across the span at all."""
+        mock_fetch_history.return_value = self.GAP_HISTORY
+        assert_golden(self._render_gap_style('break'), 'history_graph_gap_break')
+
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_gap_style_step(self, mock_fetch_history):
+        """gap_style: step -- the dashed hold across the outage is joined to the
+        recovered value by a dashed vertical riser, so the series reads as one
+        connected step rather than two detached pieces."""
+        mock_fetch_history.return_value = self.GAP_HISTORY
+        assert_golden(self._render_gap_style('step'), 'history_graph_gap_step')
+
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_gap_styles_all_render_differently(self, mock_fetch_history):
+        """Guards the goldens against being regenerated into agreement.
+
+        assert_golden silently creates a missing reference, so three goldens
+        could drift into identical images without any test noticing. This pins
+        the thing that actually matters: the styles are distinguishable.
+        """
+        mock_fetch_history.return_value = self.GAP_HISTORY
+        rendered = {}
+        for style in ('hold', 'break', 'step'):
+            img_io = self._render_gap_style(style)
+            img_io.seek(0)
+            img = Image.open(img_io)
+            img.load()
+            rendered[style] = img
+        for a, b in (('hold', 'break'), ('hold', 'step'), ('break', 'step')):
+            self.assertIsNotNone(
+                ImageChops.difference(rendered[a], rendered[b]).getbbox(),
+                f"gap_style {a!r} and {b!r} rendered identically",
+            )
+
     @mock.patch('trmnl_server.hass_client._fetch_history')
     def test_history_graph_custom_hours(self, mock_fetch_history):
         """A 6h window with a recent reading renders a short tail."""

@@ -316,6 +316,60 @@ class TestAPISimple(unittest.TestCase):
             "identically to a no-gap control",
         )
 
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_static_png_gap_style_changes_the_served_image(
+        self, mock_read_config, mock_fetch_history,
+    ):
+        """End-to-end: the panel's gap_style option reaches the served PNG.
+
+        Each of the three styles must produce a distinguishable image through
+        the full request path, and an unrecognised style must fall back to the
+        default rather than erroring the request.
+        """
+        from datetime import datetime, timedelta, timezone
+        from PIL import Image, ImageChops
+
+        now = datetime.now(timezone.utc)
+        mock_fetch_history.return_value = [[
+            {'state': '20.0', 'last_changed': (now - timedelta(hours=20)).isoformat()},
+            {'state': 'unavailable', 'last_changed': (now - timedelta(hours=19)).isoformat()},
+            {'state': '22.0', 'last_changed': (now - timedelta(hours=10)).isoformat()},
+        ]]
+
+        def serve(style):
+            component = {
+                'entity_name': 'sensor.temperature',
+                'friendly_name': 'Temperature',
+                'type': 'history_graph', 'hours': 24,
+            }
+            if style is not None:
+                component['gap_style'] = style
+            mock_read_config.return_value = {
+                'devices': [],
+                'dashboards': [{'name': 'gap_dashboard', 'components': [component]}],
+            }
+            handler = self.create_handler('/static/gap_dashboard.png')
+            self.assertTrue(handler._handle_static_png())
+            handler.wfile.seek(0)
+            img = Image.open(handler.wfile)
+            img.load()
+            return img
+
+        served = {style: serve(style) for style in ('hold', 'break', 'step')}
+        for a, b in (('hold', 'break'), ('hold', 'step'), ('break', 'step')):
+            self.assertIsNotNone(
+                ImageChops.difference(served[a], served[b]).getbbox(),
+                f"gap_style {a!r} and {b!r} served identical images",
+            )
+
+        # Unset and invalid both fall back to the default, still serving an image.
+        for style in (None, 'zigzag'):
+            self.assertIsNone(
+                ImageChops.difference(serve(style), served['hold']).getbbox(),
+                f"gap_style {style!r} should have fallen back to 'hold'",
+            )
+
     @mock.patch('trmnl_server.api.render_dashboard_image')
     @mock.patch('trmnl_server.api.read_config')
     def test_static_png_without_device_id_header_renders(self, mock_read_config, mock_render):

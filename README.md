@@ -136,6 +136,23 @@ If `firmware:` is omitted, `/api/display` always returns `update_firmware: false
 Set `large_display: true` on one component to give it the top half of the screen; remaining components are tiled along the bottom.
 
 - `hours` (history_graph only, optional): width of the rolling time window in hours. Default `24`. The x-axis always ends at the current time; when an entity stops reporting, its last value is held forward as a dotted line.
+- `gap_style` (history_graph only, optional): how to draw an outage — a stretch where Home Assistant reported the entity as `unavailable` or `unknown` between two real readings. The graph never interpolates straight across one, since that would show a trend nobody measured. Default `hold`.
+
+  | Value | Drawn as |
+  |-------|----------|
+  | `hold` | A dashed line holding the last known value flat across the outage. The jump to the recovered value is left undrawn, so the line reads as two pieces. |
+  | `break` | Nothing at all. The line stops when the entity goes away and restarts when it returns. |
+  | `step` | As `hold`, plus a dashed vertical riser joining the held value to the recovered one, so the series stays connected as a step. |
+
+  This setting covers outages *between* readings. An entity that stops reporting and has not come back still has its last value held forward as a dotted tail to the right edge under every style.
+
+  ```yaml
+  - entity_name: "sensor.outdoor_temperature"
+    friendly_name: "Outdoor"
+    type: "history_graph"
+    gap_style: "step"
+  ```
+
 - `zero_baseline` (history_graph only, optional): when `true`, the graph includes 0 in its value range and draws a thin horizontal reference line at 0, with a labeled `0` on the y-axis. Use this for values that go both positive and negative (e.g. net power import/export) so you can see at a glance which side of zero the line is on. Default `false`.
 - `columns` (todo_list only, optional): number of columns to lay items into. Default `1`. When incomplete items overflow the card, it paginates — cycling to the next page on each refresh — and shows the item count plus a page indicator.
 - **`attribute`** (`entity` and `entities`, optional): display a specific Home Assistant entity *attribute* instead of the entity state. Omit it to show the state (the default). For `entities`, set `attribute` per row. A missing attribute renders blank.

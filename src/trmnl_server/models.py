@@ -52,6 +52,7 @@ class ComponentConfig(TypedDict, total=False):
     columns: int
     hours: int
     zero_baseline: bool
+    gap_style: Literal["hold", "break", "step"]
     url: str
     json_path: str
     regex: str
@@ -162,6 +163,7 @@ class RenderData(TypedDict, total=False):
     columns: NotRequired[int]
     todo_key: NotRequired[str]
     zero_baseline: NotRequired[bool]
+    gap_style: NotRequired[str]
 
 
 class APIDisplayResponse(TypedDict):
