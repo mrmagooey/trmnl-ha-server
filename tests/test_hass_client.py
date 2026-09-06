@@ -86,10 +86,50 @@ class TestProcessHistoryToPoints(unittest.TestCase):
             {'state': '22.0', 'last_changed': '2025-01-15T12:00:00+00:00'},
             {'state': '21.5', 'last_changed': '2025-01-15T10:00:00+00:00'},
         ]]
-        
+
         result = _process_history_to_points(history)
-        
+
         self.assertEqual(result[0][1], 21.5)  # Earlier value first
+        self.assertEqual(result[1][1], 22.0)
+
+    def test_unavailable_state_becomes_gap_marker(self):
+        """An 'unavailable' state produces a (timestamp, None) gap marker instead of being dropped."""
+        history = [[
+            {'state': '21.5', 'last_changed': '2025-01-15T10:00:00+00:00'},
+            {'state': 'unavailable', 'last_changed': '2025-01-15T11:00:00+00:00'},
+            {'state': '22.0', 'last_changed': '2025-01-15T12:00:00+00:00'},
+        ]]
+
+        result = _process_history_to_points(history)
+
+        self.assertEqual(len(result), 3)
+        self.assertIsNone(result[1][1])
+        self.assertEqual(result[1][0], datetime.fromisoformat('2025-01-15T11:00:00+00:00'))
+
+    def test_unknown_state_becomes_gap_marker(self):
+        """An 'unknown' state produces a (timestamp, None) gap marker instead of being dropped."""
+        history = [[
+            {'state': '21.5', 'last_changed': '2025-01-15T10:00:00+00:00'},
+            {'state': 'unknown', 'last_changed': '2025-01-15T11:00:00+00:00'},
+        ]]
+
+        result = _process_history_to_points(history)
+
+        self.assertEqual(len(result), 2)
+        self.assertIsNone(result[1][1])
+
+    def test_genuinely_invalid_state_still_dropped(self):
+        """A state that is neither numeric nor a known HA gap sentinel is still dropped entirely."""
+        history = [[
+            {'state': '21.5', 'last_changed': '2025-01-15T10:00:00+00:00'},
+            {'state': 'garbled-nonsense', 'last_changed': '2025-01-15T11:00:00+00:00'},
+            {'state': '22.0', 'last_changed': '2025-01-15T12:00:00+00:00'},
+        ]]
+
+        result = _process_history_to_points(history)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0][1], 21.5)
         self.assertEqual(result[1][1], 22.0)
 
 

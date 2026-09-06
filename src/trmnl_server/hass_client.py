@@ -279,27 +279,39 @@ def _fetch_todo_list(
         return []
 
 
+_HA_GAP_STATES: frozenset[str] = frozenset({'unavailable', 'unknown'})
+
+
 def _process_history_to_points(
     history: list[list[HistoryPoint]] | None,
-) -> list[tuple[datetime, float]]:
+) -> list[tuple[datetime, float | None]]:
     """Processes raw history data into a list of (timestamp, value) tuples.
-    
+
+    A value of None marks a point where Home Assistant reported the entity
+    as 'unavailable' or 'unknown' — a genuine data gap — as opposed to a
+    state that simply failed to parse as a number, which is dropped as
+    before.
+
     Args:
         history: Raw history data from Home Assistant
-        
+
     Returns:
-        List of (datetime, float) tuples sorted by timestamp
+        List of (datetime, value) tuples sorted by timestamp; value is
+        None where the entity was reported unavailable/unknown at that time.
     """
-    data_points: list[tuple[datetime, float]] = []
+    data_points: list[tuple[datetime, float | None]] = []
     if not history or not history[0]:
         return data_points
 
     for state in history[0]:
         try:
-            value: float = float(state['state'])
             timestamp: datetime = datetime.fromisoformat(state['last_changed'])
+            if state['state'] in _HA_GAP_STATES:
+                data_points.append((timestamp, None))
+                continue
+            value: float = float(state['state'])
             data_points.append((timestamp, value))
         except (ValueError, TypeError):
             continue
-    data_points.sort()
+    data_points.sort(key=lambda point: point[0])
     return data_points

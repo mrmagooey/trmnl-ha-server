@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- New `gap_style` option on `history_graph` panels chooses how an outage is drawn: `hold` (the default — a dashed line holding the last known value flat across the gap), `break` (nothing drawn; the line stops and restarts), or `step` (the dashed hold plus a dashed vertical riser joining it to the recovered value, so the series reads as one connected step). Under `hold` the jump from the held value to the recovered one is left undrawn, which makes the line read as two detached pieces; `step` exists for anyone who would rather keep it visually connected, and `break` for anyone who would rather the graph draw nothing it did not measure. An entity that stops reporting and has not returned still gets its dotted tail to the right edge under every style.
+
+### Fixed
+- A `history_graph` drew a smooth line straight through an outage. Readings Home Assistant reported as `unavailable` or `unknown` were silently discarded, so the remaining points were joined into one continuous polyline — asserting a trend across the gap that was never measured. Those states are now preserved as gap markers and the span is drawn dashed instead of interpolated.
+
 ## [1.8.1] - 2026-08-29
 
 ### Fixed
