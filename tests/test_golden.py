@@ -291,6 +291,52 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'two_line_title_harmonisation')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_entity_value_stays_within_tile_bounds(self, mock_get_entity_state):
+        """A 3x3 grid of short tiles: no entity value may bleed past its tile.
+
+        Regression test for the value's vertical centring, which used a fixed
+        offset tuned for the single-line title layout. On short tiles the
+        resolved value font is large enough that the offset under-corrects,
+        pushing the value's ink past the tile's (and here, the image's)
+        bottom edge -- most visibly in the bottom row.
+        """
+        mock_get_entity_state.return_value = {'state': '21.5', 'attributes': {}}
+        names = [
+            'Kitchen', 'Hallway', 'Study',
+            'Bedroom', 'Office', 'Garage',
+            'Back Garden Soil Moisture Level', 'Attic', 'Basement',
+        ]
+        dashboard = {
+            'name': 'grid9',
+            'title': 'Grid',
+            'components': [
+                {'entity_name': f'sensor.{i}', 'friendly_name': name, 'type': 'entity'}
+                for i, name in enumerate(names)
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+
+        img_io.seek(0)
+        rendered = Image.open(img_io)
+        rendered.load()
+
+        # Bottom row's tiles: 3 cols x 266px, tile bottom at y=478 (WIDTH=800,
+        # HEIGHT=480, TOP_MARGIN=40, 3x3 grid -> tile_height = (480-40)//3 = 146).
+        tile_width = 800 // 3
+        tile_bottom = 40 + 146 * 3
+        for col in range(3):
+            strip = rendered.crop(
+                (col * tile_width, tile_bottom - 2, (col + 1) * tile_width, tile_bottom)
+            ).convert("L")
+            self.assertEqual(
+                strip.getextrema()[0], 255,
+                f"column {col}'s value ink reached its tile's bottom edge",
+            )
+
+        assert_golden(img_io, 'entity_value_bounds_grid')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     @mock.patch('trmnl_server.state.server_state')
     def test_entity_dashboard_with_battery(self, mock_state, mock_get_entity_state):
         """Entity dashboard with battery percentage in top-right."""
@@ -350,6 +396,96 @@ class TestGoldenImages(unittest.TestCase):
         with mock.patch('datetime.datetime', mock_datetime()):
             img_io = render_dashboard_image(dashboard, mock_logger)
         assert_golden(img_io, 'entity_attribute_dashboard')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_body_text_size_harmonisation(self, mock_fetch_calendar, mock_get_entity_state):
+        """List rows of very different lengths must all render at one size.
+
+        Each row used to run its own shrink-to-fit loop, so a single panel
+        could show four rows at four different sizes with the gap between them
+        tracking each row's own ink height. Both panels here mix short rows
+        with rows far too long for the tile, which is exactly what pulled the
+        sizes apart.
+        """
+        mock_get_entity_state.side_effect = lambda name, logger: {
+            'sensor.a': {'state': '21.5', 'attributes': {}},
+            'sensor.b': {'state': '19.8', 'attributes': {}},
+            'sensor.c': {'state': '20.0', 'attributes': {}},
+            'sensor.d': {'state': '12.34', 'attributes': {}},
+        }[name]
+        mock_fetch_calendar.return_value = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
+            {'summary': 'Quarterly planning review with the wider platform team',
+             'start': {'dateTime': '2024-01-02T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
+            {'summary': 'Dentist', 'start': {'date': '2024-01-03'}},
+        ]
+        dashboard = {
+            'name': 'bodysize',
+            'title': 'Body Size',
+            'components': [
+                {
+                    'type': 'entities',
+                    'friendly_name': 'Sensors',
+                    'entities': [
+                        {'entity_name': 'sensor.a', 'friendly_name': 'Kitchen'},
+                        {'entity_name': 'sensor.b',
+                         'friendly_name': 'Living Room Temperature'},
+                        {'entity_name': 'sensor.c', 'friendly_name': 'Hall'},
+                        {'entity_name': 'sensor.d',
+                         'friendly_name': 'Back Garden Soil Moisture Sensor'},
+                    ],
+                },
+                {
+                    'type': 'calendar',
+                    'friendly_name': 'Calendar',
+                    'entity_name': 'calendar.home',
+                    'arguments': {'calendar_id': 'calendar.home'},
+                },
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'body_text_size_harmonisation')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    def test_row_body_text_size_harmonisation(self, mock_get_entity_state):
+        """Four entity-list panels in a 2x2 grid: each row settles on one size.
+
+        The top-left panel has a row far too long for its tile, so its
+        row-mate drops to the same rung. The bottom row has no long rows and
+        keeps the top rung -- harmonisation is per layout row, exactly as it
+        is for titles.
+        """
+        mock_get_entity_state.side_effect = lambda name, logger: {
+            'sensor.short': {'state': '20.0', 'attributes': {}},
+            'sensor.long': {'state': '12.34', 'attributes': {}},
+        }[name]
+        short_rows = [
+            {'entity_name': 'sensor.short', 'friendly_name': 'Hall'},
+            {'entity_name': 'sensor.short', 'friendly_name': 'Attic'},
+        ]
+        long_rows = [
+            {'entity_name': 'sensor.short', 'friendly_name': 'Kitchen'},
+            {'entity_name': 'sensor.long',
+             'friendly_name': 'Back Garden Soil Moisture Sensor'},
+        ]
+        dashboard = {
+            'name': 'rowbody',
+            'title': 'Row Body',
+            'components': [
+                {'type': 'entities', 'friendly_name': 'Sensors', 'entities': long_rows},
+                {'type': 'entities', 'friendly_name': 'Upstairs', 'entities': short_rows},
+                {'type': 'entities', 'friendly_name': 'Garage', 'entities': short_rows},
+                {'type': 'entities', 'friendly_name': 'Shed', 'entities': short_rows},
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'row_body_text_size_harmonisation')
 
     @mock.patch('trmnl_server.hass_client._fetch_todo_list')
     def test_todo_two_column_overflow(self, mock_fetch_todo):
