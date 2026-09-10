@@ -245,6 +245,7 @@ def _body_floor(panel_type: str) -> int:
 def _panel_body_fit(
     render_data: "RenderData",
     tile_width: int,
+    tile_height: int,
     logger: "Logger",
 ) -> int | None:
     """The body size a panel would pick for itself, or None if it draws no rows.
@@ -261,6 +262,11 @@ def _panel_body_fit(
     Args:
         render_data: Component render data
         tile_width: Unscaled width of the tile the panel will occupy
+        tile_height: Unscaled height of the tile the panel will occupy. Only
+            the calendar uses it — it is the vertical budget its rows must fit
+            inside. Required rather than optional: a probe that silently skips
+            the vertical constraint when the height is absent would report a
+            size the panel does not draw at.
         logger: Logger instance
 
     Returns:
@@ -1924,8 +1930,8 @@ def tile_components(
         # that row is pulled up to the same floor.
         body_specs: list[tuple[int, int]] = [
             (fit, _body_floor(str(render_data.get('type', ''))))
-            for render_data, _, _, tile_w, _ in row
-            if (fit := _panel_body_fit(render_data, tile_w, logger)) is not None
+            for render_data, _, _, tile_w, tile_h in row
+            if (fit := _panel_body_fit(render_data, tile_w, tile_h, logger)) is not None
         ]
         body_font_size: int | None = (
             max(min(f for f, _ in body_specs), max(fl for _, fl in body_specs))

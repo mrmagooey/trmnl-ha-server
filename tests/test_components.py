@@ -2631,17 +2631,17 @@ class TestPanelBodyFit(unittest.TestCase):
             {'type': 'url', 'data': '42'},
             {'type': 'history_graph', 'data': [(1, 2.0)]},
         ):
-            self.assertIsNone(_panel_body_fit(render_data, 400, mock_logger),
+            self.assertIsNone(_panel_body_fit(render_data, 400, 220, mock_logger),
                               render_data['type'])
 
     def test_missing_or_empty_data_returns_none(self):
         """Those panels draw a fixed-size placeholder, not rows."""
         for data in (None, [], {}):
             self.assertIsNone(
-                _panel_body_fit({'type': 'entities', 'data': data}, 400, mock_logger)
+                _panel_body_fit({'type': 'entities', 'data': data}, 400, 220, mock_logger)
             )
             self.assertIsNone(
-                _panel_body_fit({'type': 'calendar', 'data': data}, 400, mock_logger)
+                _panel_body_fit({'type': 'calendar', 'data': data}, 400, 220, mock_logger)
             )
 
     def test_todo_with_only_completed_items_returns_none(self):
@@ -2649,13 +2649,13 @@ class TestPanelBodyFit(unittest.TestCase):
             'type': 'todo_list',
             'data': [{'summary': 'done', 'status': 'completed'}],
         }
-        self.assertIsNone(_panel_body_fit(render_data, 400, mock_logger))
+        self.assertIsNone(_panel_body_fit(render_data, 400, 220, mock_logger))
 
     def test_long_rows_probe_smaller_than_short_rows(self):
         long_fit = _panel_body_fit(
-            {'type': 'entities', 'data': self.LONG_ROWS}, 400, mock_logger)
+            {'type': 'entities', 'data': self.LONG_ROWS}, 400, 220, mock_logger)
         short_fit = _panel_body_fit(
-            {'type': 'entities', 'data': self.SHORT_ROWS}, 400, mock_logger)
+            {'type': 'entities', 'data': self.SHORT_ROWS}, 400, 220, mock_logger)
         self.assertIn(long_fit, BODY_SIZE_LADDER)
         self.assertIn(short_fit, BODY_SIZE_LADDER)
         self.assertLess(long_fit, short_fit)
@@ -2665,9 +2665,9 @@ class TestPanelBodyFit(unittest.TestCase):
         items = [{'summary': 'Book the annual car service appointment',
                   'status': 'needs_action'}]
         one = _panel_body_fit(
-            {'type': 'todo_list', 'data': items, 'columns': 1}, 400, mock_logger)
+            {'type': 'todo_list', 'data': items, 'columns': 1}, 400, 220, mock_logger)
         two = _panel_body_fit(
-            {'type': 'todo_list', 'data': items, 'columns': 2}, 400, mock_logger)
+            {'type': 'todo_list', 'data': items, 'columns': 2}, 400, 220, mock_logger)
         self.assertLessEqual(two, one)
 
     def test_probe_matches_what_the_panel_draws_alone(self):
@@ -2678,7 +2678,7 @@ class TestPanelBodyFit(unittest.TestCase):
         """
         from PIL import ImageChops
         render_data = {'type': 'entities', 'data': self.LONG_ROWS}
-        probed = _panel_body_fit(render_data, 400, mock_logger)
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
         alone = _draw_entities_component(
             'Sensors', list(self.LONG_ROWS), 400, 220, mock_logger)
         forced = _draw_entities_component(
@@ -2700,7 +2700,7 @@ class TestPanelBodyFit(unittest.TestCase):
              'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
         ]
         render_data = {'type': 'calendar', 'data': events}
-        probed = _panel_body_fit(render_data, 400, mock_logger)
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
         self.assertGreaterEqual(probed, CALENDAR_MIN_BODY_SIZE)
         alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
         forced = _draw_calendar_component(
