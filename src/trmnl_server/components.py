@@ -46,6 +46,9 @@ BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 # ponytail: one constant for every calendar. Promote to a per-component
 # `min_font_size` option if a second calendar ever needs a different floor.
 CALENDAR_MIN_BODY_SIZE: int = 20
+CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
+CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
+CALENDAR_BOTTOM_MARGIN: int = 30  # unscaled space kept clear at the panel foot
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -282,7 +285,14 @@ def _panel_body_fit(
         budget = (tile_width - 40) * COMPONENT_SCALE
     elif panel_type == 'calendar':
         texts = _calendar_row_texts(data, logger)  # type: ignore[arg-type]
+        if not texts:
+            return None
         budget = (tile_width - 40) * COMPONENT_SCALE
+        floor = _body_floor(panel_type)
+        return min(
+            _fit_body_size(texts, budget, logger, min_size=floor),
+            _calendar_vertical_fit(len(texts), tile_height, logger, min_size=floor),
+        )
     elif panel_type == 'todo_list':
         texts = _todo_row_texts(data)  # type: ignore[arg-type]
         cols = render_data.get('columns', 1)
@@ -381,6 +391,51 @@ def _fit_body_size(
             continue
         font = _load_font(size * COMPONENT_SCALE, logger)
         if all(font.getbbox(t)[2] - font.getbbox(t)[0] <= max_width for t in texts):
+            return size
+    return min_size
+
+
+def _calendar_row_advance(size: int, logger: "Logger") -> int:
+    """Scaled vertical distance between the tops of two consecutive rows.
+
+    One shared advance for every row: even at a single font size the per-row
+    ink height swings with ascenders and descenders, which is what made the
+    old spacing ragged.
+    """
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    ascent, descent = font.getmetrics()
+    return ascent + descent + CALENDAR_LINE_SPACING * COMPONENT_SCALE
+
+
+def _calendar_vertical_fit(
+    n_rows: int,
+    tile_height: int,
+    logger: "Logger",
+    *,
+    min_size: int = CALENDAR_MIN_BODY_SIZE,
+) -> int:
+    """Largest rung at or above min_size at which n_rows rows fit the tile.
+
+    The vertical counterpart of _fit_body_size. Without it a calendar whose
+    summaries are short climbs to the top of the ladder and pushes events off
+    the bottom that would have fitted one rung down — it grows text it did not
+    need at the cost of events it did.
+
+    Args:
+        n_rows: Number of rows the panel wants to draw
+        tile_height: Unscaled height of the tile
+        logger: Logger instance
+        min_size: Smallest rung this may return
+
+    Returns:
+        A size from BODY_SIZE_LADDER; min_size when no rung fits every row.
+    """
+    budget = tile_height * COMPONENT_SCALE - CALENDAR_CONTENT_TOP * COMPONENT_SCALE \
+        - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
+    for size in BODY_SIZE_LADDER:
+        if size < min_size:
+            continue
+        if n_rows * _calendar_row_advance(size, logger) <= budget:
             return size
     return min_size
 
@@ -1326,8 +1381,8 @@ def _draw_calendar_component(
         ) * scale
         y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
     else:
-        y_pos = 50 * scale
-    line_spacing: int = 8 * scale
+        y_pos = CALENDAR_CONTENT_TOP * scale
+    line_spacing: int = CALENDAR_LINE_SPACING * scale
 
     if not events:
         msg: str = "No upcoming events"
@@ -1347,12 +1402,13 @@ def _draw_calendar_component(
         # Floored so a direct caller (no row-agreed body_font_size) agrees with
         # what _panel_body_fit probes for this panel type — otherwise the
         # probe and the render would disagree on a calendar's own size.
-        font_row = _load_font(
-            (body_font_size if body_font_size is not None
-             else _fit_body_size(event_strings, content_width, logger,
-                                  min_size=CALENDAR_MIN_BODY_SIZE)) * scale,
-            logger,
+        resolved_size: int = body_font_size if body_font_size is not None else min(
+            _fit_body_size(event_strings, content_width, logger,
+                           min_size=CALENDAR_MIN_BODY_SIZE),
+            _calendar_vertical_fit(len(event_strings), height, logger,
+                                   min_size=CALENDAR_MIN_BODY_SIZE),
         )
+        font_row = _load_font(resolved_size * scale, logger)
         # A single shared row advance: even at one font size the per-row ink
         # height still swings with ascenders and descenders, which is what made
         # the old spacing ragged.
@@ -1371,7 +1427,7 @@ def _draw_calendar_component(
             )
             y_pos += row_advance
 
-            if y_pos > large_height - 30 * scale:
+            if y_pos > large_height - CALENDAR_BOTTOM_MARGIN * scale:
                 break
 
     return img.resize((width, height), Image.LANCZOS)

@@ -31,6 +31,7 @@ from trmnl_server.components import (
     _fit_body_size,
     _panel_body_fit,
     _body_floor,
+    _calendar_vertical_fit,
     CALENDAR_MIN_BODY_SIZE,
     _calendar_row_texts,
     _entities_row_parts,
@@ -3010,6 +3011,79 @@ class TestUrlComponentRendering(unittest.TestCase):
             elapsed = time.perf_counter() - t0
             url_source._wait_for_pending()
         self.assertLess(elapsed, 2.0, "render must not wait for a slow fetch")
+
+
+class TestCalendarVerticalFit(unittest.TestCase):
+    """The calendar stops growing once a larger rung would cost it an event."""
+
+    def test_few_rows_allow_the_largest_rung(self):
+        # Two rows fit a 240px tile at any size on the ladder.
+        self.assertEqual(
+            _calendar_vertical_fit(2, 240, mock_logger), BODY_SIZE_LADDER[0]
+        )
+
+    def test_many_rows_force_a_smaller_rung(self):
+        big = _calendar_vertical_fit(2, 240, mock_logger)
+        small = _calendar_vertical_fit(8, 240, mock_logger)
+        self.assertLess(small, big)
+
+    def test_never_returns_below_the_floor(self):
+        # Twenty rows fit no rung; the floor is returned rather than 16.
+        self.assertEqual(
+            _calendar_vertical_fit(20, 240, mock_logger), CALENDAR_MIN_BODY_SIZE
+        )
+
+    def test_result_is_always_a_ladder_rung(self):
+        for n in range(1, 15):
+            self.assertIn(_calendar_vertical_fit(n, 240, mock_logger), BODY_SIZE_LADDER)
+
+
+class TestCalendarProbeUsesBothFits(unittest.TestCase):
+    """_panel_body_fit takes the smaller of the horizontal and vertical fits."""
+
+    def _events(self, n, summary):
+        # Built from a base time with a timedelta offset, not a raw hour
+        # substitution, so n beyond 15 does not overflow into an invalid
+        # hour>=24 and blow up datetime.fromisoformat.
+        from datetime import datetime, timedelta, timezone
+        base = datetime(2024, 1, 17, 9, tzinfo=timezone.utc)
+        events = []
+        for i in range(n):
+            start = base + timedelta(hours=i)
+            end = start + timedelta(minutes=30)
+            events.append({
+                'summary': summary,
+                'start': {'dateTime': start.isoformat()},
+                'end': {'dateTime': end.isoformat()},
+            })
+        return events
+
+    def test_short_summaries_are_held_down_by_the_height(self):
+        # Short rows fit wide at 28pt, but eight of them do not fit a short
+        # tile; the probe must report the vertical answer, not the horizontal.
+        # A generously tall tile is used so the vertical fit clears the floor
+        # with margin to spare, regardless of a font's own hinting variance.
+        render_data = {'type': 'calendar', 'data': self._events(8, 'Sync')}
+        tall = _panel_body_fit(render_data, 400, 600, mock_logger)
+        short = _panel_body_fit(render_data, 400, 200, mock_logger)
+        self.assertLess(short, tall)
+
+    def test_still_never_below_the_calendar_floor(self):
+        render_data = {'type': 'calendar', 'data': self._events(20, 'Sync')}
+        self.assertGreaterEqual(
+            _panel_body_fit(render_data, 400, 120, mock_logger),
+            CALENDAR_MIN_BODY_SIZE,
+        )
+
+    def test_height_does_not_affect_non_calendar_panels(self):
+        render_data = {
+            'type': 'entities',
+            'data': [{'friendly_name': f'Sensor {i}', 'state': '20.0'} for i in range(8)],
+        }
+        self.assertEqual(
+            _panel_body_fit(render_data, 400, 400, mock_logger),
+            _panel_body_fit(render_data, 400, 120, mock_logger),
+        )
 
 
 if __name__ == '__main__':
