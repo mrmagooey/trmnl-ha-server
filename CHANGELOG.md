@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-09-09
+
+### Changed
+- Calendar event rows are no longer shrunk below 20pt to make a long summary fit. The shrink-to-fit ladder previously bottomed out at 16pt, so a single over-long event — a summary carrying a weekday, a time range and a long title — dragged the whole panel down to a size that is hard to read on an e-ink panel at arm's length. The floor for a calendar is now 20pt and anything that still does not fit is truncated with an ellipsis instead: a long summary costs its own tail rather than the panel's legibility. Because panels sharing a layout row render at one size, a calendar raises that floor for its row-mates too, so an entity list or todo list beside a calendar may now truncate rows it previously rendered in full. An empty calendar draws a placeholder rather than rows and so does not affect its neighbours, and a row with no calendar in it still reaches 16pt as before.
+
 ## [1.9.0] - 2026-09-06
 
 ### Added
