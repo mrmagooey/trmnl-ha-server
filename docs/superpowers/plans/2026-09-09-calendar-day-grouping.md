@@ -807,12 +807,56 @@ def _calendar_capacity(
     return max(0, budget // advance)
 ```
 
-Delete `_calendar_vertical_fit` — its arithmetic now lives in `_calendar_capacity`. Add `NamedTuple` to the `typing` imports.
+**Do NOT delete `_calendar_vertical_fit` in this task.** It still has two live
+production callers — the probe in `_panel_body_fit` and the self-fit branch of
+`_draw_calendar_component`. The draw's call goes away in Task 5 and the probe's
+in Task 6; deleting the function now would leave the branch broken for two
+commits.
+
+Instead, **replace its body with a delegation to `_calendar_capacity`**, keeping
+its name and signature exactly as they are. This satisfies the spec's actual
+requirement — one definition of the vertical budget arithmetic — while keeping
+the build green:
+
+```python
+def _calendar_vertical_fit(
+    n_rows: int,
+    tile_height: int,
+    logger: "Logger",
+    *,
+    min_size: int = CALENDAR_MIN_BODY_SIZE,
+) -> int:
+    """Largest rung at or above min_size at which n_rows rows fit the tile.
+
+    Retained only for the two callers that Tasks 5 and 6 rewire; the budget
+    arithmetic itself now lives in _calendar_capacity, so there is one
+    definition of it, not two. Task 6 deletes this function once its last
+    caller is gone.
+    """
+    for size in BODY_SIZE_LADDER:
+        if size < min_size:
+            continue
+        if n_rows <= _calendar_capacity(size, tile_height, 1, logger):
+            return size
+    return min_size
+```
+
+`n_groups=1` charges no separators, which is exactly the flat behaviour the
+existing callers and their tests expect.
+
+Keep `TestCalendarVerticalFit` passing — Task 6 removes it along with the
+function. Add `NamedTuple` to the `typing` imports.
 
 - [ ] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_components.py::TestCalendarLayout -v`
-Expected: PASS. `TestCalendarVerticalFit` from Task 2 now fails on the deleted function — delete that test class; its behaviour is covered by `TestCalendarLayout`'s size and overflow tests.
+Expected: PASS.
+
+`TestCalendarVerticalFit` from Task 2 must ALSO still pass — the function is now
+a delegating shim, not a deleted symbol, so its behaviour is unchanged. If any
+of those four tests fails, the shim's arithmetic does not match the original and
+that is a real defect, not expected churn. Task 6 removes the shim and the test
+class together.
 
 - [ ] **Step 5: Commit**
 
