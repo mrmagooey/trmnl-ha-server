@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from math import ceil, sqrt
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import NamedTuple, TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -49,6 +49,9 @@ CALENDAR_MIN_BODY_SIZE: int = 20
 CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
 CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
 CALENDAR_BOTTOM_MARGIN: int = 30  # unscaled space kept clear at the panel foot
+CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
+CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
+CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -453,6 +456,165 @@ def _calendar_row_advance(size: int, logger: "Logger") -> int:
     return ascent + descent + CALENDAR_LINE_SPACING * COMPONENT_SCALE
 
 
+class CalendarLayout(NamedTuple):
+    """Everything the calendar needs to draw itself, resolved in one pass."""
+    size: int
+    mode: str
+    gutter: int
+    groups: list[tuple[str, list[str]]]
+    drawn_rows: int
+    overflow: int
+
+
+def _spine_ink_height(label: str, size: int, logger: "Logger") -> int:
+    """Scaled height a day label needs once rotated 90 degrees into a spine.
+
+    A label is drawn normally (horizontally) to measure it, then rotated 90
+    degrees to run down the gutter. Rotation swaps the bounding box: the
+    label's un-rotated WIDTH (how long "Wed" runs left-to-right) becomes the
+    spine's HEIGHT — the vertical space it needs once standing upright. Using
+    the un-rotated height here instead would almost never exceed a group's
+    row budget, since a font's ascent+descent already sets the row advance;
+    the gate would then never reject a group, which defeats its purpose.
+    """
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    box = font.getbbox(label)
+    return box[2] - box[0]
+
+
+def _calendar_gates(
+    groups: list[tuple["date | None", str, list[str]]],
+    has_unparseable: bool,
+    size: int,
+    width: int,
+    logger: "Logger",
+) -> bool:
+    """Whether the gutter is usable at this size. Both gates must pass.
+
+    (a) every group is tall enough to carry its spine, and
+    (b) enough width is left for the summary after gutter and time prefix.
+
+    All-or-nothing: mixing modes between groups would leave rows starting at
+    different x positions within one panel, which reads as a rendering fault.
+    """
+    if has_unparseable or not groups:
+        return False
+
+    advance = _calendar_row_advance(size, logger)
+    for _, label, rows in groups:
+        # >=, not >: a spine exactly as tall as its row budget leaves no
+        # margin against the separator below it, so it does not count as fit.
+        if _spine_ink_height(label, size, logger) >= len(rows) * advance:
+            return False
+
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    prefix_box = font.getbbox("00:00-00:00  ")
+    remaining = (
+        (width - 40 - CALENDAR_GUTTER_W) * COMPONENT_SCALE
+        - (prefix_box[2] - prefix_box[0])
+    )
+    return remaining >= CALENDAR_MIN_SUMMARY_W * COMPONENT_SCALE
+
+
+def _calendar_layout(
+    events: list[CalendarEvent],
+    width: int,
+    height: int,
+    logger: "Logger",
+    *,
+    min_size: int = CALENDAR_MIN_BODY_SIZE,
+    fixed_size: int | None = None,
+) -> CalendarLayout:
+    """Resolves size, mode, geometry and overflow for a calendar panel.
+
+    Font size determines row height, which determines group height, which
+    determines whether the spine fits, which determines content width, which
+    feeds back into the size. The loop is broken by evaluating the whole
+    layout at each candidate rung and taking the first that works.
+
+    Both the probe (_panel_body_fit) and the draw (_draw_calendar_component)
+    call this. If they each derived mode independently they would drift, and
+    the probe would report a size the panel does not draw at.
+
+    Args:
+        events: Calendar events for the panel; sorted in place
+        width: Unscaled tile width
+        height: Unscaled tile height
+        logger: Logger instance
+        min_size: Smallest rung the ladder walk may return
+        fixed_size: When set, skip the ladder entirely and evaluate the gates
+            once at this size. This is the path taken whenever tile_components
+            has settled the layout row on a size — without it the draw would
+            have to re-derive mode at that imposed size on its own.
+
+    Returns:
+        A CalendarLayout. `groups` rows are the FINAL strings for the chosen
+        mode: already prefixed with the day in prefix mode, bare in gutter
+        mode.
+    """
+    raw_groups, has_unparseable = _calendar_day_groups(events, logger)
+    if not raw_groups:
+        return CalendarLayout(min_size, 'prefix', 0, [], 0, 0)
+
+    n_rows = sum(len(rows) for _, _, rows in raw_groups)
+
+    def build(size: int) -> CalendarLayout:
+        use_gutter = _calendar_gates(raw_groups, has_unparseable, size, width, logger)
+        if use_gutter:
+            groups = [(label, list(rows)) for _, label, rows in raw_groups]
+            gutter = CALENDAR_GUTTER_W
+        else:
+            groups = [
+                (label, [f"{label} {row}" if label else row for row in rows])
+                for _, label, rows in raw_groups
+            ]
+            gutter = 0
+        capacity = _calendar_capacity(size, height, len(raw_groups), logger)
+        drawn = min(n_rows, capacity)
+        return CalendarLayout(
+            size, 'gutter' if use_gutter else 'prefix', gutter,
+            groups, drawn, n_rows - drawn,
+        )
+
+    if fixed_size is not None:
+        return build(fixed_size)
+
+    for size in BODY_SIZE_LADDER:
+        if size < min_size:
+            continue
+        candidate = build(size)
+        if candidate.overflow:
+            continue
+        rows = [row for _, group_rows in candidate.groups for row in group_rows]
+        budget = (width - 40 - candidate.gutter) * COMPONENT_SCALE
+        font = _load_font(size * COMPONENT_SCALE, logger)
+        if all(font.getbbox(t)[2] - font.getbbox(t)[0] <= budget for t in rows):
+            return candidate
+    return build(min_size)
+
+
+def _calendar_capacity(
+    size: int,
+    height: int,
+    n_groups: int,
+    logger: "Logger",
+) -> int:
+    """How many rows fit the panel at this size, after separators.
+
+    Separators are counted in both modes — prefix mode keeps them, which is
+    what makes the vertical budget mode-independent so it need not be resolved
+    after the mode.
+    """
+    budget = (
+        height * COMPONENT_SCALE
+        - CALENDAR_CONTENT_TOP * COMPONENT_SCALE
+        - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
+        - max(0, n_groups - 1) * CALENDAR_SEP_H * COMPONENT_SCALE
+    )
+    advance = _calendar_row_advance(size, logger)
+    return max(0, budget // advance)
+
+
 def _calendar_vertical_fit(
     n_rows: int,
     tile_height: int,
@@ -462,26 +624,15 @@ def _calendar_vertical_fit(
 ) -> int:
     """Largest rung at or above min_size at which n_rows rows fit the tile.
 
-    The vertical counterpart of _fit_body_size. Without it a calendar whose
-    summaries are short climbs to the top of the ladder and pushes events off
-    the bottom that would have fitted one rung down — it grows text it did not
-    need at the cost of events it did.
-
-    Args:
-        n_rows: Number of rows the panel wants to draw
-        tile_height: Unscaled height of the tile
-        logger: Logger instance
-        min_size: Smallest rung this may return
-
-    Returns:
-        A size from BODY_SIZE_LADDER; min_size when no rung fits every row.
+    Retained only for the two callers that Tasks 5 and 6 rewire; the budget
+    arithmetic itself now lives in _calendar_capacity, so there is one
+    definition of it, not two. Task 6 deletes this function once its last
+    caller is gone.
     """
-    budget = tile_height * COMPONENT_SCALE - CALENDAR_CONTENT_TOP * COMPONENT_SCALE \
-        - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
     for size in BODY_SIZE_LADDER:
         if size < min_size:
             continue
-        if n_rows * _calendar_row_advance(size, logger) <= budget:
+        if n_rows <= _calendar_capacity(size, tile_height, 1, logger):
             return size
     return min_size
 

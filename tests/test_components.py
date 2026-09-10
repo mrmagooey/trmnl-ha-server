@@ -32,6 +32,7 @@ from trmnl_server.components import (
     _panel_body_fit,
     _body_floor,
     _calendar_vertical_fit,
+    _calendar_layout,
     CALENDAR_MIN_BODY_SIZE,
     _calendar_row_texts,
     _calendar_event_row,
@@ -3133,6 +3134,111 @@ class TestCalendarVerticalFit(unittest.TestCase):
     def test_result_is_always_a_ladder_rung(self):
         for n in range(1, 15):
             self.assertIn(_calendar_vertical_fit(n, 240, mock_logger), BODY_SIZE_LADDER)
+
+
+class TestCalendarLayout(unittest.TestCase):
+    """One resolver decides size, mode, geometry and overflow together."""
+
+    def _events(self, spec):
+        """spec: list of (iso_date, count) -> events at 09:00, 10:00, ..."""
+        out = []
+        for day, count in spec:
+            for i in range(count):
+                out.append({
+                    'summary': f'Event {i}',
+                    'start': {'dateTime': f'{day}T{9 + i:02d}:00:00+00:00'},
+                    'end': {'dateTime': f'{day}T{9 + i:02d}:30:00+00:00'},
+                })
+        return out
+
+    def test_size_is_always_a_rung_at_or_above_the_floor(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 400, 240, mock_logger)
+        self.assertIn(layout.size, BODY_SIZE_LADDER)
+        self.assertGreaterEqual(layout.size, CALENDAR_MIN_BODY_SIZE)
+
+    def test_a_busy_single_day_uses_the_gutter(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        self.assertGreater(layout.gutter, 0)
+
+    def test_a_single_event_day_falls_back_to_prefix(self):
+        # A one-row group is shorter than its own spine at every rung.
+        layout = _calendar_layout(
+            self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 400, 240, mock_logger
+        )
+        self.assertEqual(layout.mode, 'prefix')
+        self.assertEqual(layout.gutter, 0)
+
+    def test_prefix_mode_puts_the_day_back_on_every_row(self):
+        layout = _calendar_layout(
+            self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 400, 240, mock_logger
+        )
+        for _, rows in layout.groups:
+            for row in rows:
+                self.assertRegex(row, r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ')
+
+    def test_gutter_mode_leaves_the_day_off_every_row(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 400, 240, mock_logger)
+        for _, rows in layout.groups:
+            for row in rows:
+                self.assertNotRegex(row, r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ')
+
+    def test_a_narrow_tile_falls_back_to_prefix(self):
+        # Gate (b): the gutter would leave under CALENDAR_MIN_SUMMARY_W.
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 200, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+
+    def test_an_unparseable_event_forces_prefix(self):
+        events = self._events([('2024-01-17', 5)])
+        events.append({'summary': 'Mystery', 'start': {}, 'end': {}})
+        layout = _calendar_layout(events, 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+
+    def test_overflow_counts_the_rows_that_do_not_fit(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 12)]), 400, 240, mock_logger)
+        self.assertGreater(layout.overflow, 0)
+        total = sum(len(rows) for _, rows in layout.groups)
+        self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
+    def test_no_overflow_when_everything_fits(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 3)]), 400, 240, mock_logger)
+        self.assertEqual(layout.overflow, 0)
+        self.assertEqual(
+            layout.drawn_rows, sum(len(rows) for _, rows in layout.groups)
+        )
+
+    def test_fixed_size_is_honoured_without_walking_the_ladder(self):
+        events = self._events([('2024-01-17', 5)])
+        layout = _calendar_layout(events, 400, 240, mock_logger, fixed_size=24)
+        self.assertEqual(layout.size, 24)
+
+    def test_fixed_size_agrees_with_the_walk_at_the_walk_s_own_answer(self):
+        events = self._events([('2024-01-17', 5)])
+        walked = _calendar_layout(list(events), 400, 240, mock_logger)
+        pinned = _calendar_layout(
+            list(events), 400, 240, mock_logger, fixed_size=walked.size
+        )
+        self.assertEqual(pinned, walked)
+
+    def test_every_imposed_size_returns_that_size_and_a_valid_mode(self):
+        # An imposed size is honoured verbatim at every rung, and the mode it
+        # resolves to is always one the draw function can render.
+        events = self._events([('2024-01-17', 2)])
+        for rung in BODY_SIZE_LADDER:
+            if rung < CALENDAR_MIN_BODY_SIZE:
+                continue
+            layout = _calendar_layout(
+                list(events), 400, 240, mock_logger, fixed_size=rung
+            )
+            self.assertEqual(layout.size, rung)
+            self.assertIn(layout.mode, ('gutter', 'prefix'))
+            self.assertEqual(layout.gutter > 0, layout.mode == 'gutter')
+
+    def test_empty_events_produce_no_groups(self):
+        layout = _calendar_layout([], 400, 240, mock_logger)
+        self.assertEqual(layout.groups, [])
+        self.assertEqual(layout.drawn_rows, 0)
+        self.assertEqual(layout.overflow, 0)
 
 
 class TestCalendarProbeUsesBothFits(unittest.TestCase):
