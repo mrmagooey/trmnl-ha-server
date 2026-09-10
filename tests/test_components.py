@@ -35,7 +35,6 @@ from trmnl_server.components import (
     _calendar_layout,
     CALENDAR_MIN_BODY_SIZE,
     CALENDAR_GUTTER_W,
-    CALENDAR_CONTENT_TOP,
     _calendar_row_texts,
     _calendar_event_row,
     _calendar_day_groups,
@@ -853,13 +852,25 @@ class TestCalendarGutterRendering(unittest.TestCase):
     def test_an_imposed_size_is_respected(self):
         from PIL import ImageChops
         events = self._events('2024-01-17', 5)
-        forced = _draw_calendar_component(
+        # The layout the draw call consumes must actually carry the imposed
+        # size through -- not silently walk its own ladder instead.
+        self.assertEqual(
+            _calendar_layout(list(events), 400, 240, mock_logger, fixed_size=24).size,
+            24,
+        )
+        # And two different imposed sizes must render differently, so this
+        # would fail if body_font_size were ignored (unlike comparing two
+        # renders at the same imposed size, which only re-proves determinism).
+        forced_24 = _draw_calendar_component(
             'Cal', list(events), 400, 240, mock_logger, body_font_size=24
         )
-        matched = _draw_calendar_component(
-            'Cal', list(events), 400, 240, mock_logger, body_font_size=24
+        forced_16 = _draw_calendar_component(
+            'Cal', list(events), 400, 240, mock_logger, body_font_size=16
         )
-        self.assertIsNone(ImageChops.difference(forced, matched).getbbox())
+        self.assertIsNotNone(
+            ImageChops.difference(forced_24, forced_16).getbbox(),
+            "different imposed sizes must render differently",
+        )
 
 
 class TestDrawEntitiesComponent(unittest.TestCase):
