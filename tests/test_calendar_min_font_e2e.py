@@ -35,8 +35,8 @@ class TestCalendarMinimumBodyFontSizeEndToEnd(unittest.TestCase):
     @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
     def test_over_long_summary_ellipsizes_at_the_floor_size(self, mock_fetch_calendar):
         mock_fetch_calendar.return_value = [
-            {'summary': ('Wednesday 10:00-12:00: Quarterly planning review '
-                         'with the platform team'),
+            {'summary': ('Quarterly planning review with the platform team '
+                         'and several other cross-functional stakeholders'),
              'start': {'dateTime': '2024-01-02T10:00:00+00:00'},
              'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
         ]

@@ -725,8 +725,7 @@ class TestDrawCalendarComponent(unittest.TestCase):
         """No explicit body_font_size: a long summary must not drag below 20."""
         events = [
             {
-                'summary': ('Wednesday 10:00-12:00: Quarterly planning review with '
-                            'the platform team'),
+                'summary': 'Quarterly planning review with the platform team',
                 'start': {'dateTime': '2025-01-15T10:00:00+00:00'},
                 'end': {'dateTime': '2025-01-15T11:00:00+00:00'},
             },
@@ -2810,8 +2809,7 @@ class TestCalendarRowFloor(unittest.TestCase):
          'status': 'needs_action'},
     ]
     LONG_EVENTS = [
-        {'summary': ('Wednesday 10:00-12:00: Quarterly planning review with '
-                     'the platform team'),
+        {'summary': 'Quarterly planning review with the platform team',
          'start': {'dateTime': '2024-01-02T10:00:00+00:00'},
          'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
     ]

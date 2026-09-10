@@ -360,13 +360,15 @@ def _fit_body_size(
             already has a scaled content width to hand)
         logger: Logger instance
         min_size: Smallest ladder rung this call may return; rungs below it
-            are not even tried
+            are not even tried. Must itself be a member of BODY_SIZE_LADDER —
+            it is returned verbatim when nothing fits, so a non-rung value
+            would break the guarantee below.
 
     Returns:
-        An unscaled size from BODY_SIZE_LADDER; the smallest rung at or above
-        min_size when no such rung fits every text. Callers ellipsize the rows
-        that still overflow there — one over-long row must not shrink the
-        whole panel into illegibility.
+        An unscaled size from BODY_SIZE_LADDER; min_size itself when no rung
+        at or above it fits every text. Callers ellipsize the rows that still
+        overflow there — one over-long row must not shrink the whole panel
+        into illegibility.
     """
     for size in BODY_SIZE_LADDER:
         if size < min_size:
