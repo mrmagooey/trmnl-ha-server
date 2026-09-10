@@ -822,6 +822,52 @@ class TestCalendarGutterRendering(unittest.TestCase):
         band = [x for x in self._ink_columns(img) if x < CALENDAR_GUTTER_W]
         self.assertTrue(band, "expected spine ink inside the gutter")
 
+    def _longest_vertical_run(self, img, col):
+        """Longest contiguous run of non-white pixels down one column."""
+        gray = img.convert('L')
+        h = gray.size[1]
+        px = gray.load()
+        longest = run = 0
+        for y in range(h):
+            if px[col, y] < 250:
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 0
+        return longest
+
+    def test_gutter_mode_draws_a_vertical_rule_between_spine_and_rows(self):
+        """A 2px rule separates the gutter from the rows in gutter mode.
+
+        Spec: docs/superpowers/specs/2026-09-09-calendar-day-grouping-design.md
+        line 78. The rule sits at x_text - 8 (unscaled), clear of both the
+        spine glyphs (which end well before CALENDAR_GUTTER_W) and the row
+        text (which starts at x_text) -- so a long contiguous dark run at
+        that column, spanning the group's rows, can only be the rule.
+        """
+        events = self._events('2024-01-17', 2)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        rule_x = 20 + CALENDAR_GUTTER_W - 8
+        self.assertGreaterEqual(
+            self._longest_vertical_run(img, rule_x), 20,
+            "expected a tall contiguous vertical rule at the gutter/row boundary",
+        )
+
+    def test_prefix_mode_draws_no_vertical_rule(self):
+        """Prefix mode reserves no gutter, so no rule should be drawn either."""
+        # A one-event second day forces prefix mode.
+        events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        rule_x = 20 + CALENDAR_GUTTER_W - 8
+        self.assertLess(
+            self._longest_vertical_run(img, rule_x), 20,
+            "prefix mode should not draw a gutter/row separator rule",
+        )
+
     def test_prefix_mode_leaves_the_gutter_empty(self):
         # A one-event second day forces prefix mode.
         events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)

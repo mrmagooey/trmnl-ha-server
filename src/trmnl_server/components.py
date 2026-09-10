@@ -1610,6 +1610,14 @@ def _draw_calendar_component(
                 y_pos += row_advance
             remaining -= drawn_here
             if layout.mode == 'gutter':
+                # A 2px vertical rule between the spine and the row text,
+                # spanning only the rows this group actually drew (group_top
+                # to y_pos, the same span _draw_spine uses) -- a group
+                # truncated by the row budget gets a rule sized to match.
+                d.line(
+                    [(x_text - 8 * scale, group_top), (x_text - 8 * scale, y_pos)],
+                    fill='black', width=2,
+                )
                 _draw_spine(img, label, layout.size, group_top, y_pos, logger)
 
         if layout.footer:
