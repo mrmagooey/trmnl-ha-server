@@ -333,15 +333,13 @@ def _panel_body_fit(
         texts = [name + tail for name, tail in _entities_row_parts(data)]  # type: ignore[arg-type]
         budget = (tile_width - 40) * COMPONENT_SCALE
     elif panel_type == 'calendar':
-        texts = _calendar_row_texts(data, logger)  # type: ignore[arg-type]
-        if not texts:
+        if not data:
             return None
-        budget = (tile_width - 40) * COMPONENT_SCALE
-        floor = _body_floor(panel_type)
-        return min(
-            _fit_body_size(texts, budget, logger, min_size=floor),
-            _calendar_vertical_fit(len(texts), tile_height, logger, min_size=floor),
+        layout = _calendar_layout(
+            list(data), tile_width, tile_height, logger,  # type: ignore[arg-type]
+            min_size=_body_floor(panel_type),
         )
+        return layout.size if layout.groups else None
     elif panel_type == 'todo_list':
         texts = _todo_row_texts(data)  # type: ignore[arg-type]
         cols = render_data.get('columns', 1)
@@ -613,28 +611,6 @@ def _calendar_capacity(
     )
     advance = _calendar_row_advance(size, logger)
     return max(0, budget // advance)
-
-
-def _calendar_vertical_fit(
-    n_rows: int,
-    tile_height: int,
-    logger: "Logger",
-    *,
-    min_size: int = CALENDAR_MIN_BODY_SIZE,
-) -> int:
-    """Largest rung at or above min_size at which n_rows rows fit the tile.
-
-    Retained only for the two callers that Tasks 5 and 6 rewire; the budget
-    arithmetic itself now lives in _calendar_capacity, so there is one
-    definition of it, not two. Task 6 deletes this function once its last
-    caller is gone.
-    """
-    for size in BODY_SIZE_LADDER:
-        if size < min_size:
-            continue
-        if n_rows <= _calendar_capacity(size, tile_height, 1, logger):
-            return size
-    return min_size
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:

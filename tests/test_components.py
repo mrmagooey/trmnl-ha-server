@@ -31,7 +31,6 @@ from trmnl_server.components import (
     _fit_body_size,
     _panel_body_fit,
     _body_floor,
-    _calendar_vertical_fit,
     _calendar_layout,
     CALENDAR_MIN_BODY_SIZE,
     CALENDAR_GUTTER_W,
@@ -2790,6 +2789,48 @@ class TestPanelBodyFit(unittest.TestCase):
             'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed)
         self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
 
+    def test_probe_matches_the_calendar_in_gutter_mode(self):
+        from PIL import ImageChops
+        events = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(5)
+        ]
+        render_data = {'type': 'calendar', 'data': list(events)}
+        self.assertEqual(
+            _calendar_layout(list(events), 400, 220, mock_logger).mode, 'gutter'
+        )
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed
+        )
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
+    def test_probe_matches_the_calendar_in_prefix_mode(self):
+        from PIL import ImageChops
+        events = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(3)
+        ] + [
+            {'summary': 'Lonely',
+             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}}
+        ]
+        render_data = {'type': 'calendar', 'data': list(events)}
+        self.assertEqual(
+            _calendar_layout(list(events), 400, 220, mock_logger).mode, 'prefix'
+        )
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed
+        )
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
 
 class TestRowBodySizeHarmonisation(unittest.TestCase):
     """Panels sharing a layout row must agree on one body text size."""
@@ -3188,31 +3229,6 @@ class TestUrlComponentRendering(unittest.TestCase):
             elapsed = time.perf_counter() - t0
             url_source._wait_for_pending()
         self.assertLess(elapsed, 2.0, "render must not wait for a slow fetch")
-
-
-class TestCalendarVerticalFit(unittest.TestCase):
-    """The calendar stops growing once a larger rung would cost it an event."""
-
-    def test_few_rows_allow_the_largest_rung(self):
-        # Two rows fit a 240px tile at any size on the ladder.
-        self.assertEqual(
-            _calendar_vertical_fit(2, 240, mock_logger), BODY_SIZE_LADDER[0]
-        )
-
-    def test_many_rows_force_a_smaller_rung(self):
-        big = _calendar_vertical_fit(2, 240, mock_logger)
-        small = _calendar_vertical_fit(8, 240, mock_logger)
-        self.assertLess(small, big)
-
-    def test_never_returns_below_the_floor(self):
-        # Twenty rows fit no rung; the floor is returned rather than 16.
-        self.assertEqual(
-            _calendar_vertical_fit(20, 240, mock_logger), CALENDAR_MIN_BODY_SIZE
-        )
-
-    def test_result_is_always_a_ladder_rung(self):
-        for n in range(1, 15):
-            self.assertIn(_calendar_vertical_fit(n, 240, mock_logger), BODY_SIZE_LADDER)
 
 
 class TestCalendarLayout(unittest.TestCase):
