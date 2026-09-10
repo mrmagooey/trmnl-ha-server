@@ -4,11 +4,11 @@ This module contains all the rendering functions for different component types
 (history graphs, entities, calendars, etc.).
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from math import ceil, sqrt
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import NamedTuple, TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -46,6 +46,12 @@ BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 # ponytail: one constant for every calendar. Promote to a per-component
 # `min_font_size` option if a second calendar ever needs a different floor.
 CALENDAR_MIN_BODY_SIZE: int = 20
+CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
+CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
+CALENDAR_BOTTOM_MARGIN: int = 30  # unscaled space kept clear at the panel foot
+CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
+CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
+CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -99,52 +105,81 @@ def _incomplete_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
-def _calendar_row_texts(events: list[CalendarEvent], logger: "Logger") -> list[str]:
-    """Builds the one-line strings a calendar panel draws, in display order.
+def _calendar_event_start(event: CalendarEvent) -> datetime | None:
+    """Local-time start of an event, or None when neither field parses."""
+    from datetime import time as dt_time
+    start = event.get('start', {})
+    if start.get('dateTime'):
+        return datetime.fromisoformat(start['dateTime']).astimezone()
+    if start.get('date'):
+        # astimezone() on a naive datetime attaches the local tzinfo without
+        # changing the wall-clock value, so this stays comparable with the
+        # aware datetimes the dateTime branch above returns.
+        return datetime.combine(date.fromisoformat(start['date']), dt_time.min).astimezone()
+    return None
 
-    Sorts `events` in place, as the draw function has always done. Shared with
-    the row-level body-size resolver so the size is measured against exactly
-    the strings that will be drawn.
 
-    Args:
-        events: Calendar events for the panel
-        logger: Logger instance
+def _calendar_event_row(event: CalendarEvent) -> str:
+    """The text of one calendar row, carrying no weekday name.
+
+    The day is drawn once per group — as a rotated spine, or as a per-row
+    prefix added later by _calendar_layout when the panel falls back to prefix
+    mode. Keeping it out of here is what frees the width the summary gets.
+    """
+    summary: str = event.get('summary', 'No summary')
+    start = event.get('start', {})
+    end = event.get('end', {})
+    if start.get('dateTime'):
+        start_dt = datetime.fromisoformat(start['dateTime']).astimezone()
+        end_dt = (
+            datetime.fromisoformat(end['dateTime']).astimezone()
+            if end.get('dateTime') else start_dt
+        )
+        return f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}  {summary}"
+    if start.get('date'):
+        return f"All day  {summary}"
+    return f"Unknown: {summary}"
+
+
+def _calendar_day_groups(
+    events: list[CalendarEvent],
+    logger: "Logger",
+) -> tuple[list[tuple[date | None, str, list[str]]], bool]:
+    """Groups events by calendar date, in display order.
+
+    Sorts `events` in place, as the draw function has always done.
 
     Returns:
-        One formatted string per event
+        (groups, has_unparseable) where each group is (day, label, rows).
+        `label` is the three-letter abbreviation the spine draws. An event
+        with no parseable start lands in a trailing group whose day is None,
+        and sets has_unparseable — the panel is forced into prefix mode,
+        because such an event has no day to sit under.
     """
-    from datetime import date as dt_date
     from pprint import pformat as pf
 
-    def get_sort_key(event: CalendarEvent) -> str:
-        start = event.get('start', {})
-        return start.get('dateTime') or start.get('date') or 'z'
-    events.sort(key=get_sort_key)
+    def sort_key(event: CalendarEvent) -> tuple[int, datetime]:
+        start = _calendar_event_start(event)
+        # Unparseable events sort last; datetime.max keeps the key comparable.
+        return (1, datetime.max) if start is None else (0, start)
 
-    texts: list[str] = []
+    events.sort(key=sort_key)
+
+    groups: list[tuple[date | None, str, list[str]]] = []
+    has_unparseable = False
     for event in events:
         logger.debug("calendar event: %s", pf(event))
-        summary: str = event.get('summary', 'No summary')
-        start = event.get('start', {})
-        end = event.get('end', {})
-
-        start_date_time = start.get('dateTime')
-        start_date = start.get('date')
-        end_date_time = end.get('dateTime')
-        if start_date_time:  # Timed event
-            start_dt: datetime = datetime.fromisoformat(start_date_time).astimezone()
-            end_dt: datetime = datetime.fromisoformat(end_date_time).astimezone() if end_date_time else start_dt
-            day_name: str = start_dt.strftime('%A')
-            texts.append(
-                f"{day_name} {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}: {summary}"
-            )
-        elif start_date:  # All-day event
-            start_date_obj = dt_date.fromisoformat(start_date)
-            day_name = start_date_obj.strftime('%A')
-            texts.append(f"{day_name} All day: {summary}")
+        start = _calendar_event_start(event)
+        day = start.date() if start is not None else None
+        if day is None:
+            has_unparseable = True
+        label = start.strftime('%a') if start is not None else ''
+        row = _calendar_event_row(event)
+        if groups and groups[-1][0] == day:
+            groups[-1][2].append(row)
         else:
-            texts.append(f"Unknown: {summary}")
-    return texts
+            groups.append((day, label, [row]))
+    return groups, has_unparseable
 
 
 def _entities_row_parts(
@@ -245,7 +280,11 @@ def _body_floor(panel_type: str) -> int:
 def _panel_body_fit(
     render_data: "RenderData",
     tile_width: int,
+    tile_height: int,
     logger: "Logger",
+    *,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> int | None:
     """The body size a panel would pick for itself, or None if it draws no rows.
 
@@ -261,7 +300,17 @@ def _panel_body_fit(
     Args:
         render_data: Component render data
         tile_width: Unscaled width of the tile the panel will occupy
+        tile_height: Unscaled height of the tile the panel will occupy. Only
+            the calendar uses it — it is the vertical budget its rows must fit
+            inside. Required rather than optional: a probe that silently skips
+            the vertical constraint when the height is absent would report a
+            size the panel does not draw at.
         logger: Logger instance
+        title_font_size: Title size resolved for the row. Only the calendar
+            branch uses it, so it knows where its rows actually start below
+            a title that may have wrapped to two lines.
+        title_lines: Title line count resolved for the row; see
+            title_font_size.
 
     Returns:
         A size from BODY_SIZE_LADDER, or None if the panel draws no body rows
@@ -275,8 +324,12 @@ def _panel_body_fit(
         texts = [name + tail for name, tail in _entities_row_parts(data)]  # type: ignore[arg-type]
         budget = (tile_width - 40) * COMPONENT_SCALE
     elif panel_type == 'calendar':
-        texts = _calendar_row_texts(data, logger)  # type: ignore[arg-type]
-        budget = (tile_width - 40) * COMPONENT_SCALE
+        layout = _calendar_layout(
+            list(data), tile_width, tile_height, logger,  # type: ignore[arg-type]
+            min_size=_body_floor(panel_type),
+            title_font_size=title_font_size, title_lines=title_lines,
+        )
+        return layout.size if layout.groups else None
     elif panel_type == 'todo_list':
         texts = _todo_row_texts(data)  # type: ignore[arg-type]
         cols = render_data.get('columns', 1)
@@ -377,6 +430,220 @@ def _fit_body_size(
         if all(font.getbbox(t)[2] - font.getbbox(t)[0] <= max_width for t in texts):
             return size
     return min_size
+
+
+def _calendar_row_advance(size: int, logger: "Logger") -> int:
+    """Scaled vertical distance between the tops of two consecutive rows.
+
+    One shared advance for every row: even at a single font size the per-row
+    ink height swings with ascenders and descenders, which is what made the
+    old spacing ragged.
+    """
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    ascent, descent = font.getmetrics()
+    return ascent + descent + CALENDAR_LINE_SPACING * COMPONENT_SCALE
+
+
+class CalendarLayout(NamedTuple):
+    """Everything the calendar needs to draw itself, resolved in one pass."""
+    size: int
+    mode: str
+    gutter: int
+    groups: list[tuple[str, list[str]]]
+    drawn_rows: int
+    overflow: int
+    footer: bool
+
+
+def _spine_ink_height(label: str, size: int, logger: "Logger") -> int:
+    """Scaled height a day label needs once rotated 90 degrees into a spine.
+
+    A label is drawn normally (horizontally) to measure it, then rotated 90
+    degrees to run down the gutter. Rotation swaps the bounding box: the
+    label's un-rotated WIDTH (how long "Wed" runs left-to-right) becomes the
+    spine's HEIGHT — the vertical space it needs once standing upright. Using
+    the un-rotated height here instead would almost never exceed a group's
+    row budget, since a font's ascent+descent already sets the row advance;
+    the gate would then never reject a group, which defeats its purpose.
+    """
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    box = font.getbbox(label)
+    return box[2] - box[0]
+
+
+def _calendar_gates(
+    groups: list[tuple["date | None", str, list[str]]],
+    has_unparseable: bool,
+    size: int,
+    width: int,
+    logger: "Logger",
+) -> bool:
+    """Whether the gutter is usable at this size. Both gates must pass.
+
+    (a) every group is tall enough to carry its spine, and
+    (b) enough width is left for the summary after gutter and time prefix.
+
+    All-or-nothing: mixing modes between groups would leave rows starting at
+    different x positions within one panel, which reads as a rendering fault.
+    """
+    if has_unparseable or not groups:
+        return False
+
+    advance = _calendar_row_advance(size, logger)
+    for _, label, rows in groups:
+        # >=, not >: a spine exactly as tall as its row budget leaves no
+        # margin against the separator below it, so it does not count as fit.
+        if _spine_ink_height(label, size, logger) >= len(rows) * advance:
+            return False
+
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    prefix_box = font.getbbox("00:00-00:00  ")
+    remaining = (
+        (width - 40 - CALENDAR_GUTTER_W) * COMPONENT_SCALE
+        - (prefix_box[2] - prefix_box[0])
+    )
+    return remaining >= CALENDAR_MIN_SUMMARY_W * COMPONENT_SCALE
+
+
+def _calendar_layout(
+    events: list[CalendarEvent],
+    width: int,
+    height: int,
+    logger: "Logger",
+    *,
+    min_size: int = CALENDAR_MIN_BODY_SIZE,
+    fixed_size: int | None = None,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
+) -> CalendarLayout:
+    """Resolves size, mode, geometry and overflow for a calendar panel.
+
+    Font size determines row height, which determines group height, which
+    determines whether the spine fits, which determines content width, which
+    feeds back into the size. The loop is broken by evaluating the whole
+    layout at each candidate rung and taking the first that works.
+
+    Both the probe (_panel_body_fit) and the draw (_draw_calendar_component)
+    call this. If they each derived mode independently they would drift, and
+    the probe would report a size the panel does not draw at.
+
+    Args:
+        events: Calendar events for the panel; sorted in place
+        width: Unscaled tile width
+        height: Unscaled tile height
+        logger: Logger instance
+        min_size: Smallest rung the ladder walk may return
+        fixed_size: When set, skip the ladder entirely and evaluate the gates
+            once at this size. This is the path taken whenever tile_components
+            has settled the layout row on a size — without it the draw would
+            have to re-derive mode at that imposed size on its own.
+        title_font_size: Title size resolved by the caller, forwarded to
+            _calendar_capacity so rows start where the title actually ends.
+        title_lines: Title line count resolved by the caller; see
+            title_font_size.
+
+    Returns:
+        A CalendarLayout. `groups` rows are the FINAL strings for the chosen
+        mode: already prefixed with the day in prefix mode, bare in gutter
+        mode.
+    """
+    raw_groups, has_unparseable = _calendar_day_groups(events, logger)
+    if not raw_groups:
+        return CalendarLayout(min_size, 'prefix', 0, [], 0, 0, False)
+
+    n_rows = sum(len(rows) for _, _, rows in raw_groups)
+
+    def build(size: int) -> CalendarLayout:
+        use_gutter = _calendar_gates(raw_groups, has_unparseable, size, width, logger)
+        if use_gutter:
+            groups = [(label, list(rows)) for _, label, rows in raw_groups]
+            gutter = CALENDAR_GUTTER_W
+        else:
+            groups = [
+                (label, [f"{label} {row}" if label else row for row in rows])
+                for _, label, rows in raw_groups
+            ]
+            gutter = 0
+        capacity = _calendar_capacity(
+            size, height, len(raw_groups), logger,
+            title_font_size=title_font_size, title_lines=title_lines,
+        )
+        if n_rows <= capacity:
+            drawn, footer = n_rows, False
+        else:
+            footer_rows = _calendar_capacity(
+                size, height, len(raw_groups) + 1, logger,
+                title_font_size=title_font_size, title_lines=title_lines,
+            )
+            if footer_rows - 1 >= 1:
+                drawn, footer = footer_rows - 1, True
+            else:
+                # A footer would leave no room for any event at all. A bare
+                # "+N more" with nothing above it is worse than silent
+                # truncation, so spend every available row on events.
+                drawn, footer = capacity, False
+        return CalendarLayout(
+            size, 'gutter' if use_gutter else 'prefix', gutter,
+            groups, drawn, n_rows - drawn, footer,
+        )
+
+    if fixed_size is not None:
+        return build(fixed_size)
+
+    for size in BODY_SIZE_LADDER:
+        if size < min_size:
+            continue
+        candidate = build(size)
+        if candidate.overflow:
+            continue
+        rows = [row for _, group_rows in candidate.groups for row in group_rows]
+        budget = (width - 40 - candidate.gutter) * COMPONENT_SCALE
+        font = _load_font(size * COMPONENT_SCALE, logger)
+        if all(font.getbbox(t)[2] - font.getbbox(t)[0] <= budget for t in rows):
+            return candidate
+    return build(min_size)
+
+
+def _calendar_content_top(title_font_size: int | None, title_lines: int, logger: "Logger") -> int:
+    """Unscaled y where a calendar panel's event rows start, below the title.
+
+    One definition shared by _calendar_capacity (which paginates before
+    drawing) and _draw_calendar_component (which draws). If these ever
+    disagreed, pagination and rendering would diverge and rows would fall
+    off the bottom of the panel -- which is exactly what happened when a
+    two-line title widened the drawn offset but the capacity calculation
+    kept assuming the fixed one-line CALENDAR_CONTENT_TOP.
+    """
+    if title_lines <= 1:
+        return CALENDAR_CONTENT_TOP
+    band = _title_band_height(title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger)
+    return max(CALENDAR_CONTENT_TOP, 5 + band + TITLE_BAND_GAP)
+
+
+def _calendar_capacity(
+    size: int,
+    height: int,
+    n_groups: int,
+    logger: "Logger",
+    *,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
+) -> int:
+    """How many rows fit the panel at this size, after separators.
+
+    Separators are counted in both modes — prefix mode keeps them, which is
+    what makes the vertical budget mode-independent so it need not be resolved
+    after the mode.
+    """
+    content_top = _calendar_content_top(title_font_size, title_lines, logger)
+    budget = (
+        height * COMPONENT_SCALE
+        - content_top * COMPONENT_SCALE
+        - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
+        - max(0, n_groups - 1) * CALENDAR_SEP_H * COMPONENT_SCALE
+    )
+    advance = _calendar_row_advance(size, logger)
+    return max(0, budget // advance)
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:
@@ -1245,6 +1512,27 @@ def _draw_entity_component(
     return img.resize((width, height), Image.LANCZOS)
 
 
+def _draw_spine(img: Image.Image, label: str, size: int,
+                top: int, bottom: int, logger: "Logger") -> None:
+    """Draws a day label rotated 90 degrees in the left gutter.
+
+    PIL cannot draw rotated text, so the label is rendered to a temp image and
+    rotated. The temp image is sized by the label's INK box, not the font's
+    line box: after rotation the text's height becomes its width, and the line
+    box is 38px at 28pt against a 32px gutter, where the ink box is 22px.
+    """
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    box = font.getbbox(label)
+    w, h = box[2] - box[0], box[3] - box[1]
+    if w <= 0 or h <= 0:
+        return
+    tmp = Image.new('RGB', (w, h), color='white')
+    ImageDraw.Draw(tmp).text((-box[0], -box[1]), label, font=font, fill='black')
+    rotated = tmp.rotate(90, expand=True)
+    y = top + max(0, (bottom - top - rotated.height) // 2)
+    img.paste(rotated, (4 * COMPONENT_SCALE, y))
+
+
 def _draw_calendar_component(
     friendly_name: str,
     events: list[CalendarEvent],
@@ -1314,14 +1602,7 @@ def _draw_calendar_component(
         spacing=TITLE_LINE_SPACING * scale,
     )
 
-    if title_lines > 1:
-        band: int = _title_band_height(
-            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
-        ) * scale
-        y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
-    else:
-        y_pos = 50 * scale
-    line_spacing: int = 8 * scale
+    y_pos: int = _calendar_content_top(title_font_size, title_lines, logger) * scale
 
     if not events:
         msg: str = "No upcoming events"
@@ -1329,44 +1610,59 @@ def _draw_calendar_component(
         text_width = text_bbox[2] - text_bbox[0]
         d.text(((large_width - text_width) / 2, y_pos), msg, font=font_event, fill='black')
     else:
-        event_strings: list[str] = _calendar_row_texts(events, logger)
-
-        padding: int = 40 * scale
-        content_width: int = large_width - padding
-
-        # One size for every event in the panel, resolved before anything is
-        # drawn, so a single long summary no longer renders at half the size of
-        # the event above it. The caller may supply a size agreed across the
-        # whole layout row instead.
-        # Floored so a direct caller (no row-agreed body_font_size) agrees with
-        # what _panel_body_fit probes for this panel type — otherwise the
-        # probe and the render would disagree on a calendar's own size.
-        font_row = _load_font(
-            (body_font_size if body_font_size is not None
-             else _fit_body_size(event_strings, content_width, logger,
-                                  min_size=CALENDAR_MIN_BODY_SIZE)) * scale,
-            logger,
+        scaled_gutter_pad = 40 * scale
+        layout = _calendar_layout(
+            events, width, height, logger, fixed_size=body_font_size,
+            title_font_size=title_font_size, title_lines=title_lines,
         )
-        # A single shared row advance: even at one font size the per-row ink
-        # height still swings with ascenders and descenders, which is what made
-        # the old spacing ragged.
-        row_probe = d.textbbox((0, 0), "Ag", font=font_row)
-        row_advance: int = (row_probe[3] - row_probe[1]) + line_spacing
+        font_row = _load_font(layout.size * scale, logger)
+        row_advance = _calendar_row_advance(layout.size, logger)
+        gutter = layout.gutter * scale
+        content_width = large_width - scaled_gutter_pad - gutter
+        x_text = 20 * scale + gutter
 
-        for event_str in event_strings:
-            # The ladder floor can still leave an event too wide — an
-            # unbreakable summary. Rows are not wrapped, so truncate instead.
-            # _ellipsize returns a fitting string unchanged.
-            d.text(
-                (20 * scale, y_pos),
-                _ellipsize(event_str, font_row, content_width, d),
-                font=font_row,
-                fill='black',
-            )
-            y_pos += row_advance
-
-            if y_pos > large_height - 30 * scale:
+        remaining = layout.drawn_rows
+        for index, (label, rows) in enumerate(layout.groups):
+            if remaining <= 0:
                 break
+            if index:
+                d.line(
+                    [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
+                    fill='black', width=1,
+                )
+                y_pos += CALENDAR_SEP_H * scale
+            group_top = y_pos
+            drawn_here = min(len(rows), remaining)
+            for row in rows[:drawn_here]:
+                d.text(
+                    (x_text, y_pos),
+                    _ellipsize(row, font_row, content_width, d),
+                    font=font_row, fill='black',
+                )
+                y_pos += row_advance
+            remaining -= drawn_here
+            if layout.mode == 'gutter':
+                # A 2px vertical rule between the spine and the row text,
+                # spanning only the rows this group actually drew (group_top
+                # to y_pos, the same span _draw_spine uses) -- a group
+                # truncated by the row budget gets a rule sized to match.
+                d.line(
+                    [(x_text - 8 * scale, group_top), (x_text - 8 * scale, y_pos)],
+                    fill='black', width=2 * scale,
+                )
+                _draw_spine(img, label, layout.size, group_top, y_pos, logger)
+
+        if layout.footer:
+            d.line(
+                [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
+                fill='black', width=1,
+            )
+            y_pos += CALENDAR_SEP_H * scale
+            d.text(
+                (x_text, y_pos),
+                f"+{layout.overflow} more",
+                font=font_row, fill='black',
+            )
 
     return img.resize((width, height), Image.LANCZOS)
 
@@ -1924,8 +2220,11 @@ def tile_components(
         # that row is pulled up to the same floor.
         body_specs: list[tuple[int, int]] = [
             (fit, _body_floor(str(render_data.get('type', ''))))
-            for render_data, _, _, tile_w, _ in row
-            if (fit := _panel_body_fit(render_data, tile_w, logger)) is not None
+            for render_data, _, _, tile_w, tile_h in row
+            if (fit := _panel_body_fit(
+                render_data, tile_w, tile_h, logger,
+                title_font_size=title_font_size, title_lines=title_lines,
+            )) is not None
         ]
         body_font_size: int | None = (
             max(min(f for f, _ in body_specs), max(fl for _, fl in body_specs))

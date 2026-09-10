@@ -546,6 +546,101 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'body_text_size_harmonisation')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_calendar_day_grouping(self, mock_fetch_calendar, mock_get_entity_state):
+        """A single busy day renders as a rotated spine in a left gutter.
+
+        Five events on one day, beside an entity panel. Asserting the
+        computed mode up front means this golden cannot silently stop
+        testing gutter mode if the layout math ever shifts under it.
+        """
+        mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
+        mock_fetch_calendar.return_value = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(5)
+        ]
+        dashboard = {
+            'name': 'calgutter',
+            'title': 'Cal Gutter',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home',
+                 'arguments': {'calendar_id': 'calendar.home'}},
+                {'type': 'entity', 'friendly_name': 'Temp',
+                 'entity_name': 'sensor.t'},
+            ],
+        }
+
+        from math import ceil, sqrt
+        from trmnl_server.components import _calendar_layout
+
+        n = len(dashboard['components'])
+        grid_rows = int(ceil(sqrt(n)))
+        grid_cols = int(ceil(n / grid_rows))
+        tile_w, tile_h = 800 // grid_cols, 480 // grid_rows
+        self.assertEqual(
+            _calendar_layout(list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger).mode,
+            'gutter',
+        )
+
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'calendar_day_grouping')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_calendar_prefix_fallback(self, mock_fetch_calendar, mock_get_entity_state):
+        """A day holding only a single event can't carry a spine, so the
+        whole panel falls back to a per-row day prefix instead.
+
+        Two days: one with a single event (too short to fit a rotated
+        spine), one with two. All-or-nothing means the short group's
+        failure drags the whole panel into prefix mode, not just its own
+        rows.
+        """
+        mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
+        mock_fetch_calendar.return_value = [
+            {'summary': 'Event 0',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:30:00+00:00'}},
+            {'summary': 'Event 0',
+             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}},
+            {'summary': 'Event 1',
+             'start': {'dateTime': '2024-01-18T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T10:30:00+00:00'}},
+        ]
+        dashboard = {
+            'name': 'calprefix',
+            'title': 'Cal Prefix',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home',
+                 'arguments': {'calendar_id': 'calendar.home'}},
+                {'type': 'entity', 'friendly_name': 'Temp',
+                 'entity_name': 'sensor.t'},
+            ],
+        }
+
+        from math import ceil, sqrt
+        from trmnl_server.components import _calendar_layout
+
+        n = len(dashboard['components'])
+        grid_rows = int(ceil(sqrt(n)))
+        grid_cols = int(ceil(n / grid_rows))
+        tile_w, tile_h = 800 // grid_cols, 480 // grid_rows
+        self.assertEqual(
+            _calendar_layout(list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger).mode,
+            'prefix',
+        )
+
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'calendar_prefix_fallback')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_row_body_text_size_harmonisation(self, mock_get_entity_state):
         """Four entity-list panels in a 2x2 grid: each row settles on one size.
 

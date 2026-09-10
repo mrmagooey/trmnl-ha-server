@@ -31,8 +31,12 @@ from trmnl_server.components import (
     _fit_body_size,
     _panel_body_fit,
     _body_floor,
+    _calendar_layout,
+    _calendar_capacity,
     CALENDAR_MIN_BODY_SIZE,
-    _calendar_row_texts,
+    CALENDAR_GUTTER_W,
+    _calendar_event_row,
+    _calendar_day_groups,
     _entities_row_parts,
     _todo_row_texts,
     _ellipsize,
@@ -699,7 +703,40 @@ class TestDrawCalendarComponent(unittest.TestCase):
         
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
+    def test_two_line_title_does_not_push_rows_past_the_bottom_margin(self):
+        """Rows and the footer must not draw past the panel's bottom margin
+        under a two-line title.
+
+        _calendar_capacity always subtracted the fixed one-line
+        CALENDAR_CONTENT_TOP as the y where rows start, but the draw function
+        starts rows lower than that once the title wraps to two lines (it
+        reserves a band sized to the title's own height instead). The
+        resolver then thinks more rows fit than actually do, and rows/footer
+        get drawn past the intended bottom margin, right up against the
+        canvas edge.
+        """
+        events = [
+            {
+                'summary': f'Event {i} with a moderately long summary line here',
+                'start': {'dateTime': f'2024-01-17T{(9 + i) % 24:02d}:00:00+00:00'},
+                'end': {'dateTime': f'2024-01-17T{(9 + i) % 24:02d}:30:00+00:00'},
+            }
+            for i in range(20)
+        ]
+
+        img = _draw_calendar_component(
+            "A Fairly Long Calendar Title That Wraps Onto Two Lines Potentially",
+            events, 800, 480, mock_logger,
+            title_font_size=35, title_lines=2,
+        )
+        width, height = img.size
+        bottom_margin = img.crop((0, height - 30, width, height)).convert("L").getextrema()[0]
+        self.assertEqual(
+            bottom_margin, 255,
+            "row/footer ink was drawn inside the panel's bottom margin",
+        )
+
     def test_long_unbroken_event_is_ellipsized_not_clipped(self):
         """A calendar event with an unbreakable summary is truncated, not clipped.
 
@@ -788,6 +825,156 @@ class TestDrawCalendarComponent(unittest.TestCase):
         )
         
         self.assertIsInstance(img, Image.Image)
+
+
+class TestCalendarGutterRendering(unittest.TestCase):
+    """The panel draws what the resolver decided, and nothing else."""
+
+    def _events(self, day, count):
+        return [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'{day}T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'{day}T{9 + i:02d}:30:00+00:00'}}
+            for i in range(count)
+        ]
+
+    def _ink_columns(self, img):
+        """x positions that contain any non-white pixel."""
+        gray = img.convert('L')
+        w, h = gray.size
+        px = gray.load()
+        return {x for x in range(w) for y in range(h) if px[x, y] < 250}
+
+    def test_gutter_mode_puts_ink_in_the_left_gutter(self):
+        events = self._events('2024-01-17', 5)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        # Rows start after the gutter, so ink below the title inside the
+        # gutter band can only be the spine.
+        band = [x for x in self._ink_columns(img) if x < CALENDAR_GUTTER_W]
+        self.assertTrue(band, "expected spine ink inside the gutter")
+
+    def _longest_vertical_run(self, img, col):
+        """Longest contiguous run of non-white pixels down one column."""
+        gray = img.convert('L')
+        h = gray.size[1]
+        px = gray.load()
+        longest = run = 0
+        for y in range(h):
+            if px[col, y] < 250:
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 0
+        return longest
+
+    def test_gutter_mode_draws_a_vertical_rule_between_spine_and_rows(self):
+        """A 2px rule separates the gutter from the rows in gutter mode.
+
+        Spec: docs/superpowers/specs/2026-09-09-calendar-day-grouping-design.md
+        line 78. The rule sits at x_text - 8 (unscaled), clear of both the
+        spine glyphs (which end well before CALENDAR_GUTTER_W) and the row
+        text (which starts at x_text) -- so a long contiguous dark run at
+        that column, spanning the group's rows, can only be the rule.
+        """
+        events = self._events('2024-01-17', 2)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        rule_x = 20 + CALENDAR_GUTTER_W - 8
+        self.assertGreaterEqual(
+            self._longest_vertical_run(img, rule_x), 20,
+            "expected a tall contiguous vertical rule at the gutter/row boundary",
+        )
+
+    def test_gutter_rule_is_drawn_two_px_thick_on_the_scaled_canvas(self):
+        """The rule must be scaled like every other dimension in this feature.
+
+        Every other measurement in the gutter/spine feature is applied as
+        `unscaled * COMPONENT_SCALE` before drawing on the 2x canvas, which is
+        what survives the final LANCZOS downsample as its true unscaled size.
+        The rule's width was drawn as a bare 2 directly on the 2x canvas
+        instead, which downsamples to roughly 1px -- half the spec's 2px.
+        Asserting the width PIL was actually told to draw with is unambiguous
+        where measuring anti-aliased pixels after a LANCZOS resize is not.
+        """
+        events = self._events('2024-01-17', 2)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.line') as mock_line:
+            _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        rule_calls = [
+            call for call in mock_line.call_args_list
+            if call.kwargs.get('width') != 1
+        ]
+        self.assertTrue(rule_calls, "expected a gutter rule line with width != 1")
+        self.assertTrue(
+            all(call.kwargs.get('width') == 2 * COMPONENT_SCALE for call in rule_calls),
+            [call.kwargs.get('width') for call in rule_calls],
+        )
+
+    def test_prefix_mode_draws_no_vertical_rule(self):
+        """Prefix mode reserves no gutter, so no rule should be drawn either."""
+        # A one-event second day forces prefix mode.
+        events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        rule_x = 20 + CALENDAR_GUTTER_W - 8
+        self.assertLess(
+            self._longest_vertical_run(img, rule_x), 20,
+            "prefix mode should not draw a gutter/row separator rule",
+        )
+
+    def test_prefix_mode_leaves_the_gutter_empty(self):
+        # A one-event second day forces prefix mode.
+        events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+        # Prefix mode reserves no gutter column (CalendarLayout.gutter is 0),
+        # so rows are drawn flush against the same left margin every other
+        # panel body uses, which legitimately puts glyph ink inside the first
+        # CALENDAR_GUTTER_W columns -- that is not a spine. The real invariant
+        # is that _draw_spine itself is never invoked in this mode.
+        with mock.patch('trmnl_server.components._draw_spine') as mock_spine:
+            _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        mock_spine.assert_not_called()
+
+    def test_empty_calendar_still_draws_the_placeholder(self):
+        img = _draw_calendar_component('Cal', [], 400, 240, mock_logger)
+        self.assertEqual(img.size, (400, 240))
+        self.assertTrue(self._ink_columns(img), "placeholder should draw something")
+
+    def test_draw_is_deterministic(self):
+        from PIL import ImageChops
+        events = self._events('2024-01-17', 5)
+        a = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        b = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        self.assertIsNone(ImageChops.difference(a, b).getbbox())
+
+    def test_an_imposed_size_is_respected(self):
+        from PIL import ImageChops
+        events = self._events('2024-01-17', 5)
+        # The layout the draw call consumes must actually carry the imposed
+        # size through -- not silently walk its own ladder instead.
+        self.assertEqual(
+            _calendar_layout(list(events), 400, 240, mock_logger, fixed_size=24).size,
+            24,
+        )
+        # And two different imposed sizes must render differently, so this
+        # would fail if body_font_size were ignored (unlike comparing two
+        # renders at the same imposed size, which only re-proves determinism).
+        forced_24 = _draw_calendar_component(
+            'Cal', list(events), 400, 240, mock_logger, body_font_size=24
+        )
+        forced_16 = _draw_calendar_component(
+            'Cal', list(events), 400, 240, mock_logger, body_font_size=16
+        )
+        self.assertIsNotNone(
+            ImageChops.difference(forced_24, forced_16).getbbox(),
+            "different imposed sizes must render differently",
+        )
 
 
 class TestDrawEntitiesComponent(unittest.TestCase):
@@ -2631,17 +2818,17 @@ class TestPanelBodyFit(unittest.TestCase):
             {'type': 'url', 'data': '42'},
             {'type': 'history_graph', 'data': [(1, 2.0)]},
         ):
-            self.assertIsNone(_panel_body_fit(render_data, 400, mock_logger),
+            self.assertIsNone(_panel_body_fit(render_data, 400, 220, mock_logger),
                               render_data['type'])
 
     def test_missing_or_empty_data_returns_none(self):
         """Those panels draw a fixed-size placeholder, not rows."""
         for data in (None, [], {}):
             self.assertIsNone(
-                _panel_body_fit({'type': 'entities', 'data': data}, 400, mock_logger)
+                _panel_body_fit({'type': 'entities', 'data': data}, 400, 220, mock_logger)
             )
             self.assertIsNone(
-                _panel_body_fit({'type': 'calendar', 'data': data}, 400, mock_logger)
+                _panel_body_fit({'type': 'calendar', 'data': data}, 400, 220, mock_logger)
             )
 
     def test_todo_with_only_completed_items_returns_none(self):
@@ -2649,13 +2836,13 @@ class TestPanelBodyFit(unittest.TestCase):
             'type': 'todo_list',
             'data': [{'summary': 'done', 'status': 'completed'}],
         }
-        self.assertIsNone(_panel_body_fit(render_data, 400, mock_logger))
+        self.assertIsNone(_panel_body_fit(render_data, 400, 220, mock_logger))
 
     def test_long_rows_probe_smaller_than_short_rows(self):
         long_fit = _panel_body_fit(
-            {'type': 'entities', 'data': self.LONG_ROWS}, 400, mock_logger)
+            {'type': 'entities', 'data': self.LONG_ROWS}, 400, 220, mock_logger)
         short_fit = _panel_body_fit(
-            {'type': 'entities', 'data': self.SHORT_ROWS}, 400, mock_logger)
+            {'type': 'entities', 'data': self.SHORT_ROWS}, 400, 220, mock_logger)
         self.assertIn(long_fit, BODY_SIZE_LADDER)
         self.assertIn(short_fit, BODY_SIZE_LADDER)
         self.assertLess(long_fit, short_fit)
@@ -2665,9 +2852,9 @@ class TestPanelBodyFit(unittest.TestCase):
         items = [{'summary': 'Book the annual car service appointment',
                   'status': 'needs_action'}]
         one = _panel_body_fit(
-            {'type': 'todo_list', 'data': items, 'columns': 1}, 400, mock_logger)
+            {'type': 'todo_list', 'data': items, 'columns': 1}, 400, 220, mock_logger)
         two = _panel_body_fit(
-            {'type': 'todo_list', 'data': items, 'columns': 2}, 400, mock_logger)
+            {'type': 'todo_list', 'data': items, 'columns': 2}, 400, 220, mock_logger)
         self.assertLessEqual(two, one)
 
     def test_probe_matches_what_the_panel_draws_alone(self):
@@ -2678,7 +2865,7 @@ class TestPanelBodyFit(unittest.TestCase):
         """
         from PIL import ImageChops
         render_data = {'type': 'entities', 'data': self.LONG_ROWS}
-        probed = _panel_body_fit(render_data, 400, mock_logger)
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
         alone = _draw_entities_component(
             'Sensors', list(self.LONG_ROWS), 400, 220, mock_logger)
         forced = _draw_entities_component(
@@ -2700,11 +2887,78 @@ class TestPanelBodyFit(unittest.TestCase):
              'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
         ]
         render_data = {'type': 'calendar', 'data': events}
-        probed = _panel_body_fit(render_data, 400, mock_logger)
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
         self.assertGreaterEqual(probed, CALENDAR_MIN_BODY_SIZE)
         alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
         forced = _draw_calendar_component(
             'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed)
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
+    def test_probe_matches_the_calendar_in_gutter_mode(self):
+        from PIL import ImageChops
+        events = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(5)
+        ]
+        render_data = {'type': 'calendar', 'data': list(events)}
+        self.assertEqual(
+            _calendar_layout(list(events), 400, 220, mock_logger).mode, 'gutter'
+        )
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed
+        )
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
+    def test_probe_matches_the_calendar_at_a_non_floor_size(self):
+        """A single short event in a roomy tile resolves above the floor.
+
+        The other calendar equivalence tests all happen to resolve to
+        CALENDAR_MIN_BODY_SIZE, so a probe that collapsed to the floor
+        unconditionally would still pass them. This fixture resolves to 28,
+        so it would catch that regression.
+        """
+        from PIL import ImageChops
+        events = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:15:00+00:00'}},
+        ]
+        render_data = {'type': 'calendar', 'data': list(events)}
+        layout = _calendar_layout(list(events), 400, 220, mock_logger)
+        self.assertEqual(layout.size, 28)
+        self.assertNotEqual(layout.size, CALENDAR_MIN_BODY_SIZE)
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed
+        )
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
+    def test_probe_matches_the_calendar_in_prefix_mode(self):
+        from PIL import ImageChops
+        events = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(3)
+        ] + [
+            {'summary': 'Lonely',
+             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}}
+        ]
+        render_data = {'type': 'calendar', 'data': list(events)}
+        self.assertEqual(
+            _calendar_layout(list(events), 400, 220, mock_logger).mode, 'prefix'
+        )
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed
+        )
         self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
 
 
@@ -2928,6 +3182,77 @@ class TestCalendarRowFloor(unittest.TestCase):
         self.assertEqual(darkest, 255, "entity row reached the right tile edge unellipsized")
 
 
+class TestCalendarModeRespondsToRowImposition(unittest.TestCase):
+    """Mode is a property of the resolved layout, not of the calendar alone.
+
+    The spec's Testing section names this as the scenario most likely to
+    regress: a calendar's mode can change once row harmonisation imposes a
+    size a sibling chose, instead of the size the calendar would have picked
+    for itself. This drives that through the real tile_components
+    row-imposition path (an actual dashboard fixture with a sibling that
+    forces the size) rather than calling _calendar_layout directly with a
+    hand-picked fixed_size, which would only prove the gate math works, not
+    that tile_components ever actually exercises it.
+    """
+
+    def test_a_sibling_imposed_size_flips_the_calendar_s_mode(self):
+        # Two one-letter-summary events on a single day: left to its own
+        # ladder walk at the width this row ends up with (266, via the
+        # large_display top panel splitting the bottom row three ways), the
+        # calendar settles on size 24 in prefix mode. A sibling with a very
+        # long entity name in the same row has its own fit pulled down to
+        # BODY_SIZE_LADDER[-1] (16); harmonised against the calendar's own
+        # floor (CALENDAR_MIN_BODY_SIZE=20), the row settles on 20 instead of
+        # the calendar's own 24 -- which flips the width gate and the mode.
+        calendar_events = [
+            {'summary': 'X',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(2)
+        ]
+        render_data = [
+            {'type': 'entity', 'friendly_name': 'Big', 'data': 5, 'large_display': True},
+            {'type': 'calendar', 'friendly_name': 'Cal', 'data': calendar_events,
+             'large_display': False},
+            {'type': 'entities', 'friendly_name': 'Sensors', 'data': [
+                {'friendly_name': 'A Very Long Entity Name Indeed Here',
+                 'state': 'a very long state value here too'},
+            ], 'large_display': False},
+            {'type': 'entities', 'friendly_name': 'Sensors2', 'data': [
+                {'friendly_name': 'B', 'state': '1'},
+            ], 'large_display': False},
+        ]
+
+        captured = {}
+        real_draw = _draw_calendar_component
+
+        def spy(friendly_name, events, width, height, logger, **kwargs):
+            captured['body_font_size'] = kwargs.get('body_font_size')
+            captured['width'] = width
+            captured['height'] = height
+            return real_draw(friendly_name, events, width, height, logger, **kwargs)
+
+        with mock.patch('trmnl_server.components._draw_calendar_component', side_effect=spy):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+
+        self.assertIn('body_font_size', captured, "the calendar panel was never drawn")
+        imposed_size = captured['body_font_size']
+        width, height = captured['width'], captured['height']
+
+        own = _calendar_layout(list(calendar_events), width, height, mock_logger)
+        imposed = _calendar_layout(
+            list(calendar_events), width, height, mock_logger, fixed_size=imposed_size
+        )
+
+        self.assertEqual(own.mode, 'prefix',
+                          "test assumption: the calendar's own free choice is prefix")
+        self.assertNotEqual(imposed_size, own.size,
+                             "the sibling should have forced a different size than the "
+                             "calendar's own free choice")
+        self.assertEqual(imposed.mode, 'gutter',
+                          "row imposition should have flipped the resolved mode")
+
+
 class TestBodyRowTextBuilders(unittest.TestCase):
     """The row resolver and the draw functions must build identical strings."""
 
@@ -2939,21 +3264,45 @@ class TestBodyRowTextBuilders(unittest.TestCase):
         self.assertEqual(_entities_row_parts([{'friendly_name': 'X'}]),
                          [('X', ': N/A')])
 
-    def test_calendar_row_texts_sorts_and_formats(self):
+    @staticmethod
+    def _flat_rows(events):
+        """Every calendar row in display order, flattened across day groups.
+
+        The row resolver's dead delegator that used to do this directly has
+        been deleted (the probe is now rewired onto _calendar_layout), so
+        these tests flatten _calendar_day_groups themselves instead.
+        """
+        groups, _ = _calendar_day_groups(events, mock_logger)
+        return [row for _, _, rows in groups for row in rows]
+
+    def test_calendar_rows_sort_and_format(self):
         events = [
             {'summary': 'Later', 'start': {'date': '2024-01-03'}},
             {'summary': 'Earlier',
              'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
              'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
         ]
-        texts = _calendar_row_texts(events, mock_logger)
-        self.assertEqual(len(texts), 2)
-        self.assertIn('Earlier', texts[0])
-        self.assertIn('All day: Later', texts[1])
+        texts = self._flat_rows(events)
+        self.assertEqual(texts, ['09:00-09:15  Earlier', 'All day  Later'])
 
-    def test_calendar_row_texts_handles_a_startless_event(self):
+    def test_calendar_rows_carry_no_weekday_name(self):
+        """Rows used to read 'Wednesday 10:00-12:00: ...'; the day is now grouped
+        separately, so no row text should contain a weekday name."""
+        events = [
+            {'summary': 'Timed',
+             'start': {'dateTime': '2024-01-17T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T12:00:00+00:00'}},
+            {'summary': 'AllDay', 'start': {'date': '2024-01-18'}},
+        ]
+        texts = self._flat_rows(events)
+        for text in texts:
+            for day in ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                        'Friday', 'Saturday', 'Sunday'):
+                self.assertNotIn(day, text)
+
+    def test_calendar_rows_handle_a_startless_event(self):
         self.assertEqual(
-            _calendar_row_texts([{'summary': 'Mystery', 'start': {}}], mock_logger),
+            self._flat_rows([{'summary': 'Mystery', 'start': {}}]),
             ['Unknown: Mystery'],
         )
 
@@ -2964,6 +3313,82 @@ class TestBodyRowTextBuilders(unittest.TestCase):
         texts = _todo_row_texts(items)
         self.assertEqual(len(texts), 40)
         self.assertNotIn('done already', texts)
+
+
+class TestCalendarDayGroups(unittest.TestCase):
+    """Events are grouped by date, and rows carry no weekday name."""
+
+    WED_9 = {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:15:00+00:00'}}
+    WED_10 = {'summary': 'Planning',
+              'start': {'dateTime': '2024-01-17T10:00:00+00:00'},
+              'end': {'dateTime': '2024-01-17T12:00:00+00:00'}}
+    THU_9 = {'summary': 'Retro',
+             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}}
+    ALL_DAY = {'summary': 'Sam on leave',
+               'start': {'date': '2024-01-18'}, 'end': {'date': '2024-01-19'}}
+    BROKEN = {'summary': 'Mystery', 'start': {}, 'end': {}}
+
+    def test_row_carries_time_and_summary_only(self):
+        self.assertEqual(_calendar_event_row(self.WED_10), '10:00-12:00  Planning')
+
+    def test_all_day_row(self):
+        self.assertEqual(_calendar_event_row(self.ALL_DAY), 'All day  Sam on leave')
+
+    def test_unparseable_row_keeps_its_marker(self):
+        self.assertEqual(_calendar_event_row(self.BROKEN), 'Unknown: Mystery')
+
+    def test_no_row_contains_a_weekday_name(self):
+        for event in (self.WED_9, self.WED_10, self.THU_9, self.ALL_DAY):
+            row = _calendar_event_row(event)
+            for day in ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                        'Friday', 'Saturday', 'Sunday'):
+                self.assertNotIn(day, row)
+
+    def test_groups_one_per_date_in_order(self):
+        groups, _ = _calendar_day_groups(
+            [self.THU_9, self.WED_10, self.WED_9], mock_logger
+        )
+        self.assertEqual([label for _, label, _ in groups], ['Wed', 'Thu'])
+        self.assertEqual(len(groups[0][2]), 2)
+        self.assertEqual(len(groups[1][2]), 1)
+
+    def test_rows_within_a_group_are_time_ordered(self):
+        groups, _ = _calendar_day_groups([self.WED_10, self.WED_9], mock_logger)
+        self.assertEqual(groups[0][2], ['09:00-09:15  Standup', '10:00-12:00  Planning'])
+
+    def test_label_is_the_three_letter_abbreviation(self):
+        groups, _ = _calendar_day_groups([self.WED_9], mock_logger)
+        self.assertEqual(groups[0][1], 'Wed')
+
+    def test_unparseable_event_is_reported(self):
+        _, has_unparseable = _calendar_day_groups([self.WED_9, self.BROKEN], mock_logger)
+        self.assertTrue(has_unparseable)
+
+    def test_no_unparseable_event_is_reported_when_all_parse(self):
+        _, has_unparseable = _calendar_day_groups([self.WED_9, self.THU_9], mock_logger)
+        self.assertFalse(has_unparseable)
+
+    def test_all_day_and_timed_events_sort_together_without_raising(self):
+        """Regression: an all-day start used to build a naive datetime while a
+        timed start builds an aware one, so sorting a mixture raised
+        `TypeError: can't compare offset-naive and offset-aware datetimes`.
+
+        Mixes the two within the same day (ALL_DAY and THU_9 both fall on
+        2024-01-18) and across days (WED_9 falls on 2024-01-17), since the
+        same-day pairing is both the one most likely to occur and the one
+        that crashed.
+        """
+        groups, _ = _calendar_day_groups(
+            [self.ALL_DAY, self.THU_9, self.WED_9], mock_logger
+        )
+        self.assertEqual([label for _, label, _ in groups], ['Wed', 'Thu'])
+        # All-day sorts as start-of-day, so it leads the same-day timed event.
+        self.assertEqual(
+            groups[1][2], ['All day  Sam on leave', '09:00-09:30  Retro']
+        )
 
 
 class TestUrlComponentRendering(unittest.TestCase):
@@ -3010,6 +3435,215 @@ class TestUrlComponentRendering(unittest.TestCase):
             elapsed = time.perf_counter() - t0
             url_source._wait_for_pending()
         self.assertLess(elapsed, 2.0, "render must not wait for a slow fetch")
+
+
+class TestCalendarLayout(unittest.TestCase):
+    """One resolver decides size, mode, geometry and overflow together."""
+
+    def _events(self, spec):
+        """spec: list of (iso_date, count) -> events at 09:00, 10:00, ..."""
+        out = []
+        for day, count in spec:
+            for i in range(count):
+                out.append({
+                    'summary': f'Event {i}',
+                    'start': {'dateTime': f'{day}T{9 + i:02d}:00:00+00:00'},
+                    'end': {'dateTime': f'{day}T{9 + i:02d}:30:00+00:00'},
+                })
+        return out
+
+    def test_size_is_always_a_rung_at_or_above_the_floor(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 400, 240, mock_logger)
+        self.assertIn(layout.size, BODY_SIZE_LADDER)
+        self.assertGreaterEqual(layout.size, CALENDAR_MIN_BODY_SIZE)
+
+    def test_a_busy_single_day_uses_the_gutter(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        self.assertGreater(layout.gutter, 0)
+
+    def test_a_single_event_day_falls_back_to_prefix(self):
+        # A one-row group is shorter than its own spine at every rung.
+        layout = _calendar_layout(
+            self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 400, 240, mock_logger
+        )
+        self.assertEqual(layout.mode, 'prefix')
+        self.assertEqual(layout.gutter, 0)
+
+    def test_prefix_mode_puts_the_day_back_on_every_row(self):
+        layout = _calendar_layout(
+            self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 400, 240, mock_logger
+        )
+        for _, rows in layout.groups:
+            for row in rows:
+                self.assertRegex(row, r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ')
+
+    def test_gutter_mode_leaves_the_day_off_every_row(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 400, 240, mock_logger)
+        for _, rows in layout.groups:
+            for row in rows:
+                self.assertNotRegex(row, r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ')
+
+    def test_a_narrow_tile_falls_back_to_prefix(self):
+        # Gate (b): the gutter would leave under CALENDAR_MIN_SUMMARY_W.
+        layout = _calendar_layout(self._events([('2024-01-17', 5)]), 200, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+
+    def test_an_unparseable_event_forces_prefix(self):
+        events = self._events([('2024-01-17', 5)])
+        events.append({'summary': 'Mystery', 'start': {}, 'end': {}})
+        layout = _calendar_layout(events, 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+
+    def test_overflow_counts_the_rows_that_do_not_fit(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 12)]), 400, 240, mock_logger)
+        self.assertGreater(layout.overflow, 0)
+        total = sum(len(rows) for _, rows in layout.groups)
+        self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
+    def test_no_overflow_when_everything_fits(self):
+        layout = _calendar_layout(self._events([('2024-01-17', 3)]), 400, 240, mock_logger)
+        self.assertEqual(layout.overflow, 0)
+        self.assertEqual(
+            layout.drawn_rows, sum(len(rows) for _, rows in layout.groups)
+        )
+
+    def test_fixed_size_is_honoured_without_walking_the_ladder(self):
+        events = self._events([('2024-01-17', 5)])
+        layout = _calendar_layout(events, 400, 240, mock_logger, fixed_size=24)
+        self.assertEqual(layout.size, 24)
+
+    def test_fixed_size_agrees_with_the_walk_at_the_walk_s_own_answer(self):
+        events = self._events([('2024-01-17', 5)])
+        walked = _calendar_layout(list(events), 400, 240, mock_logger)
+        pinned = _calendar_layout(
+            list(events), 400, 240, mock_logger, fixed_size=walked.size
+        )
+        self.assertEqual(pinned, walked)
+
+    def test_every_imposed_size_returns_that_size_and_a_valid_mode(self):
+        # An imposed size is honoured verbatim at every rung, and the mode it
+        # resolves to is always one the draw function can render.
+        events = self._events([('2024-01-17', 2)])
+        for rung in BODY_SIZE_LADDER:
+            if rung < CALENDAR_MIN_BODY_SIZE:
+                continue
+            layout = _calendar_layout(
+                list(events), 400, 240, mock_logger, fixed_size=rung
+            )
+            self.assertEqual(layout.size, rung)
+            self.assertIn(layout.mode, ('gutter', 'prefix'))
+            self.assertEqual(layout.gutter > 0, layout.mode == 'gutter')
+
+    def test_empty_events_produce_no_groups(self):
+        layout = _calendar_layout([], 400, 240, mock_logger)
+        self.assertEqual(layout.groups, [])
+        self.assertEqual(layout.drawn_rows, 0)
+        self.assertEqual(layout.overflow, 0)
+
+
+class TestCalendarOverflowRow(unittest.TestCase):
+    """A panel that cannot show everything says so."""
+
+    def _events(self, count):
+        return [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{(6 + i) % 24:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{(6 + i) % 24:02d}:30:00+00:00'}}
+            for i in range(count)
+        ]
+
+    def test_overflow_reserves_a_row(self):
+        many = _calendar_layout(self._events(12), 400, 240, mock_logger)
+        few = _calendar_layout(self._events(3), 400, 240, mock_logger)
+        self.assertGreater(many.overflow, 0)
+        self.assertEqual(few.overflow, 0)
+        # The reserved footer row costs one event.
+        capacity = _calendar_capacity(many.size, 240, 1, mock_logger)
+        self.assertEqual(many.drawn_rows, capacity - 1)
+
+    def test_counts_every_undrawn_event_including_the_displaced_one(self):
+        layout = _calendar_layout(self._events(12), 400, 240, mock_logger)
+        total = sum(len(rows) for _, rows in layout.groups)
+        self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
+    def test_no_footer_when_everything_fits(self):
+        layout = _calendar_layout(self._events(3), 400, 240, mock_logger)
+        self.assertEqual(layout.overflow, 0)
+
+    def test_the_footer_is_drawn(self):
+        from PIL import ImageChops
+
+        events = self._events(12)
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        # Redraw with one fewer event than capacity and confirm the images
+        # differ — the footer is the only difference at the panel foot.
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        fitting = _draw_calendar_component(
+            'Cal', self._events(layout.drawn_rows), 400, 240, mock_logger
+        )
+        self.assertIsNotNone(ImageChops.difference(img, fitting).getbbox())
+
+    def test_a_panel_too_short_for_a_footer_shows_events_instead(self):
+        # At the floor size on a 120px tile, reserving a footer (one row plus
+        # its separator) leaves zero rows for events. A bare "+N more" with
+        # nothing above it is worse than silent truncation, so the resolver
+        # must spend every available row on events instead.
+        layout = _calendar_layout(
+            self._events(12), 400, 120, mock_logger, fixed_size=CALENDAR_MIN_BODY_SIZE
+        )
+        total = sum(len(rows) for _, rows in layout.groups)
+        self.assertFalse(layout.footer)
+        self.assertGreaterEqual(layout.drawn_rows, 1)
+        self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
+
+class TestCalendarProbeUsesBothFits(unittest.TestCase):
+    """_panel_body_fit takes the smaller of the horizontal and vertical fits."""
+
+    def _events(self, n, summary):
+        # Built from a base time with a timedelta offset, not a raw hour
+        # substitution, so n beyond 15 does not overflow into an invalid
+        # hour>=24 and blow up datetime.fromisoformat.
+        from datetime import datetime, timedelta, timezone
+        base = datetime(2024, 1, 17, 9, tzinfo=timezone.utc)
+        events = []
+        for i in range(n):
+            start = base + timedelta(hours=i)
+            end = start + timedelta(minutes=30)
+            events.append({
+                'summary': summary,
+                'start': {'dateTime': start.isoformat()},
+                'end': {'dateTime': end.isoformat()},
+            })
+        return events
+
+    def test_short_summaries_are_held_down_by_the_height(self):
+        # Short rows fit wide at 28pt, but eight of them do not fit a short
+        # tile; the probe must report the vertical answer, not the horizontal.
+        # A generously tall tile is used so the vertical fit clears the floor
+        # with margin to spare, regardless of a font's own hinting variance.
+        render_data = {'type': 'calendar', 'data': self._events(8, 'Sync')}
+        tall = _panel_body_fit(render_data, 400, 600, mock_logger)
+        short = _panel_body_fit(render_data, 400, 200, mock_logger)
+        self.assertLess(short, tall)
+
+    def test_still_never_below_the_calendar_floor(self):
+        render_data = {'type': 'calendar', 'data': self._events(20, 'Sync')}
+        self.assertGreaterEqual(
+            _panel_body_fit(render_data, 400, 120, mock_logger),
+            CALENDAR_MIN_BODY_SIZE,
+        )
+
+    def test_height_does_not_affect_non_calendar_panels(self):
+        render_data = {
+            'type': 'entities',
+            'data': [{'friendly_name': f'Sensor {i}', 'state': '20.0'} for i in range(8)],
+        }
+        self.assertEqual(
+            _panel_body_fit(render_data, 400, 400, mock_logger),
+            _panel_body_fit(render_data, 400, 120, mock_logger),
+        )
 
 
 if __name__ == '__main__':
