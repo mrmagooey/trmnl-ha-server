@@ -3038,6 +3038,25 @@ class TestCalendarDayGroups(unittest.TestCase):
         _, has_unparseable = _calendar_day_groups([self.WED_9, self.THU_9], mock_logger)
         self.assertFalse(has_unparseable)
 
+    def test_all_day_and_timed_events_sort_together_without_raising(self):
+        """Regression: an all-day start used to build a naive datetime while a
+        timed start builds an aware one, so sorting a mixture raised
+        `TypeError: can't compare offset-naive and offset-aware datetimes`.
+
+        Mixes the two within the same day (ALL_DAY and THU_9 both fall on
+        2024-01-18) and across days (WED_9 falls on 2024-01-17), since the
+        same-day pairing is both the one most likely to occur and the one
+        that crashed.
+        """
+        groups, _ = _calendar_day_groups(
+            [self.ALL_DAY, self.THU_9, self.WED_9], mock_logger
+        )
+        self.assertEqual([label for _, label, _ in groups], ['Wed', 'Thu'])
+        # All-day sorts as start-of-day, so it leads the same-day timed event.
+        self.assertEqual(
+            groups[1][2], ['All day  Sam on leave', '09:00-09:30  Retro']
+        )
+
     def test_flat_row_texts_match_the_groups(self):
         events = [self.WED_9, self.WED_10, self.THU_9]
         groups, _ = _calendar_day_groups(events, mock_logger)
