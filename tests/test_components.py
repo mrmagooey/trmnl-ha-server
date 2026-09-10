@@ -30,6 +30,8 @@ from trmnl_server.components import (
     _fit_title_size,
     _fit_body_size,
     _panel_body_fit,
+    _body_floor,
+    CALENDAR_MIN_BODY_SIZE,
     _calendar_row_texts,
     _entities_row_parts,
     _todo_row_texts,
@@ -718,6 +720,30 @@ class TestDrawCalendarComponent(unittest.TestCase):
         # getextrema()[0] is the darkest pixel; 255 means the strip is all white.
         darkest = img.crop((width - 2, 0, width, height)).convert("L").getextrema()[0]
         self.assertEqual(darkest, 255, "event text reached the right tile edge")
+
+    def test_long_summary_floors_at_the_calendar_minimum_and_ellipsizes(self):
+        """No explicit body_font_size: a long summary must not drag below 20."""
+        events = [
+            {
+                'summary': ('Wednesday 10:00-12:00: Quarterly planning review with '
+                            'the platform team'),
+                'start': {'dateTime': '2025-01-15T10:00:00+00:00'},
+                'end': {'dateTime': '2025-01-15T11:00:00+00:00'},
+            },
+        ]
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.text') as mock_text:
+            _draw_calendar_component("My Calendar", events, 400, 300, mock_logger)
+
+        drawn_sizes = {
+            call.kwargs['font'].size // COMPONENT_SCALE for call in mock_text.call_args_list
+            if call.kwargs.get('font') is not None
+        }
+        self.assertTrue(drawn_sizes, "no text was drawn with a font")
+        self.assertTrue(all(size >= CALENDAR_MIN_BODY_SIZE for size in drawn_sizes),
+                         drawn_sizes)
+
+        drawn = " ".join(str(call.args[1]) for call in mock_text.call_args_list)
+        self.assertIn("…", drawn)
 
     def test_draw_calendar_with_events(self):
         """Test drawing calendar with events."""
@@ -2404,6 +2430,17 @@ def _ink_row_bands(img, top):
     return bands
 
 
+class TestBodyFloor(unittest.TestCase):
+    """Unit tests for the per-panel-type body-size floor policy."""
+
+    def test_calendar_floors_at_the_calendar_minimum(self):
+        self.assertEqual(_body_floor('calendar'), CALENDAR_MIN_BODY_SIZE)
+
+    def test_every_other_panel_type_floors_at_the_ladder_minimum(self):
+        for panel_type in ('entities', 'todo_list', 'entity', 'url', 'history_graph', ''):
+            self.assertEqual(_body_floor(panel_type), BODY_SIZE_LADDER[-1], panel_type)
+
+
 class TestFitBodySize(unittest.TestCase):
     """Unit tests for the shared body-text size resolver."""
 
@@ -2436,6 +2473,28 @@ class TestFitBodySize(unittest.TestCase):
         together = _fit_body_size(self.SHORT + self.LONG, budget, mock_logger)
         self.assertLess(together, alone)
         self.assertEqual(together, _fit_body_size(self.LONG, budget, mock_logger))
+
+    def test_default_min_size_leaves_existing_behaviour_unchanged(self):
+        """No caller passing min_size must see any change in outcome."""
+        for budget in range(20, 1200, 37):
+            self.assertEqual(
+                _fit_body_size(self.SHORT + self.LONG, budget, mock_logger),
+                _fit_body_size(self.SHORT + self.LONG, budget, mock_logger,
+                                min_size=BODY_SIZE_LADDER[-1]),
+            )
+
+    def test_never_returns_below_min_size(self):
+        """Even a budget of 1 pixel must not push the result under the floor."""
+        for budget in (1, 5, 50, 200, 5000):
+            self.assertGreaterEqual(
+                _fit_body_size(self.LONG, budget, mock_logger, min_size=CALENDAR_MIN_BODY_SIZE),
+                CALENDAR_MIN_BODY_SIZE,
+            )
+
+    def test_still_picks_the_largest_fitting_rung_at_or_above_the_floor(self):
+        together = _fit_body_size(self.SHORT + self.LONG, 5000, mock_logger,
+                                   min_size=CALENDAR_MIN_BODY_SIZE)
+        self.assertEqual(together, BODY_SIZE_LADDER[0])
 
 
 class TestEllipsizePrefix(unittest.TestCase):
@@ -2527,7 +2586,14 @@ class TestBodySizeHarmonisation(unittest.TestCase):
         bands = _ink_row_bands(img, 50)
         self.assertEqual(len(bands), len(events))
         pitches = [bands[i + 1][0] - bands[i][0] for i in range(len(bands) - 1)]
-        self.assertEqual(len(set(pitches)), 1, f"ragged row pitch: {pitches}")
+        # The shared row advance is computed once in the scaled render and is
+        # bit-for-bit identical between rows; the final LANCZOS downscale to
+        # device resolution can still round adjoining rows' visible ink-start
+        # to different pixels when that advance isn't a whole number of output
+        # pixels (true for most ladder rungs -- 16 is the coincidental
+        # exception at this scale). That is +/-1px of resampling noise, not
+        # the several-pixel drift the old per-row shrink loop produced.
+        self.assertLessEqual(max(pitches) - min(pitches), 1, f"ragged row pitch: {pitches}")
 
     def test_todo_summaries_share_one_baseline(self):
         """Mixed-length todo items align on one baseline instead of stepping."""
@@ -2621,6 +2687,27 @@ class TestPanelBodyFit(unittest.TestCase):
             body_font_size=probed)
         self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
 
+    def test_probe_matches_what_the_calendar_draws_alone(self):
+        """The calendar counterpart: the probe must be floored the same way
+        the panel floors its own unforced render, or the two disagree."""
+        from PIL import ImageChops
+        events = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
+            {'summary': ('Quarterly planning review with the wider platform '
+                         'team and several other stakeholders'),
+             'start': {'dateTime': '2024-01-02T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
+        ]
+        render_data = {'type': 'calendar', 'data': events}
+        probed = _panel_body_fit(render_data, 400, mock_logger)
+        self.assertGreaterEqual(probed, CALENDAR_MIN_BODY_SIZE)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed)
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
 
 class TestRowBodySizeHarmonisation(unittest.TestCase):
     """Panels sharing a layout row must agree on one body text size."""
@@ -2700,6 +2787,147 @@ class TestRowBodySizeHarmonisation(unittest.TestCase):
             self._entities('D', list(self.SHORT)),
         ])
         self.assertEqual(mixed['A'], alone['A'])
+
+
+class TestCalendarRowFloor(unittest.TestCase):
+    """A calendar's minimum body size raises its row but not the whole layout.
+
+    Integration-level: exercises tile_components with real collaborators
+    (real layout math, real _panel_body_fit probing) and only fakes the four
+    leaf draw functions to capture the body_font_size each panel is handed.
+    """
+
+    LONG_ENTITIES = [
+        {'friendly_name': 'Kitchen', 'state': 21.5},
+        {'friendly_name': 'Back Garden Soil Moisture Sensor', 'state': 12.34},
+    ]
+    SHORT_ENTITIES = [
+        {'friendly_name': 'Hall', 'state': 20.0},
+        {'friendly_name': 'Attic', 'state': 18.0},
+    ]
+    LONG_TODO = [
+        {'summary': 'Book the annual car service appointment and MOT renewal',
+         'status': 'needs_action'},
+    ]
+    LONG_EVENTS = [
+        {'summary': ('Wednesday 10:00-12:00: Quarterly planning review with '
+                     'the platform team'),
+         'start': {'dateTime': '2024-01-02T10:00:00+00:00'},
+         'end': {'dateTime': '2024-01-02T12:00:00+00:00'}},
+    ]
+
+    @staticmethod
+    def _entities(name, rows):
+        return {'type': 'entities', 'friendly_name': name, 'data': rows,
+                'large_display': False}
+
+    @staticmethod
+    def _todo(name, items):
+        return {'type': 'todo_list', 'friendly_name': name, 'data': items,
+                'large_display': False}
+
+    @staticmethod
+    def _calendar(name, events):
+        return {'type': 'calendar', 'friendly_name': name, 'data': events,
+                'large_display': False}
+
+    def _captured_body_sizes(self, render_data):
+        captured = {}
+
+        def fake_entities(friendly_name, entity_states, width, height, logger, *,
+                           title_font_size=None, title_lines=1, body_font_size=None):
+            captured[friendly_name] = body_font_size
+            return Image.new('RGB', (width, height), color='white')
+
+        def fake_todo(friendly_name, items, width, height, logger, *,
+                      columns=1, page=0, title_font_size=None, title_lines=1,
+                      body_font_size=None):
+            captured[friendly_name] = body_font_size
+            return Image.new('RGB', (width, height), color='white')
+
+        def fake_calendar(friendly_name, events, width, height, logger, *,
+                           title_font_size=None, title_lines=1, body_font_size=None):
+            captured[friendly_name] = body_font_size
+            return Image.new('RGB', (width, height), color='white')
+
+        with mock.patch('trmnl_server.components._draw_entities_component',
+                        side_effect=fake_entities), \
+             mock.patch('trmnl_server.components._draw_todo_list_component',
+                        side_effect=fake_todo), \
+             mock.patch('trmnl_server.components._draw_calendar_component',
+                        side_effect=fake_calendar):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+        return captured
+
+    def test_calendar_beside_entities_settles_both_at_or_above_the_floor(self):
+        # A bare 2-panel list stacks into two single-panel rows (see the grid
+        # math in tile_components), so a 2x2 grid is used to put the calendar
+        # and one entities panel on the same row; the bottom row is filler.
+        captured = self._captured_body_sizes([
+            self._calendar('Calendar', list(self.LONG_EVENTS)),
+            self._entities('Sensors', list(self.SHORT_ENTITIES)),
+            self._entities('C', list(self.SHORT_ENTITIES)),
+            self._entities('D', list(self.SHORT_ENTITIES)),
+        ])
+        self.assertGreaterEqual(captured['Calendar'], CALENDAR_MIN_BODY_SIZE)
+        self.assertGreaterEqual(captured['Sensors'], CALENDAR_MIN_BODY_SIZE)
+        self.assertEqual(captured['Calendar'], captured['Sensors'])
+
+    def test_entities_beside_todo_with_no_calendar_still_reaches_the_ladder_floor(self):
+        """Pins the scope decision: the raised floor is calendar-triggered, not
+        a global change to every panel. A row with no calendar must still be
+        free to settle at BODY_SIZE_LADDER[-1] (16) when a row-mate needs it."""
+        captured = self._captured_body_sizes([
+            self._entities('Sensors', list(self.LONG_ENTITIES)),
+            self._todo('Todo', list(self.LONG_TODO)),
+            self._entities('C', list(self.SHORT_ENTITIES)),
+            self._entities('D', list(self.SHORT_ENTITIES)),
+        ])
+        self.assertEqual(captured['Sensors'], BODY_SIZE_LADDER[-1])
+        self.assertEqual(captured['Todo'], BODY_SIZE_LADDER[-1])
+
+    def test_empty_calendar_does_not_raise_its_row_mates_size(self):
+        """An empty calendar draws a fixed placeholder, not rows, so its
+        floor must not enter the row's min()/max() at all -- the row-mate
+        keeps the top rung it would get on its own, not the calendar floor.
+
+        (_panel_body_fit returns None for the empty calendar, so it is
+        excluded from body_specs entirely; whatever body_font_size the row
+        resolver still hands the calendar draw call is irrelevant, since the
+        "no events" branch never reads it.)
+        """
+        captured = self._captured_body_sizes([
+            self._calendar('Calendar', []),
+            self._entities('Sensors', list(self.SHORT_ENTITIES)),
+            self._entities('C', list(self.SHORT_ENTITIES)),
+            self._entities('D', list(self.SHORT_ENTITIES)),
+        ])
+        self.assertEqual(captured['Sensors'], BODY_SIZE_LADDER[0])
+
+    def test_sibling_pulled_up_to_the_floor_ellipsizes_rather_than_clips(self):
+        """An entities panel pulled from its natural small fit up to the
+        calendar floor must truncate its over-long row through _ellipsize,
+        not render it clipped past the tile edge."""
+        events = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
+        ]
+        render_data = [
+            self._calendar('Calendar', events),
+            self._entities('Sensors', [
+                {'friendly_name': 'Back Garden Soil Moisture Sensor', 'state': 12.34},
+            ]),
+            self._entities('C', list(self.SHORT_ENTITIES)),
+            self._entities('D', list(self.SHORT_ENTITIES)),
+        ]
+        img = tile_components(render_data, 800, 480, 40, mock_logger)
+        # 2x2 grid: the entities tile is the top-right quarter, y in [40, 260).
+        right_half = img.crop((400, 40, 800, 260))
+        width, height = right_half.size
+        darkest = right_half.crop((width - 2, 0, width, height)) \
+            .convert("L").getextrema()[0]
+        self.assertEqual(darkest, 255, "entity row reached the right tile edge unellipsized")
 
 
 class TestBodyRowTextBuilders(unittest.TestCase):

@@ -41,6 +41,11 @@ GAP_STYLE_DEFAULT: str = 'hold'
 # rung instead of each row shrinking to its own arbitrary fit, which otherwise
 # renders a single list at three or four different sizes.
 BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
+# A calendar row is truncated with an ellipsis rather than shrunk below this
+# rung: a long summary should cost its own tail, not the panel's legibility.
+# ponytail: one constant for every calendar. Promote to a per-component
+# `min_font_size` option if a second calendar ever needs a different floor.
+CALENDAR_MIN_BODY_SIZE: int = 20
 TODO_HEADER_H: int = 50
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
@@ -225,6 +230,18 @@ def _panel_draws_a_title(render_data: "RenderData") -> bool:
     return True
 
 
+def _body_floor(panel_type: str) -> int:
+    """The smallest body rung a panel of this type may render at.
+
+    Args:
+        panel_type: The render data's 'type' field
+
+    Returns:
+        CALENDAR_MIN_BODY_SIZE for a calendar, otherwise the ladder's own floor
+    """
+    return CALENDAR_MIN_BODY_SIZE if panel_type == 'calendar' else BODY_SIZE_LADDER[-1]
+
+
 def _panel_body_fit(
     render_data: "RenderData",
     tile_width: int,
@@ -273,7 +290,7 @@ def _panel_body_fit(
 
     if not texts:
         return None
-    return _fit_body_size(texts, budget, logger)
+    return _fit_body_size(texts, budget, logger, min_size=_body_floor(panel_type))
 
 
 def _fit_title_size(
@@ -326,6 +343,8 @@ def _fit_body_size(
     texts: list[str],
     max_width: int,
     logger: "Logger",
+    *,
+    min_size: int = BODY_SIZE_LADDER[-1],
 ) -> int:
     """Picks the largest ladder rung at which every one of texts fits max_width.
 
@@ -340,17 +359,22 @@ def _fit_body_size(
             which takes an unscaled tile width, because every caller here
             already has a scaled content width to hand)
         logger: Logger instance
+        min_size: Smallest ladder rung this call may return; rungs below it
+            are not even tried
 
     Returns:
-        An unscaled size from BODY_SIZE_LADDER; the smallest rung when no rung
-        fits every text. Callers ellipsize the rows that still overflow there —
-        one over-long row must not shrink the whole panel into illegibility.
+        An unscaled size from BODY_SIZE_LADDER; the smallest rung at or above
+        min_size when no such rung fits every text. Callers ellipsize the rows
+        that still overflow there — one over-long row must not shrink the
+        whole panel into illegibility.
     """
     for size in BODY_SIZE_LADDER:
+        if size < min_size:
+            continue
         font = _load_font(size * COMPONENT_SCALE, logger)
         if all(font.getbbox(t)[2] - font.getbbox(t)[0] <= max_width for t in texts):
             return size
-    return BODY_SIZE_LADDER[-1]
+    return min_size
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:
@@ -1312,9 +1336,13 @@ def _draw_calendar_component(
         # drawn, so a single long summary no longer renders at half the size of
         # the event above it. The caller may supply a size agreed across the
         # whole layout row instead.
+        # Floored so a direct caller (no row-agreed body_font_size) agrees with
+        # what _panel_body_fit probes for this panel type — otherwise the
+        # probe and the render would disagree on a calendar's own size.
         font_row = _load_font(
             (body_font_size if body_font_size is not None
-             else _fit_body_size(event_strings, content_width, logger)) * scale,
+             else _fit_body_size(event_strings, content_width, logger,
+                                  min_size=CALENDAR_MIN_BODY_SIZE)) * scale,
             logger,
         )
         # A single shared row advance: even at one font size the per-row ink
@@ -1887,16 +1915,20 @@ def tile_components(
 
         # Body rows harmonise the same way titles do: the row settles on the
         # smallest size any of its list-style panels needs, so a list beside a
-        # list reads as one block rather than two unrelated type sizes.
-        body_fits: list[int] = [
-            fit
-            for fit in (
-                _panel_body_fit(render_data, tile_w, logger)
-                for render_data, _, _, tile_w, _ in row
-            )
-            if fit is not None
+        # list reads as one block rather than two unrelated type sizes. That
+        # size is never pushed below the highest floor present in the row
+        # (e.g. a calendar's CALENDAR_MIN_BODY_SIZE) — a long summary costs
+        # its own ellipsis, not the row's legibility, and a sibling sharing
+        # that row is pulled up to the same floor.
+        body_specs: list[tuple[int, int]] = [
+            (fit, _body_floor(str(render_data.get('type', ''))))
+            for render_data, _, _, tile_w, _ in row
+            if (fit := _panel_body_fit(render_data, tile_w, logger)) is not None
         ]
-        body_font_size: int | None = min(body_fits) if body_fits else None
+        body_font_size: int | None = (
+            max(min(f for f, _ in body_specs), max(fl for _, fl in body_specs))
+            if body_specs else None
+        )
 
         for render_data, x, y, tile_w, tile_h in row:
             component_image = _render_component(render_data, tile_w, tile_h,
