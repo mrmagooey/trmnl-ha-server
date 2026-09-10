@@ -282,6 +282,9 @@ def _panel_body_fit(
     tile_width: int,
     tile_height: int,
     logger: "Logger",
+    *,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> int | None:
     """The body size a panel would pick for itself, or None if it draws no rows.
 
@@ -303,6 +306,11 @@ def _panel_body_fit(
             the vertical constraint when the height is absent would report a
             size the panel does not draw at.
         logger: Logger instance
+        title_font_size: Title size resolved for the row. Only the calendar
+            branch uses it, so it knows where its rows actually start below
+            a title that may have wrapped to two lines.
+        title_lines: Title line count resolved for the row; see
+            title_font_size.
 
     Returns:
         A size from BODY_SIZE_LADDER, or None if the panel draws no body rows
@@ -316,11 +324,10 @@ def _panel_body_fit(
         texts = [name + tail for name, tail in _entities_row_parts(data)]  # type: ignore[arg-type]
         budget = (tile_width - 40) * COMPONENT_SCALE
     elif panel_type == 'calendar':
-        if not data:
-            return None
         layout = _calendar_layout(
             list(data), tile_width, tile_height, logger,  # type: ignore[arg-type]
             min_size=_body_floor(panel_type),
+            title_font_size=title_font_size, title_lines=title_lines,
         )
         return layout.size if layout.groups else None
     elif panel_type == 'todo_list':
@@ -506,6 +513,8 @@ def _calendar_layout(
     *,
     min_size: int = CALENDAR_MIN_BODY_SIZE,
     fixed_size: int | None = None,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> CalendarLayout:
     """Resolves size, mode, geometry and overflow for a calendar panel.
 
@@ -528,6 +537,10 @@ def _calendar_layout(
             once at this size. This is the path taken whenever tile_components
             has settled the layout row on a size — without it the draw would
             have to re-derive mode at that imposed size on its own.
+        title_font_size: Title size resolved by the caller, forwarded to
+            _calendar_capacity so rows start where the title actually ends.
+        title_lines: Title line count resolved by the caller; see
+            title_font_size.
 
     Returns:
         A CalendarLayout. `groups` rows are the FINAL strings for the chosen
@@ -551,12 +564,16 @@ def _calendar_layout(
                 for _, label, rows in raw_groups
             ]
             gutter = 0
-        capacity = _calendar_capacity(size, height, len(raw_groups), logger)
+        capacity = _calendar_capacity(
+            size, height, len(raw_groups), logger,
+            title_font_size=title_font_size, title_lines=title_lines,
+        )
         if n_rows <= capacity:
             drawn, footer = n_rows, False
         else:
             footer_rows = _calendar_capacity(
-                size, height, len(raw_groups) + 1, logger
+                size, height, len(raw_groups) + 1, logger,
+                title_font_size=title_font_size, title_lines=title_lines,
             )
             if footer_rows - 1 >= 1:
                 drawn, footer = footer_rows - 1, True
@@ -587,11 +604,30 @@ def _calendar_layout(
     return build(min_size)
 
 
+def _calendar_content_top(title_font_size: int | None, title_lines: int, logger: "Logger") -> int:
+    """Unscaled y where a calendar panel's event rows start, below the title.
+
+    One definition shared by _calendar_capacity (which paginates before
+    drawing) and _draw_calendar_component (which draws). If these ever
+    disagreed, pagination and rendering would diverge and rows would fall
+    off the bottom of the panel -- which is exactly what happened when a
+    two-line title widened the drawn offset but the capacity calculation
+    kept assuming the fixed one-line CALENDAR_CONTENT_TOP.
+    """
+    if title_lines <= 1:
+        return CALENDAR_CONTENT_TOP
+    band = _title_band_height(title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger)
+    return max(CALENDAR_CONTENT_TOP, 5 + band + TITLE_BAND_GAP)
+
+
 def _calendar_capacity(
     size: int,
     height: int,
     n_groups: int,
     logger: "Logger",
+    *,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
 ) -> int:
     """How many rows fit the panel at this size, after separators.
 
@@ -599,9 +635,10 @@ def _calendar_capacity(
     what makes the vertical budget mode-independent so it need not be resolved
     after the mode.
     """
+    content_top = _calendar_content_top(title_font_size, title_lines, logger)
     budget = (
         height * COMPONENT_SCALE
-        - CALENDAR_CONTENT_TOP * COMPONENT_SCALE
+        - content_top * COMPONENT_SCALE
         - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
         - max(0, n_groups - 1) * CALENDAR_SEP_H * COMPONENT_SCALE
     )
@@ -1565,13 +1602,7 @@ def _draw_calendar_component(
         spacing=TITLE_LINE_SPACING * scale,
     )
 
-    if title_lines > 1:
-        band: int = _title_band_height(
-            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
-        ) * scale
-        y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
-    else:
-        y_pos = CALENDAR_CONTENT_TOP * scale
+    y_pos: int = _calendar_content_top(title_font_size, title_lines, logger) * scale
 
     if not events:
         msg: str = "No upcoming events"
@@ -1581,7 +1612,8 @@ def _draw_calendar_component(
     else:
         scaled_gutter_pad = 40 * scale
         layout = _calendar_layout(
-            events, width, height, logger, fixed_size=body_font_size
+            events, width, height, logger, fixed_size=body_font_size,
+            title_font_size=title_font_size, title_lines=title_lines,
         )
         font_row = _load_font(layout.size * scale, logger)
         row_advance = _calendar_row_advance(layout.size, logger)
@@ -1616,7 +1648,7 @@ def _draw_calendar_component(
                 # truncated by the row budget gets a rule sized to match.
                 d.line(
                     [(x_text - 8 * scale, group_top), (x_text - 8 * scale, y_pos)],
-                    fill='black', width=2,
+                    fill='black', width=2 * scale,
                 )
                 _draw_spine(img, label, layout.size, group_top, y_pos, logger)
 
@@ -2189,7 +2221,10 @@ def tile_components(
         body_specs: list[tuple[int, int]] = [
             (fit, _body_floor(str(render_data.get('type', ''))))
             for render_data, _, _, tile_w, tile_h in row
-            if (fit := _panel_body_fit(render_data, tile_w, tile_h, logger)) is not None
+            if (fit := _panel_body_fit(
+                render_data, tile_w, tile_h, logger,
+                title_font_size=title_font_size, title_lines=title_lines,
+            )) is not None
         ]
         body_font_size: int | None = (
             max(min(f for f, _ in body_specs), max(fl for _, fl in body_specs))

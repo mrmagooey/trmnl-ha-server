@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Calendar panels no longer repeat the weekday on every row. Each event row used to start with its full day name (`Wednesday 10:00-12:00: ...`), which said the same thing on every row in the common case (a panel showing one day) and crowded out the summary even when it didn't — on a typical tile roughly two-thirds of a row's width went to that prefix. Events are now grouped by day, and each group's weekday is drawn once as a three-letter label (`Wed`) rotated to read bottom-to-top in a narrow strip down the left edge, with a rule separating it from the rows. When a tile is too narrow or too short for that strip to read comfortably, or when an event's start time can't be parsed, the panel falls back to putting the day back on the front of every row instead (`Wed 10:00-12:00  ...`) rather than mixing the two styles. Either way, the freed-up width goes to the summary, which now truncates later. Separately, event text no longer grows to fill a panel's width without regard for its height — a calendar with only short summaries used to inflate to a size that then pushed later events off the bottom of the panel, discarding them silently. Panel height is now part of the same sizing decision, and if events still don't all fit, the panel says so with a trailing "+N more" line rather than just cutting them off.
+
 ## [1.10.0] - 2026-09-09
 
 ### Changed

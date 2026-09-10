@@ -703,7 +703,40 @@ class TestDrawCalendarComponent(unittest.TestCase):
         
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
-    
+
+    def test_two_line_title_does_not_push_rows_past_the_bottom_margin(self):
+        """Rows and the footer must not draw past the panel's bottom margin
+        under a two-line title.
+
+        _calendar_capacity always subtracted the fixed one-line
+        CALENDAR_CONTENT_TOP as the y where rows start, but the draw function
+        starts rows lower than that once the title wraps to two lines (it
+        reserves a band sized to the title's own height instead). The
+        resolver then thinks more rows fit than actually do, and rows/footer
+        get drawn past the intended bottom margin, right up against the
+        canvas edge.
+        """
+        events = [
+            {
+                'summary': f'Event {i} with a moderately long summary line here',
+                'start': {'dateTime': f'2024-01-17T{(9 + i) % 24:02d}:00:00+00:00'},
+                'end': {'dateTime': f'2024-01-17T{(9 + i) % 24:02d}:30:00+00:00'},
+            }
+            for i in range(20)
+        ]
+
+        img = _draw_calendar_component(
+            "A Fairly Long Calendar Title That Wraps Onto Two Lines Potentially",
+            events, 800, 480, mock_logger,
+            title_font_size=35, title_lines=2,
+        )
+        width, height = img.size
+        bottom_margin = img.crop((0, height - 30, width, height)).convert("L").getextrema()[0]
+        self.assertEqual(
+            bottom_margin, 255,
+            "row/footer ink was drawn inside the panel's bottom margin",
+        )
+
     def test_long_unbroken_event_is_ellipsized_not_clipped(self):
         """A calendar event with an unbreakable summary is truncated, not clipped.
 
@@ -853,6 +886,32 @@ class TestCalendarGutterRendering(unittest.TestCase):
         self.assertGreaterEqual(
             self._longest_vertical_run(img, rule_x), 20,
             "expected a tall contiguous vertical rule at the gutter/row boundary",
+        )
+
+    def test_gutter_rule_is_drawn_two_px_thick_on_the_scaled_canvas(self):
+        """The rule must be scaled like every other dimension in this feature.
+
+        Every other measurement in the gutter/spine feature is applied as
+        `unscaled * COMPONENT_SCALE` before drawing on the 2x canvas, which is
+        what survives the final LANCZOS downsample as its true unscaled size.
+        The rule's width was drawn as a bare 2 directly on the 2x canvas
+        instead, which downsamples to roughly 1px -- half the spec's 2px.
+        Asserting the width PIL was actually told to draw with is unambiguous
+        where measuring anti-aliased pixels after a LANCZOS resize is not.
+        """
+        events = self._events('2024-01-17', 2)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.line') as mock_line:
+            _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        rule_calls = [
+            call for call in mock_line.call_args_list
+            if call.kwargs.get('width') != 1
+        ]
+        self.assertTrue(rule_calls, "expected a gutter rule line with width != 1")
+        self.assertTrue(
+            all(call.kwargs.get('width') == 2 * COMPONENT_SCALE for call in rule_calls),
+            [call.kwargs.get('width') for call in rule_calls],
         )
 
     def test_prefix_mode_draws_no_vertical_rule(self):
@@ -3121,6 +3180,77 @@ class TestCalendarRowFloor(unittest.TestCase):
         darkest = right_half.crop((width - 2, 0, width, height)) \
             .convert("L").getextrema()[0]
         self.assertEqual(darkest, 255, "entity row reached the right tile edge unellipsized")
+
+
+class TestCalendarModeRespondsToRowImposition(unittest.TestCase):
+    """Mode is a property of the resolved layout, not of the calendar alone.
+
+    The spec's Testing section names this as the scenario most likely to
+    regress: a calendar's mode can change once row harmonisation imposes a
+    size a sibling chose, instead of the size the calendar would have picked
+    for itself. This drives that through the real tile_components
+    row-imposition path (an actual dashboard fixture with a sibling that
+    forces the size) rather than calling _calendar_layout directly with a
+    hand-picked fixed_size, which would only prove the gate math works, not
+    that tile_components ever actually exercises it.
+    """
+
+    def test_a_sibling_imposed_size_flips_the_calendar_s_mode(self):
+        # Two one-letter-summary events on a single day: left to its own
+        # ladder walk at the width this row ends up with (266, via the
+        # large_display top panel splitting the bottom row three ways), the
+        # calendar settles on size 24 in prefix mode. A sibling with a very
+        # long entity name in the same row has its own fit pulled down to
+        # BODY_SIZE_LADDER[-1] (16); harmonised against the calendar's own
+        # floor (CALENDAR_MIN_BODY_SIZE=20), the row settles on 20 instead of
+        # the calendar's own 24 -- which flips the width gate and the mode.
+        calendar_events = [
+            {'summary': 'X',
+             'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
+            for i in range(2)
+        ]
+        render_data = [
+            {'type': 'entity', 'friendly_name': 'Big', 'data': 5, 'large_display': True},
+            {'type': 'calendar', 'friendly_name': 'Cal', 'data': calendar_events,
+             'large_display': False},
+            {'type': 'entities', 'friendly_name': 'Sensors', 'data': [
+                {'friendly_name': 'A Very Long Entity Name Indeed Here',
+                 'state': 'a very long state value here too'},
+            ], 'large_display': False},
+            {'type': 'entities', 'friendly_name': 'Sensors2', 'data': [
+                {'friendly_name': 'B', 'state': '1'},
+            ], 'large_display': False},
+        ]
+
+        captured = {}
+        real_draw = _draw_calendar_component
+
+        def spy(friendly_name, events, width, height, logger, **kwargs):
+            captured['body_font_size'] = kwargs.get('body_font_size')
+            captured['width'] = width
+            captured['height'] = height
+            return real_draw(friendly_name, events, width, height, logger, **kwargs)
+
+        with mock.patch('trmnl_server.components._draw_calendar_component', side_effect=spy):
+            tile_components(render_data, 800, 480, 40, mock_logger)
+
+        self.assertIn('body_font_size', captured, "the calendar panel was never drawn")
+        imposed_size = captured['body_font_size']
+        width, height = captured['width'], captured['height']
+
+        own = _calendar_layout(list(calendar_events), width, height, mock_logger)
+        imposed = _calendar_layout(
+            list(calendar_events), width, height, mock_logger, fixed_size=imposed_size
+        )
+
+        self.assertEqual(own.mode, 'prefix',
+                          "test assumption: the calendar's own free choice is prefix")
+        self.assertNotEqual(imposed_size, own.size,
+                             "the sibling should have forced a different size than the "
+                             "calendar's own free choice")
+        self.assertEqual(imposed.mode, 'gutter',
+                          "row imposition should have flipped the resolved mode")
 
 
 class TestBodyRowTextBuilders(unittest.TestCase):
