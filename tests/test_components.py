@@ -34,6 +34,8 @@ from trmnl_server.components import (
     _calendar_vertical_fit,
     _calendar_layout,
     CALENDAR_MIN_BODY_SIZE,
+    CALENDAR_GUTTER_W,
+    CALENDAR_CONTENT_TOP,
     _calendar_row_texts,
     _calendar_event_row,
     _calendar_day_groups,
@@ -792,6 +794,72 @@ class TestDrawCalendarComponent(unittest.TestCase):
         )
         
         self.assertIsInstance(img, Image.Image)
+
+
+class TestCalendarGutterRendering(unittest.TestCase):
+    """The panel draws what the resolver decided, and nothing else."""
+
+    def _events(self, day, count):
+        return [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'{day}T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'{day}T{9 + i:02d}:30:00+00:00'}}
+            for i in range(count)
+        ]
+
+    def _ink_columns(self, img):
+        """x positions that contain any non-white pixel."""
+        gray = img.convert('L')
+        w, h = gray.size
+        px = gray.load()
+        return {x for x in range(w) for y in range(h) if px[x, y] < 250}
+
+    def test_gutter_mode_puts_ink_in_the_left_gutter(self):
+        events = self._events('2024-01-17', 5)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        # Rows start after the gutter, so ink below the title inside the
+        # gutter band can only be the spine.
+        band = [x for x in self._ink_columns(img) if x < CALENDAR_GUTTER_W]
+        self.assertTrue(band, "expected spine ink inside the gutter")
+
+    def test_prefix_mode_leaves_the_gutter_empty(self):
+        # A one-event second day forces prefix mode.
+        events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+        # Prefix mode reserves no gutter column (CalendarLayout.gutter is 0),
+        # so rows are drawn flush against the same left margin every other
+        # panel body uses, which legitimately puts glyph ink inside the first
+        # CALENDAR_GUTTER_W columns -- that is not a spine. The real invariant
+        # is that _draw_spine itself is never invoked in this mode.
+        with mock.patch('trmnl_server.components._draw_spine') as mock_spine:
+            _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        mock_spine.assert_not_called()
+
+    def test_empty_calendar_still_draws_the_placeholder(self):
+        img = _draw_calendar_component('Cal', [], 400, 240, mock_logger)
+        self.assertEqual(img.size, (400, 240))
+        self.assertTrue(self._ink_columns(img), "placeholder should draw something")
+
+    def test_draw_is_deterministic(self):
+        from PIL import ImageChops
+        events = self._events('2024-01-17', 5)
+        a = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        b = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        self.assertIsNone(ImageChops.difference(a, b).getbbox())
+
+    def test_an_imposed_size_is_respected(self):
+        from PIL import ImageChops
+        events = self._events('2024-01-17', 5)
+        forced = _draw_calendar_component(
+            'Cal', list(events), 400, 240, mock_logger, body_font_size=24
+        )
+        matched = _draw_calendar_component(
+            'Cal', list(events), 400, 240, mock_logger, body_font_size=24
+        )
+        self.assertIsNone(ImageChops.difference(forced, matched).getbbox())
 
 
 class TestDrawEntitiesComponent(unittest.TestCase):

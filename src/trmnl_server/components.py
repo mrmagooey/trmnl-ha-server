@@ -1503,6 +1503,27 @@ def _draw_entity_component(
     return img.resize((width, height), Image.LANCZOS)
 
 
+def _draw_spine(img: Image.Image, label: str, size: int,
+                top: int, bottom: int, logger: "Logger") -> None:
+    """Draws a day label rotated 90 degrees in the left gutter.
+
+    PIL cannot draw rotated text, so the label is rendered to a temp image and
+    rotated. The temp image is sized by the label's INK box, not the font's
+    line box: after rotation the text's height becomes its width, and the line
+    box is 38px at 28pt against a 32px gutter, where the ink box is 22px.
+    """
+    font = _load_font(size * COMPONENT_SCALE, logger)
+    box = font.getbbox(label)
+    w, h = box[2] - box[0], box[3] - box[1]
+    if w <= 0 or h <= 0:
+        return
+    tmp = Image.new('RGB', (w, h), color='white')
+    ImageDraw.Draw(tmp).text((-box[0], -box[1]), label, font=font, fill='black')
+    rotated = tmp.rotate(90, expand=True)
+    y = top + max(0, (bottom - top - rotated.height) // 2)
+    img.paste(rotated, (4 * COMPONENT_SCALE, y))
+
+
 def _draw_calendar_component(
     friendly_name: str,
     events: list[CalendarEvent],
@@ -1579,7 +1600,6 @@ def _draw_calendar_component(
         y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
     else:
         y_pos = CALENDAR_CONTENT_TOP * scale
-    line_spacing: int = CALENDAR_LINE_SPACING * scale
 
     if not events:
         msg: str = "No upcoming events"
@@ -1587,45 +1607,38 @@ def _draw_calendar_component(
         text_width = text_bbox[2] - text_bbox[0]
         d.text(((large_width - text_width) / 2, y_pos), msg, font=font_event, fill='black')
     else:
-        event_strings: list[str] = _calendar_row_texts(events, logger)
-
-        padding: int = 40 * scale
-        content_width: int = large_width - padding
-
-        # One size for every event in the panel, resolved before anything is
-        # drawn, so a single long summary no longer renders at half the size of
-        # the event above it. The caller may supply a size agreed across the
-        # whole layout row instead.
-        # Floored so a direct caller (no row-agreed body_font_size) agrees with
-        # what _panel_body_fit probes for this panel type — otherwise the
-        # probe and the render would disagree on a calendar's own size.
-        resolved_size: int = body_font_size if body_font_size is not None else min(
-            _fit_body_size(event_strings, content_width, logger,
-                           min_size=CALENDAR_MIN_BODY_SIZE),
-            _calendar_vertical_fit(len(event_strings), height, logger,
-                                   min_size=CALENDAR_MIN_BODY_SIZE),
+        scaled_gutter_pad = 40 * scale
+        layout = _calendar_layout(
+            events, width, height, logger, fixed_size=body_font_size
         )
-        font_row = _load_font(resolved_size * scale, logger)
-        # A single shared row advance: even at one font size the per-row ink
-        # height still swings with ascenders and descenders, which is what made
-        # the old spacing ragged.
-        row_probe = d.textbbox((0, 0), "Ag", font=font_row)
-        row_advance: int = (row_probe[3] - row_probe[1]) + line_spacing
+        font_row = _load_font(layout.size * scale, logger)
+        row_advance = _calendar_row_advance(layout.size, logger)
+        gutter = layout.gutter * scale
+        content_width = large_width - scaled_gutter_pad - gutter
+        x_text = 20 * scale + gutter
 
-        for event_str in event_strings:
-            # The ladder floor can still leave an event too wide — an
-            # unbreakable summary. Rows are not wrapped, so truncate instead.
-            # _ellipsize returns a fitting string unchanged.
-            d.text(
-                (20 * scale, y_pos),
-                _ellipsize(event_str, font_row, content_width, d),
-                font=font_row,
-                fill='black',
-            )
-            y_pos += row_advance
-
-            if y_pos > large_height - CALENDAR_BOTTOM_MARGIN * scale:
+        remaining = layout.drawn_rows
+        for index, (label, rows) in enumerate(layout.groups):
+            if remaining <= 0:
                 break
+            if index:
+                d.line(
+                    [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
+                    fill='black', width=1,
+                )
+                y_pos += CALENDAR_SEP_H * scale
+            group_top = y_pos
+            drawn_here = min(len(rows), remaining)
+            for row in rows[:drawn_here]:
+                d.text(
+                    (x_text, y_pos),
+                    _ellipsize(row, font_row, content_width, d),
+                    font=font_row, fill='black',
+                )
+                y_pos += row_advance
+            remaining -= drawn_here
+            if layout.mode == 'gutter':
+                _draw_spine(img, label, layout.size, group_top, y_pos, logger)
 
     return img.resize((width, height), Image.LANCZOS)
 
