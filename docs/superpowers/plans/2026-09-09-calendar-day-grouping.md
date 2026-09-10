@@ -1125,6 +1125,28 @@ Replace the calendar branch of `_panel_body_fit` added in Task 2 with:
 
 `list(data)` because `_calendar_day_groups` sorts in place and the probe must not reorder the caller's data before the draw sees it.
 
+- [ ] **Step 3b: Delete the `_calendar_vertical_fit` shim**
+
+This rewrite removes its last production caller — Task 5 already replaced the
+draw's call when it rewrote the drawing branch. Now delete:
+
+- the `_calendar_vertical_fit` function from `src/trmnl_server/components.py`
+- its import in `tests/test_components.py`
+- the whole `TestCalendarVerticalFit` class
+
+Confirm nothing references it before deleting, and again after:
+
+```bash
+grep -rn "_calendar_vertical_fit" src/ tests/
+```
+
+The second run must return nothing. Its behaviour is covered by
+`TestCalendarLayout`'s size and overflow tests, which exercise the same budget
+arithmetic through `_calendar_capacity`.
+
+This deletion was deferred here from Task 4, where the function still had two
+live callers and removing it would have left the branch broken for two commits.
+
 - [ ] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_components.py::TestPanelBodyFit -v`
