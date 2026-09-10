@@ -285,14 +285,26 @@ That is consistent — both modes are legible and carry the same information —
 it means the mode is a property of the layout, not of the calendar, and the
 tests must cover a calendar whose mode is decided by its neighbours.
 
-**A panel too short for a footer truncates silently again.** If even one row
-plus its separator cannot be reserved at `CALENDAR_MIN_BODY_SIZE` — with no
-smaller rung left to fall back to — the panel drops events with no `+N more`,
-which is the failure the overflow row exists to remove. Checked against the
-real grid: the worst tile this codebase produces is 120px tall (16 components),
-which leaves roughly 70px of content area after the title band against the
-~36px a footer needs at 20pt. Unreachable in practice, named here so it is not
-discovered as a surprise.
+**A panel too short for a footer truncates silently again.** If reserving the
+footer's row and separator would leave no room for any event at all, the panel
+drops the footer and spends every available row on events instead — so a very
+short tile truncates silently, which is the failure the overflow row exists to
+remove.
+
+This is **reachable, not theoretical**, and an earlier draft of this document
+claimed otherwise on arithmetic that was simply wrong. The worst tile the grid
+produces is 120px tall (16 components, `480 // ceil(sqrt(16))`). That leaves
+40px of unscaled content area after the title band and bottom margin, against a
+27px row plus a 6px separator — so one event fits, and a footer beside it does
+not. The earlier estimate of "roughly 70px against ~36px" was wrong on both
+sides.
+
+The choice in that case is between showing one event with no footer, and
+showing a bare `+12 more` with nothing above it. The second is strictly worse:
+it loses the event that would have fitted *and* announces twelve the reader
+cannot see. So the resolver suppresses the footer, and `CalendarLayout.footer`
+carries that decision rather than the draw function inferring it from
+`overflow > 0`.
 
 **An all-day-only panel now reaches gutter mode.** Two `All day` rows beside a
 spine is mildly over-decorated. Cosmetic, and not worth a special case.
