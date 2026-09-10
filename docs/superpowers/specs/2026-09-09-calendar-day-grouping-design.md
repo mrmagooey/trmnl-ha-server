@@ -41,6 +41,15 @@ drawn once per day-group. Add a vertical constraint to the size choice so the
 panel stops inflating past the point where it costs an event. Tell the user when
 events were dropped.
 
+**Which part delivers what.** These are two independent wins and it is worth not
+confusing them. Removing the repeated day name is a purely *horizontal* saving —
+it buys summary text (127px → 208px), not events; grouping in fact spends a
+little vertical space on separators. The *vertical* win comes entirely from
+`v_fit` and the overflow row: `v_fit` stops the panel inflating to a size that
+pushes events off the bottom, and the overflow row admits to what it dropped.
+The two ship together because they touch the same resolver and the same probe,
+not because either causes the other.
+
 All figures below come from prototype renders through the real drawing pipeline
 at 400x240 unless stated otherwise.
 
@@ -69,6 +78,14 @@ bottom-to-top, in a 32px unscaled gutter on the left, vertically centred against
 the group's rows. A 2px vertical rule separates the gutter from the rows, and a
 thin horizontal separator divides day groups.
 
+PIL cannot draw rotated text directly. The spine is rendered by drawing the
+abbreviation to a temporary RGB image sized to its bounding box at
+`size * COMPONENT_SCALE`, calling `.rotate(90, expand=True)`, and pasting the
+result into the gutter. This happens on the 2x canvas alongside every other
+draw, before the existing final `img.resize(..., LANCZOS)`, so the spine
+downsamples with the same filter as the rest of the panel and needs no special
+handling.
+
 `Wed` rather than `Wednesday` is the decision this design turns on. The full
 name is 173px tall rotated, which needs a group about five rows deep before it
 fits; prototype renders showed three of four realistic multi-day layouts falling
@@ -92,6 +109,12 @@ currently under test rather than at some already-resolved one:
 
 If either fails, the whole panel falls back to **prefix mode**: no gutter, and
 every row carries a `f"{day:%a} "` prefix instead.
+
+**Prefix mode keeps the between-day separators.** They are the only grouping cue
+left once the spine is gone, and keeping them makes the vertical budget
+identical in both modes — `v_fit` counts the same separators whichever mode the
+panel lands in, so the row arithmetic does not have to be resolved before the
+mode is.
 
 The choice is all-or-nothing per panel. Mixing modes between groups would leave
 rows starting at different x positions within one panel, which reads as a
@@ -150,6 +173,7 @@ def _calendar_layout(
     logger: "Logger",
     *,
     min_size: int = CALENDAR_MIN_BODY_SIZE,
+    fixed_size: int | None = None,
 ) -> CalendarLayout: ...
 ```
 
@@ -163,6 +187,28 @@ and the draw function each derived gutter mode independently they would drift,
 and the probe would report a size the panel does not draw at. The 1.10.0 design
 called this trap out for the floor; grouping makes it sharper, because now the
 mode changes the content width too.
+
+**`fixed_size` is what makes that true in the common case.** A calendar sharing
+a layout row does not draw at the size it chose: `tile_components` settles the
+row on one size and passes it to every panel. Without `fixed_size` the draw
+function would have to re-derive mode and group geometry at that imposed size on
+its own — reintroducing the drift for *mode*, which is worse than the drift for
+size, because mode also changes the content width every row is ellipsized
+against.
+
+So the resolver has two entry points into the same gate logic:
+
+- `fixed_size=None` — walk the ladder, evaluate the gates at each candidate,
+  return the first rung that works. This is the probe's path, and the path for a
+  calendar drawn alone.
+- `fixed_size=N` — skip the ladder entirely and evaluate the gates **once** at
+  `N`, returning the mode and geometry that hold there. This is the path
+  `_draw_calendar_component` takes whenever `body_font_size` is supplied.
+
+Gate evaluation is one function called from both paths, so a mode is never
+derived twice by two pieces of code. A row-imposed size can therefore flip a
+panel from gutter to prefix mode — that is correct behaviour, not a failure: at
+a smaller imposed size the group is shorter and may no longer carry its spine.
 
 ### `_panel_body_fit` gains the tile height
 
@@ -186,9 +232,15 @@ When events do not fit, the last drawn row is replaced by `f"+{n} more"`, where
 drawn in the row font, aligned with the rows, and `v_fit` reserves a row for it
 when the panel cannot show everything.
 
-It sits **inside** the last group's spine extent — the rule extends by one
-`row_advance` to cover it. A row with no spine sitting directly beneath a column
-of spined rows reads as a glitch rather than as a deliberate summary line.
+It sits **outside** every group's spine extent, below the final group separator,
+so it reads as a footer for the panel rather than as a row of any one day.
+
+The alternative — extending the last group's rule to cover it — looks tidier but
+is a lie: the dropped events may fall on days after the one the spine names, so
+anchoring `+7 more` under `Wed` tells the user those seven are Wednesday's. A
+count that misattributes its contents is worse than a row that sits slightly
+apart, and the separator above it is what stops it reading as a spine that
+failed to draw.
 
 ## Accepted consequences
 
@@ -198,19 +250,41 @@ exactly one event can never satisfy gate (a) at any size. This is geometry, not
 a tunable, and it means a panel containing one sparse day renders entirely in
 prefix mode.
 
-**The overflow count can span days the spine does not name.** `+7 more` is
-anchored to the last drawn group, but the events it counts may fall on later
-days. Correct alternatives — an unanchored row, or a per-day count — both look
-worse for a one-line indicator.
-
 **A calendar's size is still subject to its layout row.** `tile_components`
 settles a whole row of panels on one shared body size, so a sibling can force
-the calendar below its own `v_fit`; the calendar then truncates as it does
-today. Preserving one size per row is worth more than letting the calendar
-optimise privately.
+the calendar below its own `v_fit`. Preserving one size per row is worth more
+than letting the calendar optimise privately.
+
+What that costs is larger than it first appears, and is why `fixed_size` exists:
+an imposed size can flip the panel out of gutter mode entirely, because a
+smaller size means shorter groups and a spine that no longer fits. A calendar
+can therefore render with a gutter alone and with prefix rows beside a sibling.
+That is consistent — both modes are legible and carry the same information — but
+it means the mode is a property of the layout, not of the calendar, and the
+tests must cover a calendar whose mode is decided by its neighbours.
 
 **An all-day-only panel now reaches gutter mode.** Two `All day` rows beside a
 spine is mildly over-decorated. Cosmetic, and not worth a special case.
+
+## Implementation sequencing
+
+The sizing fix and the grouping work are independent defects that happen to meet
+in the same resolver. They land as three separately reviewable commits on one
+branch, in this order, each green before the next starts:
+
+1. **`v_fit` and the height plumbing** — `min(h_fit, v_fit)`, `tile_height`
+   threaded through `_panel_body_fit` and its call sites. Touches sizing
+   semantics and a signature used by non-calendar panels; nothing about the
+   calendar's appearance changes yet.
+2. **Row reformat, grouping and the two modes** — `_calendar_layout` with both
+   entry points, the spine, prefix fallback, separators. This is the visible
+   change.
+3. **The overflow row** — smallest and most self-contained; depends on `v_fit`
+   from step 1 for the reservation arithmetic.
+
+One branch rather than three because steps 2 and 3 both need step 1's resolver
+signature; splitting the branch would mean rebasing the same file three times
+for no review benefit.
 
 ## Testing
 
@@ -220,11 +294,18 @@ spine is mildly over-decorated. Cosmetic, and not worth a special case.
   reports the overflow count and reserves its row. Row strings carry no day name
   in gutter mode and a `%a ` prefix in prefix mode. The probe-equivalence
   invariant: the size `_panel_body_fit` reports equals the size the panel draws
-  alone, in **both** modes.
+  alone, in **both** modes. `fixed_size=N` returns the mode and geometry that
+  hold at `N` without walking the ladder, and agrees with the `fixed_size=None`
+  result whenever `N` is the size that walk would have chosen. An event with no
+  parseable start forces prefix mode. Both modes draw the same separators, so
+  `v_fit` returns the same rung either way.
 - **Integration** — `tile_components` passes the tile height through; a calendar
   beside an entities panel still settles on one shared size; a 266px tile falls
   back to prefix mode rather than rendering an unreadable gutter; a panel that
-  cannot show every event draws `+N more`.
+  cannot show every event draws `+N more` below the final separator, outside any
+  spine. **A calendar that uses the gutter alone renders in prefix mode when a
+  sibling forces it to a smaller size** — the mode-is-a-property-of-the-layout
+  case, which is the one most likely to regress.
 - **End-to-end** — `render_dashboard_image` with mocked Home Assistant data
   spanning two days yields a dashboard whose calendar groups its events under
   rotated day spines; a single-day dashboard with more events than fit yields a
