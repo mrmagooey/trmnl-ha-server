@@ -551,7 +551,13 @@ def _calendar_layout(
             ]
             gutter = 0
         capacity = _calendar_capacity(size, height, len(raw_groups), logger)
-        drawn = min(n_rows, capacity)
+        if n_rows <= capacity:
+            drawn = n_rows
+        else:
+            footer_rows = _calendar_capacity(
+                size, height, len(raw_groups) + 1, logger
+            )
+            drawn = max(0, footer_rows - 1)
         return CalendarLayout(
             size, 'gutter' if use_gutter else 'prefix', gutter,
             groups, drawn, n_rows - drawn,
@@ -1598,6 +1604,18 @@ def _draw_calendar_component(
             remaining -= drawn_here
             if layout.mode == 'gutter':
                 _draw_spine(img, label, layout.size, group_top, y_pos, logger)
+
+        if layout.overflow:
+            d.line(
+                [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
+                fill='black', width=1,
+            )
+            y_pos += CALENDAR_SEP_H * scale
+            d.text(
+                (x_text, y_pos),
+                f"+{layout.overflow} more",
+                font=font_row, fill='black',
+            )
 
     return img.resize((width, height), Image.LANCZOS)
 

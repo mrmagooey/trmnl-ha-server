@@ -32,6 +32,7 @@ from trmnl_server.components import (
     _panel_body_fit,
     _body_floor,
     _calendar_layout,
+    _calendar_capacity,
     CALENDAR_MIN_BODY_SIZE,
     CALENDAR_GUTTER_W,
     _calendar_event_row,
@@ -3363,6 +3364,49 @@ class TestCalendarLayout(unittest.TestCase):
         self.assertEqual(layout.groups, [])
         self.assertEqual(layout.drawn_rows, 0)
         self.assertEqual(layout.overflow, 0)
+
+
+class TestCalendarOverflowRow(unittest.TestCase):
+    """A panel that cannot show everything says so."""
+
+    def _events(self, count):
+        return [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-17T{(6 + i) % 24:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-17T{(6 + i) % 24:02d}:30:00+00:00'}}
+            for i in range(count)
+        ]
+
+    def test_overflow_reserves_a_row(self):
+        many = _calendar_layout(self._events(12), 400, 240, mock_logger)
+        few = _calendar_layout(self._events(3), 400, 240, mock_logger)
+        self.assertGreater(many.overflow, 0)
+        self.assertEqual(few.overflow, 0)
+        # The reserved footer row costs one event.
+        capacity = _calendar_capacity(many.size, 240, 1, mock_logger)
+        self.assertEqual(many.drawn_rows, capacity - 1)
+
+    def test_counts_every_undrawn_event_including_the_displaced_one(self):
+        layout = _calendar_layout(self._events(12), 400, 240, mock_logger)
+        total = sum(len(rows) for _, rows in layout.groups)
+        self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
+    def test_no_footer_when_everything_fits(self):
+        layout = _calendar_layout(self._events(3), 400, 240, mock_logger)
+        self.assertEqual(layout.overflow, 0)
+
+    def test_the_footer_is_drawn(self):
+        from PIL import ImageChops
+
+        events = self._events(12)
+        img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
+        # Redraw with one fewer event than capacity and confirm the images
+        # differ — the footer is the only difference at the panel foot.
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        fitting = _draw_calendar_component(
+            'Cal', self._events(layout.drawn_rows), 400, 240, mock_logger
+        )
+        self.assertIsNotNone(ImageChops.difference(img, fitting).getbbox())
 
 
 class TestCalendarProbeUsesBothFits(unittest.TestCase):
