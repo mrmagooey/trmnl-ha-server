@@ -285,6 +285,15 @@ That is consistent — both modes are legible and carry the same information —
 it means the mode is a property of the layout, not of the calendar, and the
 tests must cover a calendar whose mode is decided by its neighbours.
 
+**A panel too short for a footer truncates silently again.** If even one row
+plus its separator cannot be reserved at `CALENDAR_MIN_BODY_SIZE` — with no
+smaller rung left to fall back to — the panel drops events with no `+N more`,
+which is the failure the overflow row exists to remove. Checked against the
+real grid: the worst tile this codebase produces is 120px tall (16 components),
+which leaves roughly 70px of content area after the title band against the
+~36px a footer needs at 20pt. Unreachable in practice, named here so it is not
+discovered as a surprise.
+
 **An all-day-only panel now reaches gutter mode.** Two `All day` rows beside a
 spine is mildly over-decorated. Cosmetic, and not worth a special case.
 
