@@ -278,9 +278,18 @@ the calendar below its own `v_fit`. Preserving one size per row is worth more
 than letting the calendar optimise privately.
 
 What that costs is larger than it first appears, and is why `fixed_size` exists:
-an imposed size can flip the panel out of gutter mode entirely, because a
-smaller size means shorter groups and a spine that no longer fits. A calendar
-can therefore render with a gutter alone and with prefix rows beside a sibling.
+an imposed size can flip the panel out of gutter mode entirely. A calendar can
+therefore render with a gutter alone and with prefix rows beside a sibling.
+
+The direction is the opposite of what it first seems, and an earlier draft of
+this document had it backwards. A *larger* imposed size is what costs a panel
+its gutter, and gate (b) is the one that fires: a bigger font widens the
+`"HH:MM-HH:MM  "` prefix until too little width remains for a summary, so the
+gutter stops being affordable. A smaller imposed size shrinks the spine and the
+rows together and *widens* the summary budget, which makes the gutter more
+available, not less. Measured on a 260px tile with four events: the panel
+resolves to gutter mode alone (at 20), and to prefix mode when forced to 24 or
+28.
 That is consistent — both modes are legible and carry the same information — but
 it means the mode is a property of the layout, not of the calendar, and the
 tests must cover a calendar whose mode is decided by its neighbours.
