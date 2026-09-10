@@ -34,6 +34,8 @@ from trmnl_server.components import (
     _calendar_vertical_fit,
     CALENDAR_MIN_BODY_SIZE,
     _calendar_row_texts,
+    _calendar_event_row,
+    _calendar_day_groups,
     _entities_row_parts,
     _todo_row_texts,
     _ellipsize,
@@ -2948,9 +2950,22 @@ class TestBodyRowTextBuilders(unittest.TestCase):
              'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
         ]
         texts = _calendar_row_texts(events, mock_logger)
-        self.assertEqual(len(texts), 2)
-        self.assertIn('Earlier', texts[0])
-        self.assertIn('All day: Later', texts[1])
+        self.assertEqual(texts, ['09:00-09:15  Earlier', 'All day  Later'])
+
+    def test_calendar_row_texts_carry_no_weekday_name(self):
+        """Rows used to read 'Wednesday 10:00-12:00: ...'; the day is now grouped
+        separately, so no row text should contain a weekday name."""
+        events = [
+            {'summary': 'Timed',
+             'start': {'dateTime': '2024-01-17T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T12:00:00+00:00'}},
+            {'summary': 'AllDay', 'start': {'date': '2024-01-18'}},
+        ]
+        texts = _calendar_row_texts(events, mock_logger)
+        for text in texts:
+            for day in ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                        'Friday', 'Saturday', 'Sunday'):
+                self.assertNotIn(day, text)
 
     def test_calendar_row_texts_handles_a_startless_event(self):
         self.assertEqual(
@@ -2965,6 +2980,69 @@ class TestBodyRowTextBuilders(unittest.TestCase):
         texts = _todo_row_texts(items)
         self.assertEqual(len(texts), 40)
         self.assertNotIn('done already', texts)
+
+
+class TestCalendarDayGroups(unittest.TestCase):
+    """Events are grouped by date, and rows carry no weekday name."""
+
+    WED_9 = {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:15:00+00:00'}}
+    WED_10 = {'summary': 'Planning',
+              'start': {'dateTime': '2024-01-17T10:00:00+00:00'},
+              'end': {'dateTime': '2024-01-17T12:00:00+00:00'}}
+    THU_9 = {'summary': 'Retro',
+             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}}
+    ALL_DAY = {'summary': 'Sam on leave',
+               'start': {'date': '2024-01-18'}, 'end': {'date': '2024-01-19'}}
+    BROKEN = {'summary': 'Mystery', 'start': {}, 'end': {}}
+
+    def test_row_carries_time_and_summary_only(self):
+        self.assertEqual(_calendar_event_row(self.WED_10), '10:00-12:00  Planning')
+
+    def test_all_day_row(self):
+        self.assertEqual(_calendar_event_row(self.ALL_DAY), 'All day  Sam on leave')
+
+    def test_unparseable_row_keeps_its_marker(self):
+        self.assertEqual(_calendar_event_row(self.BROKEN), 'Unknown: Mystery')
+
+    def test_no_row_contains_a_weekday_name(self):
+        for event in (self.WED_9, self.WED_10, self.THU_9, self.ALL_DAY):
+            row = _calendar_event_row(event)
+            for day in ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                        'Friday', 'Saturday', 'Sunday'):
+                self.assertNotIn(day, row)
+
+    def test_groups_one_per_date_in_order(self):
+        groups, _ = _calendar_day_groups(
+            [self.THU_9, self.WED_10, self.WED_9], mock_logger
+        )
+        self.assertEqual([label for _, label, _ in groups], ['Wed', 'Thu'])
+        self.assertEqual(len(groups[0][2]), 2)
+        self.assertEqual(len(groups[1][2]), 1)
+
+    def test_rows_within_a_group_are_time_ordered(self):
+        groups, _ = _calendar_day_groups([self.WED_10, self.WED_9], mock_logger)
+        self.assertEqual(groups[0][2], ['09:00-09:15  Standup', '10:00-12:00  Planning'])
+
+    def test_label_is_the_three_letter_abbreviation(self):
+        groups, _ = _calendar_day_groups([self.WED_9], mock_logger)
+        self.assertEqual(groups[0][1], 'Wed')
+
+    def test_unparseable_event_is_reported(self):
+        _, has_unparseable = _calendar_day_groups([self.WED_9, self.BROKEN], mock_logger)
+        self.assertTrue(has_unparseable)
+
+    def test_no_unparseable_event_is_reported_when_all_parse(self):
+        _, has_unparseable = _calendar_day_groups([self.WED_9, self.THU_9], mock_logger)
+        self.assertFalse(has_unparseable)
+
+    def test_flat_row_texts_match_the_groups(self):
+        events = [self.WED_9, self.WED_10, self.THU_9]
+        groups, _ = _calendar_day_groups(events, mock_logger)
+        flat = [row for _, _, rows in groups for row in rows]
+        self.assertEqual(_calendar_row_texts(list(events), mock_logger), flat)
 
 
 class TestUrlComponentRendering(unittest.TestCase):

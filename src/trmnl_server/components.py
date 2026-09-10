@@ -4,7 +4,7 @@ This module contains all the rendering functions for different component types
 (history graphs, entities, calendars, etc.).
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from math import ceil, sqrt
 from pathlib import Path
@@ -102,12 +102,88 @@ def _incomplete_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
-def _calendar_row_texts(events: list[CalendarEvent], logger: "Logger") -> list[str]:
-    """Builds the one-line strings a calendar panel draws, in display order.
+def _calendar_event_start(event: CalendarEvent) -> datetime | None:
+    """Local-time start of an event, or None when neither field parses."""
+    from datetime import time as dt_time
+    start = event.get('start', {})
+    if start.get('dateTime'):
+        return datetime.fromisoformat(start['dateTime']).astimezone()
+    if start.get('date'):
+        # astimezone() on a naive datetime attaches the local tzinfo without
+        # changing the wall-clock value, so this stays comparable with the
+        # aware datetimes the dateTime branch above returns.
+        return datetime.combine(date.fromisoformat(start['date']), dt_time.min).astimezone()
+    return None
 
-    Sorts `events` in place, as the draw function has always done. Shared with
-    the row-level body-size resolver so the size is measured against exactly
-    the strings that will be drawn.
+
+def _calendar_event_row(event: CalendarEvent) -> str:
+    """The text of one calendar row, carrying no weekday name.
+
+    The day is drawn once per group — as a rotated spine, or as a per-row
+    prefix added later by _calendar_layout when the panel falls back to prefix
+    mode. Keeping it out of here is what frees the width the summary gets.
+    """
+    summary: str = event.get('summary', 'No summary')
+    start = event.get('start', {})
+    end = event.get('end', {})
+    if start.get('dateTime'):
+        start_dt = datetime.fromisoformat(start['dateTime']).astimezone()
+        end_dt = (
+            datetime.fromisoformat(end['dateTime']).astimezone()
+            if end.get('dateTime') else start_dt
+        )
+        return f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}  {summary}"
+    if start.get('date'):
+        return f"All day  {summary}"
+    return f"Unknown: {summary}"
+
+
+def _calendar_day_groups(
+    events: list[CalendarEvent],
+    logger: "Logger",
+) -> tuple[list[tuple[date | None, str, list[str]]], bool]:
+    """Groups events by calendar date, in display order.
+
+    Sorts `events` in place, as the draw function has always done.
+
+    Returns:
+        (groups, has_unparseable) where each group is (day, label, rows).
+        `label` is the three-letter abbreviation the spine draws. An event
+        with no parseable start lands in a trailing group whose day is None,
+        and sets has_unparseable — the panel is forced into prefix mode,
+        because such an event has no day to sit under.
+    """
+    from pprint import pformat as pf
+
+    def sort_key(event: CalendarEvent) -> tuple[int, datetime]:
+        start = _calendar_event_start(event)
+        # Unparseable events sort last; datetime.max keeps the key comparable.
+        return (1, datetime.max) if start is None else (0, start)
+
+    events.sort(key=sort_key)
+
+    groups: list[tuple[date | None, str, list[str]]] = []
+    has_unparseable = False
+    for event in events:
+        logger.debug("calendar event: %s", pf(event))
+        start = _calendar_event_start(event)
+        day = start.date() if start is not None else None
+        if day is None:
+            has_unparseable = True
+        label = start.strftime('%a') if start is not None else ''
+        row = _calendar_event_row(event)
+        if groups and groups[-1][0] == day:
+            groups[-1][2].append(row)
+        else:
+            groups.append((day, label, [row]))
+    return groups, has_unparseable
+
+
+def _calendar_row_texts(events: list[CalendarEvent], logger: "Logger") -> list[str]:
+    """Every calendar row in display order, flattened across day groups.
+
+    Shared with the row-level body-size resolver so the size is measured
+    against exactly the strings that will be drawn.
 
     Args:
         events: Calendar events for the panel
@@ -116,38 +192,8 @@ def _calendar_row_texts(events: list[CalendarEvent], logger: "Logger") -> list[s
     Returns:
         One formatted string per event
     """
-    from datetime import date as dt_date
-    from pprint import pformat as pf
-
-    def get_sort_key(event: CalendarEvent) -> str:
-        start = event.get('start', {})
-        return start.get('dateTime') or start.get('date') or 'z'
-    events.sort(key=get_sort_key)
-
-    texts: list[str] = []
-    for event in events:
-        logger.debug("calendar event: %s", pf(event))
-        summary: str = event.get('summary', 'No summary')
-        start = event.get('start', {})
-        end = event.get('end', {})
-
-        start_date_time = start.get('dateTime')
-        start_date = start.get('date')
-        end_date_time = end.get('dateTime')
-        if start_date_time:  # Timed event
-            start_dt: datetime = datetime.fromisoformat(start_date_time).astimezone()
-            end_dt: datetime = datetime.fromisoformat(end_date_time).astimezone() if end_date_time else start_dt
-            day_name: str = start_dt.strftime('%A')
-            texts.append(
-                f"{day_name} {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}: {summary}"
-            )
-        elif start_date:  # All-day event
-            start_date_obj = dt_date.fromisoformat(start_date)
-            day_name = start_date_obj.strftime('%A')
-            texts.append(f"{day_name} All day: {summary}")
-        else:
-            texts.append(f"Unknown: {summary}")
-    return texts
+    groups, _ = _calendar_day_groups(events, logger)
+    return [row for _, _, rows in groups for row in rows]
 
 
 def _entities_row_parts(
