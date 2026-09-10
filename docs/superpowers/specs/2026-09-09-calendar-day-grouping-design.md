@@ -79,12 +79,26 @@ the group's rows. A 2px vertical rule separates the gutter from the rows, and a
 thin horizontal separator divides day groups.
 
 PIL cannot draw rotated text directly. The spine is rendered by drawing the
-abbreviation to a temporary RGB image sized to its bounding box at
+abbreviation to a temporary RGB image sized to its **ink bounding box** at
 `size * COMPONENT_SCALE`, calling `.rotate(90, expand=True)`, and pasting the
 result into the gutter. This happens on the 2x canvas alongside every other
 draw, before the existing final `img.resize(..., LANCZOS)`, so the spine
 downsamples with the same filter as the rest of the panel and needs no special
 handling.
+
+The ink box, not the font's line box, and it matters. After rotation the text's
+*height* becomes the spine's *width*, which must fit the 32px gutter. Measured
+worst case across all seven abbreviations:
+
+| rung | ink height | line height |
+|---|---|---|
+| 28pt | **22px** | 38px |
+| 24pt | 18px | 33px |
+| 20pt | 15px | 27px |
+
+Sizing the temp image by the ink box clears the gutter at every rung with 10px
+to spare at the worst. Sizing it by the line box would overflow the gutter at
+28pt. No third gate is needed — but this is why.
 
 `Wed` rather than `Wednesday` is the decision this design turns on. The full
 name is 173px tall rotated, which needs a group about five rows deep before it
@@ -232,8 +246,16 @@ When events do not fit, the last drawn row is replaced by `f"+{n} more"`, where
 drawn in the row font, aligned with the rows, and `v_fit` reserves a row for it
 when the panel cannot show everything.
 
-It sits **outside** every group's spine extent, below the final group separator,
-so it reads as a footer for the panel rather than as a row of any one day.
+It sits **outside** every group's spine extent, below a separator, so it reads
+as a footer for the panel rather than as a row of any one day.
+
+**That separator is drawn for the footer specifically, whenever a footer is
+drawn** — including when the panel has a single day-group and therefore no
+between-group separators at all. This is the default case (`days` is 1), so
+relying on an inter-group divider being present would leave the footer
+unseparated exactly where it matters most. `v_fit` reserves the footer's row
+*and* its separator together; a panel that cannot afford both does not get a
+footer.
 
 The alternative — extending the last group's rule to cover it — looks tidier but
 is a lie: the dropped events may fall on days after the one the spine names, so
@@ -276,6 +298,14 @@ branch, in this order, each green before the next starts:
    threaded through `_panel_body_fit` and its call sites. Touches sizing
    semantics and a signature used by non-calendar panels; nothing about the
    calendar's appearance changes yet.
+
+   At this point `v_fit` operates on the **flat, ungrouped** row list and counts
+   no separators, because grouping does not exist yet. Commit 2 **supersedes**
+   it — the grouped version moves inside `_calendar_layout` and counts
+   separators there. It is not extended in place, and the flat version does not
+   survive alongside it. Saying so explicitly because the design elsewhere
+   forbids deriving the same thing in two places, and a half-finished
+   intermediate state is where that rule gets broken by accident.
 2. **Row reformat, grouping and the two modes** — `_calendar_layout` with both
    entry points, the spine, prefix fallback, separators. This is the visible
    change.
