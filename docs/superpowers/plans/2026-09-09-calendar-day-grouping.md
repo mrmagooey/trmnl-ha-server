@@ -620,15 +620,19 @@ class TestCalendarLayout(unittest.TestCase):
         )
         self.assertEqual(pinned, walked)
 
-    def test_an_imposed_size_can_flip_the_mode(self):
-        # Bigger rows mean taller groups; smaller rows can drop a group below
-        # its spine height and force the whole panel into prefix mode.
+    def test_every_imposed_size_returns_that_size_and_a_valid_mode(self):
+        # An imposed size is honoured verbatim at every rung, and the mode it
+        # resolves to is always one the draw function can render.
         events = self._events([('2024-01-17', 2)])
-        modes = {
-            _calendar_layout(list(events), 400, 240, mock_logger, fixed_size=s).mode
-            for s in (20, 28)
-        }
-        self.assertEqual(modes, {'gutter'})  # both fit here; the API must not crash
+        for rung in BODY_SIZE_LADDER:
+            if rung < CALENDAR_MIN_BODY_SIZE:
+                continue
+            layout = _calendar_layout(
+                list(events), 400, 240, mock_logger, fixed_size=rung
+            )
+            self.assertEqual(layout.size, rung)
+            self.assertIn(layout.mode, ('gutter', 'prefix'))
+            self.assertEqual(layout.gutter > 0, layout.mode == 'gutter')
 
     def test_empty_events_produce_no_groups(self):
         layout = _calendar_layout([], 400, 240, mock_logger)
@@ -870,8 +874,16 @@ class TestCalendarGutterRendering(unittest.TestCase):
         layout = _calendar_layout(list(events), 400, 240, mock_logger)
         self.assertEqual(layout.mode, 'prefix')
         img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
-        rendered = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
-        self.assertIsNone(ImageChops.difference(img, rendered).getbbox())
+        # No spine is drawn, so the gutter band carries no ink below the title.
+        gray = img.convert('L')
+        px = gray.load()
+        band = [
+            (x, y)
+            for x in range(CALENDAR_GUTTER_W)
+            for y in range(CALENDAR_CONTENT_TOP, img.size[1])
+            if px[x, y] < 250
+        ]
+        self.assertEqual(band, [], "prefix mode must leave the gutter empty")
 
     def test_empty_calendar_still_draws_the_placeholder(self):
         img = _draw_calendar_component('Cal', [], 400, 240, mock_logger)
@@ -1153,22 +1165,10 @@ Expected: FAIL — capacity does not yet reserve a row.
 
 In `_calendar_layout`'s `build`, replace the capacity/drawn calculation with:
 
-```python
-        capacity = _calendar_capacity(size, height, len(raw_groups), logger)
-        if n_rows <= capacity:
-            drawn = n_rows
-        else:
-            # The footer costs its own row plus its separator. A panel that
-            # cannot afford both gets no footer and truncates silently — see
-            # the spec's accepted consequences.
-            footer_cost = 1 + (
-                1 if CALENDAR_SEP_H * COMPONENT_SCALE
-                <= _calendar_row_advance(size, logger) else 1
-            )
-            drawn = max(0, capacity - footer_cost)
-```
-
-Simplify: the footer always costs one row and one separator, so:
+The footer always costs one row and one separator. Charge the separator by
+asking for capacity as though there were one more group, then subtract the
+footer's own row. A panel that cannot afford both gets no footer and
+truncates silently — see the spec's accepted consequences.
 
 ```python
         capacity = _calendar_capacity(size, height, len(raw_groups), logger)
@@ -1316,13 +1316,23 @@ Expected: PASS
 
 In `tests/test_golden.py`, following the existing style (see `test_body_text_size_harmonisation` at line ~496 for the mocking pattern), add two tests: one dashboard whose calendar reaches gutter mode (a single day with five events beside an entity panel), and one whose calendar falls back to prefix mode (two days, one of them holding a single event). Name the goldens `calendar_day_grouping` and `calendar_prefix_fallback`.
 
-Assert the mode before rendering, so the golden cannot silently stop testing what it was written for:
+Assert the mode before rendering, so the golden cannot silently stop testing what it was written for. **Compute the tile size rather than hardcoding it** — a golden dashboard's tiles come from the grid math (`num_rows = ceil(sqrt(n))`, `cols = ceil(n / num_rows)`, `tile_width = width // cols`), so asserting at a guessed 400x240 could pin a different mode than the dashboard actually renders:
 
 ```python
+        from math import ceil, sqrt
         from trmnl_server.components import _calendar_layout
-        self.assertEqual(_calendar_layout(list(events), 400, 240, mock_logger).mode,
-                         'gutter')
+
+        n = len(dashboard['components'])
+        grid_rows = int(ceil(sqrt(n)))
+        grid_cols = int(ceil(n / grid_rows))
+        tile_w, tile_h = 800 // grid_cols, 480 // grid_rows
+        self.assertEqual(
+            _calendar_layout(list(events), tile_w, tile_h, mock_logger).mode,
+            'gutter',
+        )
 ```
+
+If the computed mode is not the one the golden is for, change the fixture until it is — do not weaken the assertion.
 
 - [ ] **Step 4: Generate and inspect the new goldens**
 
