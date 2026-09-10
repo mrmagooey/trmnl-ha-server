@@ -34,7 +34,6 @@ from trmnl_server.components import (
     _calendar_layout,
     CALENDAR_MIN_BODY_SIZE,
     CALENDAR_GUTTER_W,
-    _calendar_row_texts,
     _calendar_event_row,
     _calendar_day_groups,
     _entities_row_parts,
@@ -2808,6 +2807,31 @@ class TestPanelBodyFit(unittest.TestCase):
         )
         self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
 
+    def test_probe_matches_the_calendar_at_a_non_floor_size(self):
+        """A single short event in a roomy tile resolves above the floor.
+
+        The other calendar equivalence tests all happen to resolve to
+        CALENDAR_MIN_BODY_SIZE, so a probe that collapsed to the floor
+        unconditionally would still pass them. This fixture resolves to 28,
+        so it would catch that regression.
+        """
+        from PIL import ImageChops
+        events = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:15:00+00:00'}},
+        ]
+        render_data = {'type': 'calendar', 'data': list(events)}
+        layout = _calendar_layout(list(events), 400, 220, mock_logger)
+        self.assertEqual(layout.size, 28)
+        self.assertNotEqual(layout.size, CALENDAR_MIN_BODY_SIZE)
+        probed = _panel_body_fit(render_data, 400, 220, mock_logger)
+        alone = _draw_calendar_component('Calendar', list(events), 400, 220, mock_logger)
+        forced = _draw_calendar_component(
+            'Calendar', list(events), 400, 220, mock_logger, body_font_size=probed
+        )
+        self.assertIsNone(ImageChops.difference(alone, forced).getbbox())
+
     def test_probe_matches_the_calendar_in_prefix_mode(self):
         from PIL import ImageChops
         events = [
@@ -3063,17 +3087,28 @@ class TestBodyRowTextBuilders(unittest.TestCase):
         self.assertEqual(_entities_row_parts([{'friendly_name': 'X'}]),
                          [('X', ': N/A')])
 
-    def test_calendar_row_texts_sorts_and_formats(self):
+    @staticmethod
+    def _flat_rows(events):
+        """Every calendar row in display order, flattened across day groups.
+
+        The row resolver's dead delegator that used to do this directly has
+        been deleted (the probe is now rewired onto _calendar_layout), so
+        these tests flatten _calendar_day_groups themselves instead.
+        """
+        groups, _ = _calendar_day_groups(events, mock_logger)
+        return [row for _, _, rows in groups for row in rows]
+
+    def test_calendar_rows_sort_and_format(self):
         events = [
             {'summary': 'Later', 'start': {'date': '2024-01-03'}},
             {'summary': 'Earlier',
              'start': {'dateTime': '2024-01-01T09:00:00+00:00'},
              'end': {'dateTime': '2024-01-01T09:15:00+00:00'}},
         ]
-        texts = _calendar_row_texts(events, mock_logger)
+        texts = self._flat_rows(events)
         self.assertEqual(texts, ['09:00-09:15  Earlier', 'All day  Later'])
 
-    def test_calendar_row_texts_carry_no_weekday_name(self):
+    def test_calendar_rows_carry_no_weekday_name(self):
         """Rows used to read 'Wednesday 10:00-12:00: ...'; the day is now grouped
         separately, so no row text should contain a weekday name."""
         events = [
@@ -3082,15 +3117,15 @@ class TestBodyRowTextBuilders(unittest.TestCase):
              'end': {'dateTime': '2024-01-17T12:00:00+00:00'}},
             {'summary': 'AllDay', 'start': {'date': '2024-01-18'}},
         ]
-        texts = _calendar_row_texts(events, mock_logger)
+        texts = self._flat_rows(events)
         for text in texts:
             for day in ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
                         'Friday', 'Saturday', 'Sunday'):
                 self.assertNotIn(day, text)
 
-    def test_calendar_row_texts_handles_a_startless_event(self):
+    def test_calendar_rows_handle_a_startless_event(self):
         self.assertEqual(
-            _calendar_row_texts([{'summary': 'Mystery', 'start': {}}], mock_logger),
+            self._flat_rows([{'summary': 'Mystery', 'start': {}}]),
             ['Unknown: Mystery'],
         )
 
@@ -3177,12 +3212,6 @@ class TestCalendarDayGroups(unittest.TestCase):
         self.assertEqual(
             groups[1][2], ['All day  Sam on leave', '09:00-09:30  Retro']
         )
-
-    def test_flat_row_texts_match_the_groups(self):
-        events = [self.WED_9, self.WED_10, self.THU_9]
-        groups, _ = _calendar_day_groups(events, mock_logger)
-        flat = [row for _, _, rows in groups for row in rows]
-        self.assertEqual(_calendar_row_texts(list(events), mock_logger), flat)
 
 
 class TestUrlComponentRendering(unittest.TestCase):

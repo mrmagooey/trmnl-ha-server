@@ -182,23 +182,6 @@ def _calendar_day_groups(
     return groups, has_unparseable
 
 
-def _calendar_row_texts(events: list[CalendarEvent], logger: "Logger") -> list[str]:
-    """Every calendar row in display order, flattened across day groups.
-
-    Shared with the row-level body-size resolver so the size is measured
-    against exactly the strings that will be drawn.
-
-    Args:
-        events: Calendar events for the panel
-        logger: Logger instance
-
-    Returns:
-        One formatted string per event
-    """
-    groups, _ = _calendar_day_groups(events, logger)
-    return [row for _, _, rows in groups for row in rows]
-
-
 def _entities_row_parts(
     entity_states: list[dict[str, str | float | None]],
 ) -> list[tuple[str, str]]:
