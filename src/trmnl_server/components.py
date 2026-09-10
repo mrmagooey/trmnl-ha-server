@@ -445,6 +445,7 @@ class CalendarLayout(NamedTuple):
     groups: list[tuple[str, list[str]]]
     drawn_rows: int
     overflow: int
+    footer: bool
 
 
 def _spine_ink_height(label: str, size: int, logger: "Logger") -> int:
@@ -535,7 +536,7 @@ def _calendar_layout(
     """
     raw_groups, has_unparseable = _calendar_day_groups(events, logger)
     if not raw_groups:
-        return CalendarLayout(min_size, 'prefix', 0, [], 0, 0)
+        return CalendarLayout(min_size, 'prefix', 0, [], 0, 0, False)
 
     n_rows = sum(len(rows) for _, _, rows in raw_groups)
 
@@ -552,15 +553,21 @@ def _calendar_layout(
             gutter = 0
         capacity = _calendar_capacity(size, height, len(raw_groups), logger)
         if n_rows <= capacity:
-            drawn = n_rows
+            drawn, footer = n_rows, False
         else:
             footer_rows = _calendar_capacity(
                 size, height, len(raw_groups) + 1, logger
             )
-            drawn = max(0, footer_rows - 1)
+            if footer_rows - 1 >= 1:
+                drawn, footer = footer_rows - 1, True
+            else:
+                # A footer would leave no room for any event at all. A bare
+                # "+N more" with nothing above it is worse than silent
+                # truncation, so spend every available row on events.
+                drawn, footer = capacity, False
         return CalendarLayout(
             size, 'gutter' if use_gutter else 'prefix', gutter,
-            groups, drawn, n_rows - drawn,
+            groups, drawn, n_rows - drawn, footer,
         )
 
     if fixed_size is not None:
@@ -1605,7 +1612,7 @@ def _draw_calendar_component(
             if layout.mode == 'gutter':
                 _draw_spine(img, label, layout.size, group_top, y_pos, logger)
 
-        if layout.overflow:
+        if layout.footer:
             d.line(
                 [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
                 fill='black', width=1,

@@ -3408,6 +3408,19 @@ class TestCalendarOverflowRow(unittest.TestCase):
         )
         self.assertIsNotNone(ImageChops.difference(img, fitting).getbbox())
 
+    def test_a_panel_too_short_for_a_footer_shows_events_instead(self):
+        # At the floor size on a 120px tile, reserving a footer (one row plus
+        # its separator) leaves zero rows for events. A bare "+N more" with
+        # nothing above it is worse than silent truncation, so the resolver
+        # must spend every available row on events instead.
+        layout = _calendar_layout(
+            self._events(12), 400, 120, mock_logger, fixed_size=CALENDAR_MIN_BODY_SIZE
+        )
+        total = sum(len(rows) for _, rows in layout.groups)
+        self.assertFalse(layout.footer)
+        self.assertGreaterEqual(layout.drawn_rows, 1)
+        self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
 
 class TestCalendarProbeUsesBothFits(unittest.TestCase):
     """_panel_body_fit takes the smaller of the horizontal and vertical fits."""
