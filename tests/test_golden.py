@@ -746,14 +746,21 @@ class TestGoldenImages(unittest.TestCase):
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
-    def test_calendar_large_display_prefix(self, mock_fetch_calendar, mock_get_entity_state):
+    def test_calendar_large_display_mixed_spines(self, mock_fetch_calendar, mock_get_entity_state):
         """The large_display layout again, with two days that fit whole.
 
-        Two events on Wednesday and one on Thursday. The Thursday group holds
-        a single event, too short to carry a rotated spine, and the mode is
-        all-or-nothing, so the whole panel falls back to per-row day prefixes
-        -- the large-panel counterpart to test_calendar_prefix_fallback. At
-        three rows nothing overflows, so unlike test_calendar_large_display
+        Two events on Wednesday and one on Thursday, so the panel carries a
+        three-letter spine and a two-letter one at once: "Wed" spans its two
+        rows, while the single-event Thursday group takes "Th", which is the
+        only reason it can carry a spine at all. Both start at the same
+        gutter x, differing only in how far they run vertically.
+
+        Before two-letter spines this panel was the large counterpart to
+        test_calendar_prefix_fallback -- the lone Thursday event dragged the
+        whole panel into prefix mode. Keeping the fixture and re-pointing the
+        assertions is deliberate: it pins the exact case that changed.
+
+        At three rows nothing overflows, so unlike test_calendar_large_display
         this golden shows every event and both day groups.
         """
         mock_get_entity_state.side_effect = lambda name, logger: {
@@ -775,8 +782,8 @@ class TestGoldenImages(unittest.TestCase):
              'end': {'dateTime': '2024-01-18T09:30:00+00:00'}},
         ]
         dashboard = {
-            'name': 'callargeprefix',
-            'title': 'Cal Large Prefix',
+            'name': 'callargemixed',
+            'title': 'Cal Large Mixed',
             'components': [
                 {'type': 'calendar', 'friendly_name': 'Calendar',
                  'entity_name': 'calendar.home', 'large_display': True,
@@ -795,14 +802,15 @@ class TestGoldenImages(unittest.TestCase):
         tile_w, tile_h = 800, (480 - 40) // 2
         layout = _calendar_layout(
             list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger)
-        self.assertEqual(layout.mode, 'prefix')
-        self.assertEqual([day for day, _ in layout.groups], ['Wed', 'Thu'])
+        self.assertEqual(layout.mode, 'gutter')
+        # The two spine lengths in one panel are the point of this golden.
+        self.assertEqual([day for day, _ in layout.groups], ['Wed', 'Th'])
         # Every event is drawn: the golden is not hiding a group behind "+n more".
         self.assertEqual(layout.overflow, 0)
 
         with mock.patch('datetime.datetime', mock_datetime()):
             img_io = render_dashboard_image(dashboard, mock_logger)
-        assert_golden(img_io, 'calendar_large_display_prefix')
+        assert_golden(img_io, 'calendar_large_display_mixed_spines')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_row_body_text_size_harmonisation(self, mock_get_entity_state):
