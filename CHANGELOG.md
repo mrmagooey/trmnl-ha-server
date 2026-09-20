@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-09-19
+
+### Changed
+- A calendar day holding a single event no longer drags the whole panel out of the rotated-strip layout. The strip draws a three-letter day label (`Wed`) turned on its side, and turning it on its side means the label's length becomes its height — roughly 123% of the vertical space one event row occupies, at every text size the panel uses. A day with only one event therefore never had room for its own label, and because the panel picks one layout for all of its days rather than mixing two, that single event pushed every row back to carrying its own day prefix (`Wed 10:00-12:00  ...`). That fallback then spent *more* width than the strip it replaced: a shared strip costs one narrow column, while a per-row prefix costs the same text on every row. Days holding a single event now use a two-letter label (`We`), which fits with room to spare and stays unambiguous across all seven days, so the panel keeps its strip and the width goes back to the summary. Days with two or more events are unchanged, and the per-row prefix still appears where it is genuinely needed — a tile too narrow for a strip, or an event whose start time cannot be read.
+- Calendar day groups are separated by space alone, without a horizontal rule between them. The rule restated a boundary the panel had already drawn twice over: the day strip and its vertical rule mark where a day begins, and in the per-row-prefix layout every row names its own day anyway. The rule above a trailing "+N more" is a different thing — it divides events from a count rather than one day from the next — and stays.
+
+### Fixed
+- Calendars reserved roughly twice the empty space they appeared to ask for at the foot of a panel, which on a full-width panel cost a whole event. The space kept clear below the last row was set when rows were positioned by their ink; rows have since been positioned by a line advance that already ends in the gap below a letter's baseline, so the two were added together and counted the same blank twice. A full-width calendar left 30% of its height empty while events it had room for collapsed into "+N more". The clearance a reader actually sees is unchanged at roughly 30px, and such a panel now shows three events where it showed two. Panels in the standard grid were already reaching their row limit for other reasons and are unaffected.
+
 ## [1.11.0] - 2026-09-10
 
 ### Changed
