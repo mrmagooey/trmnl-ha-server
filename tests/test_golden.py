@@ -648,12 +648,12 @@ class TestGoldenImages(unittest.TestCase):
         """An event with no parseable start has no day to sit under a spine,
         so the whole panel falls back to a per-row day prefix instead.
 
-        Two ordinary days (one single-event, one two-event) no longer force
-        this on their own -- a single-event group now fits a two-letter
-        spine. The remaining, honest trigger is has_unparseable: a third
-        event with an unparseable start. All-or-nothing means that one
-        event's failure drags the whole panel into prefix mode, not just its
-        own (dayless) group.
+        The two ordinary days here hold one event each, which used to be
+        enough to force prefix mode on its own; it no longer is, since a
+        single-event group now fits a two-letter spine. The remaining,
+        honest trigger is has_unparseable: a third event with an unparseable
+        start. All-or-nothing means that one event's failure drags the whole
+        panel into prefix mode, not just its own (dayless) group.
         """
         mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
         mock_fetch_calendar.return_value = [
