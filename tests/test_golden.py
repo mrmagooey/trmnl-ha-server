@@ -804,7 +804,7 @@ class TestGoldenImages(unittest.TestCase):
             list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger)
         self.assertEqual(layout.mode, 'gutter')
         # The two spine lengths in one panel are the point of this golden.
-        self.assertEqual([day for day, _ in layout.groups], ['Wed', 'Th'])
+        self.assertEqual([label for label, _ in layout.groups], ['Wed', 'Th'])
         # Every event is drawn: the golden is not hiding a group behind "+n more".
         self.assertEqual(layout.overflow, 0)
 
