@@ -48,7 +48,14 @@ BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 CALENDAR_MIN_BODY_SIZE: int = 20
 CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
 CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
-CALENDAR_BOTTOM_MARGIN: int = 30  # unscaled space kept clear at the panel foot
+# Unscaled space kept clear at the panel foot. Counted from the last row's
+# ADVANCE, not its ink: the advance already carries descent + line spacing
+# (14 unscaled at size 20), so this yields roughly 30px of visible clearance
+# rather than 16. It was 30 -- a figure that predates advance-based row
+# spacing and so double-counted that trailing gap, costing a whole row on
+# panels whose height left little slack (a large_display calendar drew 2
+# rows and banked 30% of its height as blank).
+CALENDAR_BOTTOM_MARGIN: int = 16
 CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
 CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
 CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
@@ -151,8 +158,10 @@ def _calendar_day_groups(
 
     Returns:
         (groups, has_unparseable) where each group is (day, label, rows).
-        `label` is the three-letter abbreviation the spine draws. An event
-        with no parseable start lands in a trailing group whose day is None,
+        `label` is the three-letter `%a` abbreviation, used verbatim in
+        prefix mode; `_calendar_layout` may shorten it further for a
+        single-event group's spine. An event with no parseable start lands
+        in a trailing group whose day is None,
         and sets has_unparseable — the panel is forced into prefix mode,
         because such an event has no day to sit under.
     """
@@ -545,7 +554,8 @@ def _calendar_layout(
     Returns:
         A CalendarLayout. `groups` rows are the FINAL strings for the chosen
         mode: already prefixed with the day in prefix mode, bare in gutter
-        mode.
+        mode. In gutter mode, the group label is also final: shortened to
+        two letters for single-event groups, three letters otherwise.
     """
     raw_groups, has_unparseable = _calendar_day_groups(events, logger)
     if not raw_groups:
@@ -554,9 +564,19 @@ def _calendar_layout(
     n_rows = sum(len(rows) for _, _, rows in raw_groups)
 
     def build(size: int) -> CalendarLayout:
-        use_gutter = _calendar_gates(raw_groups, has_unparseable, size, width, logger)
+        # ponytail: a single-row group can't carry a rotated 3-letter spine
+        # ("Wed" overruns every row budget in BODY_SIZE_LADDER, up to ~123%
+        # of it at size 24); two letters stay unambiguous across all seven
+        # days (Mo/Tu/We/Th/Fr/Sa/Su) and fit with margin at every size.
+        # Groups with >=2 events keep the full label. Prefix mode is exempt
+        # -- it never shortens, since the label there is prose, not a spine.
+        spine_groups = [
+            (day, label[:2] if len(rows) == 1 else label, rows)
+            for day, label, rows in raw_groups
+        ]
+        use_gutter = _calendar_gates(spine_groups, has_unparseable, size, width, logger)
         if use_gutter:
-            groups = [(label, list(rows)) for _, label, rows in raw_groups]
+            groups = [(label, list(rows)) for _, label, rows in spine_groups]
             gutter = CALENDAR_GUTTER_W
         else:
             groups = [
@@ -1626,10 +1646,13 @@ def _draw_calendar_component(
             if remaining <= 0:
                 break
             if index:
-                d.line(
-                    [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
-                    fill='black', width=1,
-                )
+                # Whitespace alone divides day groups: the spine and its
+                # vertical rule already mark where one day ends in gutter
+                # mode, and every row carries its own day in prefix mode, so
+                # a horizontal rule restated a boundary both modes had
+                # covered. The gap it occupied stays, which is also what
+                # keeps _calendar_capacity's budget (it subtracts
+                # CALENDAR_SEP_H per gap) in step with what is drawn.
                 y_pos += CALENDAR_SEP_H * scale
             group_top = y_pos
             drawn_here = min(len(rows), remaining)
