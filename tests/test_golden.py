@@ -591,26 +591,79 @@ class TestGoldenImages(unittest.TestCase):
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
-    def test_calendar_prefix_fallback(self, mock_fetch_calendar, mock_get_entity_state):
-        """A day holding only a single event can't carry a spine, so the
-        whole panel falls back to a per-row day prefix instead.
+    def test_calendar_mixed_single_and_multi_event_gutter(
+        self, mock_fetch_calendar, mock_get_entity_state
+    ):
+        """A panel mixing a single-event day with a busy day still renders
+        gutter mode, but the two groups draw different-length spines.
 
-        Two days: one with a single event (too short to fit a rotated
-        spine), one with two. All-or-nothing means the short group's
-        failure drags the whole panel into prefix mode, not just its own
-        rows.
+        The single-event Wed group draws a two-letter spine ("We"); the
+        three-event Thu group keeps the full three-letter one ("Thu"). All
+        rows still line up at the same x position -- shortening only the
+        spine label, never the gutter width, is what keeps that true.
+        """
+        mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
+        mock_fetch_calendar.return_value = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:30:00+00:00'}},
+        ] + [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-18T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-18T{9 + i:02d}:30:00+00:00'}}
+            for i in range(3)
+        ]
+        dashboard = {
+            'name': 'calmixed',
+            'title': 'Cal Mixed',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home',
+                 'arguments': {'calendar_id': 'calendar.home'}},
+                {'type': 'entity', 'friendly_name': 'Temp',
+                 'entity_name': 'sensor.t'},
+            ],
+        }
+
+        from math import ceil, sqrt
+        from trmnl_server.components import _calendar_layout
+
+        n = len(dashboard['components'])
+        grid_rows = int(ceil(sqrt(n)))
+        grid_cols = int(ceil(n / grid_rows))
+        tile_w, tile_h = 800 // grid_cols, 480 // grid_rows
+        layout = _calendar_layout(
+            list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger
+        )
+        self.assertEqual(layout.mode, 'gutter')
+        self.assertEqual([label for label, _ in layout.groups], ['We', 'Thu'])
+
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'calendar_mixed_single_and_multi_event_gutter')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_calendar_prefix_fallback(self, mock_fetch_calendar, mock_get_entity_state):
+        """An event with no parseable start has no day to sit under a spine,
+        so the whole panel falls back to a per-row day prefix instead.
+
+        Two ordinary days (one single-event, one two-event) no longer force
+        this on their own -- a single-event group now fits a two-letter
+        spine. The remaining, honest trigger is has_unparseable: a third
+        event with an unparseable start. All-or-nothing means that one
+        event's failure drags the whole panel into prefix mode, not just its
+        own (dayless) group.
         """
         mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
         mock_fetch_calendar.return_value = [
             {'summary': 'Event 0',
              'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
              'end': {'dateTime': '2024-01-17T09:30:00+00:00'}},
-            {'summary': 'Event 0',
+            {'summary': 'Event 1',
              'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
              'end': {'dateTime': '2024-01-18T09:30:00+00:00'}},
-            {'summary': 'Event 1',
-             'start': {'dateTime': '2024-01-18T10:00:00+00:00'},
-             'end': {'dateTime': '2024-01-18T10:30:00+00:00'}},
+            {'summary': 'Mystery', 'start': {}, 'end': {}},
         ]
         dashboard = {
             'name': 'calprefix',

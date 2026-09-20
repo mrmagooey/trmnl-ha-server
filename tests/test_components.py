@@ -33,6 +33,9 @@ from trmnl_server.components import (
     _body_floor,
     _calendar_layout,
     _calendar_capacity,
+    _calendar_gates,
+    _spine_ink_height,
+    _calendar_row_advance,
     CALENDAR_MIN_BODY_SIZE,
     CALENDAR_GUTTER_W,
     _calendar_event_row,
@@ -916,8 +919,11 @@ class TestCalendarGutterRendering(unittest.TestCase):
 
     def test_prefix_mode_draws_no_vertical_rule(self):
         """Prefix mode reserves no gutter, so no rule should be drawn either."""
-        # A one-event second day forces prefix mode.
-        events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)
+        # An unparseable event forces prefix mode. (A one-event second day no
+        # longer does -- it now fits a two-letter spine.)
+        events = self._events('2024-01-17', 3) + [
+            {'summary': 'Mystery', 'start': {}, 'end': {}}
+        ]
         layout = _calendar_layout(list(events), 400, 240, mock_logger)
         self.assertEqual(layout.mode, 'prefix')
         img = _draw_calendar_component('Cal', list(events), 400, 240, mock_logger)
@@ -928,8 +934,11 @@ class TestCalendarGutterRendering(unittest.TestCase):
         )
 
     def test_prefix_mode_leaves_the_gutter_empty(self):
-        # A one-event second day forces prefix mode.
-        events = self._events('2024-01-17', 3) + self._events('2024-01-18', 1)
+        # An unparseable event forces prefix mode. (A one-event second day no
+        # longer does -- it now fits a two-letter spine.)
+        events = self._events('2024-01-17', 3) + [
+            {'summary': 'Mystery', 'start': {}, 'end': {}}
+        ]
         layout = _calendar_layout(list(events), 400, 240, mock_logger)
         self.assertEqual(layout.mode, 'prefix')
         # Prefix mode reserves no gutter column (CalendarLayout.gutter is 0),
@@ -2940,15 +2949,16 @@ class TestPanelBodyFit(unittest.TestCase):
 
     def test_probe_matches_the_calendar_in_prefix_mode(self):
         from PIL import ImageChops
+        # An unparseable event forces prefix mode regardless of spine length
+        # (a single-event second day now fits a two-letter spine, so it can
+        # no longer be used to trigger prefix here).
         events = [
             {'summary': f'Event {i}',
              'start': {'dateTime': f'2024-01-17T{9 + i:02d}:00:00+00:00'},
              'end': {'dateTime': f'2024-01-17T{9 + i:02d}:30:00+00:00'}}
             for i in range(3)
         ] + [
-            {'summary': 'Lonely',
-             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
-             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}}
+            {'summary': 'Mystery', 'start': {}, 'end': {}}
         ]
         render_data = {'type': 'calendar', 'data': list(events)}
         self.assertEqual(
@@ -3462,18 +3472,25 @@ class TestCalendarLayout(unittest.TestCase):
         self.assertEqual(layout.mode, 'gutter')
         self.assertGreater(layout.gutter, 0)
 
-    def test_a_single_event_day_falls_back_to_prefix(self):
-        # A one-row group is shorter than its own spine at every rung.
+    def test_a_single_event_day_gets_a_two_letter_spine(self):
+        # A one-row group is shorter than a three-letter spine at every rung,
+        # but a two-letter one fits with margin; a group with two or more
+        # events keeps its full three-letter label.
         layout = _calendar_layout(
             self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 400, 240, mock_logger
         )
-        self.assertEqual(layout.mode, 'prefix')
-        self.assertEqual(layout.gutter, 0)
+        self.assertEqual(layout.mode, 'gutter')
+        self.assertGreater(layout.gutter, 0)
+        labels = [label for label, _ in layout.groups]
+        self.assertEqual(labels, ['Wed', 'Th'])
 
     def test_prefix_mode_puts_the_day_back_on_every_row(self):
+        # Gate (b): a narrow tile forces prefix regardless of spine length,
+        # keeping the full three-letter day label on every group.
         layout = _calendar_layout(
-            self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 400, 240, mock_logger
+            self._events([('2024-01-17', 3), ('2024-01-18', 1)]), 200, 240, mock_logger
         )
+        self.assertEqual(layout.mode, 'prefix')
         for _, rows in layout.groups:
             for row in rows:
                 self.assertRegex(row, r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ')
@@ -3540,6 +3557,44 @@ class TestCalendarLayout(unittest.TestCase):
         self.assertEqual(layout.groups, [])
         self.assertEqual(layout.drawn_rows, 0)
         self.assertEqual(layout.overflow, 0)
+
+
+class TestCalendarGatesTwoLetterSpine(unittest.TestCase):
+    """A single-event group's spine may shorten to two letters; gate (a)
+    must measure whichever label the group will actually draw."""
+
+    def test_three_letter_label_overruns_a_one_row_budget(self):
+        # Measured in the design brief: "Wed" against a one-row budget
+        # overruns at every BODY_SIZE_LADDER rung.
+        size = BODY_SIZE_LADDER[0]
+        advance = _calendar_row_advance(size, mock_logger)
+        self.assertGreaterEqual(_spine_ink_height('Wed', size, mock_logger), advance)
+
+    def test_two_letter_label_fits_a_one_row_budget(self):
+        size = BODY_SIZE_LADDER[0]
+        advance = _calendar_row_advance(size, mock_logger)
+        self.assertLess(_spine_ink_height('We', size, mock_logger), advance)
+
+    def test_gate_rejects_a_single_event_group_with_the_full_label(self):
+        groups = [(None, 'Wed', ['09:00-09:30  Event 0'])]
+        self.assertFalse(
+            _calendar_gates(groups, False, BODY_SIZE_LADDER[0], 400, mock_logger)
+        )
+
+    def test_gate_accepts_the_same_group_once_shortened_to_two_letters(self):
+        groups = [(None, 'We', ['09:00-09:30  Event 0'])]
+        self.assertTrue(
+            _calendar_gates(groups, False, BODY_SIZE_LADDER[0], 400, mock_logger)
+        )
+
+    def test_gate_still_requires_the_full_label_for_a_multi_event_group(self):
+        # Two-letter shortening is only for single-event groups; a
+        # multi-event group's label must not be shortened by the caller, and
+        # the gate must judge whatever label it is actually given.
+        groups = [(None, 'Wed', ['09:00-09:30  Event 0', '10:00-10:30  Event 1'])]
+        self.assertTrue(
+            _calendar_gates(groups, False, BODY_SIZE_LADDER[0], 400, mock_logger)
+        )
 
 
 class TestCalendarOverflowRow(unittest.TestCase):

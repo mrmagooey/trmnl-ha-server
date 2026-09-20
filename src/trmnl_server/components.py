@@ -151,8 +151,10 @@ def _calendar_day_groups(
 
     Returns:
         (groups, has_unparseable) where each group is (day, label, rows).
-        `label` is the three-letter abbreviation the spine draws. An event
-        with no parseable start lands in a trailing group whose day is None,
+        `label` is the three-letter `%a` abbreviation, used verbatim in
+        prefix mode; `_calendar_layout` may shorten it further for a
+        single-event group's spine. An event with no parseable start lands
+        in a trailing group whose day is None,
         and sets has_unparseable — the panel is forced into prefix mode,
         because such an event has no day to sit under.
     """
@@ -545,7 +547,8 @@ def _calendar_layout(
     Returns:
         A CalendarLayout. `groups` rows are the FINAL strings for the chosen
         mode: already prefixed with the day in prefix mode, bare in gutter
-        mode.
+        mode. In gutter mode, the group label is also final: shortened to
+        two letters for single-event groups, three letters otherwise.
     """
     raw_groups, has_unparseable = _calendar_day_groups(events, logger)
     if not raw_groups:
@@ -554,9 +557,19 @@ def _calendar_layout(
     n_rows = sum(len(rows) for _, _, rows in raw_groups)
 
     def build(size: int) -> CalendarLayout:
-        use_gutter = _calendar_gates(raw_groups, has_unparseable, size, width, logger)
+        # ponytail: a single-row group can't carry a rotated 3-letter spine
+        # ("Wed" overruns every row budget in BODY_SIZE_LADDER, up to ~123%
+        # of it at size 24); two letters stay unambiguous across all seven
+        # days (Mo/Tu/We/Th/Fr/Sa/Su) and fit with margin at every size.
+        # Groups with >=2 events keep the full label. Prefix mode is exempt
+        # -- it never shortens, since the label there is prose, not a spine.
+        spine_groups = [
+            (day, label[:2] if len(rows) == 1 else label, rows)
+            for day, label, rows in raw_groups
+        ]
+        use_gutter = _calendar_gates(spine_groups, has_unparseable, size, width, logger)
         if use_gutter:
-            groups = [(label, list(rows)) for _, label, rows in raw_groups]
+            groups = [(label, list(rows)) for _, label, rows in spine_groups]
             gutter = CALENDAR_GUTTER_W
         else:
             groups = [
