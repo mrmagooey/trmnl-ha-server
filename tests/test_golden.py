@@ -641,6 +641,117 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'calendar_prefix_fallback')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_calendar_large_display(self, mock_fetch_calendar, mock_get_entity_state):
+        """A large_display calendar takes the top half, three cards tile below.
+
+        The large branch of tile_components is a different geometry path from
+        the sqrt grid: the calendar gets the full width and its own layout
+        row, so its body size is settled alone rather than against its
+        neighbours, and the three cards underneath form a second row. Mode is
+        asserted up front for the same reason as the other calendar goldens.
+        """
+        mock_get_entity_state.side_effect = lambda name, logger: {
+            'sensor.t': {'state': '20.0', 'friendly_name': 'Temp'},
+            'sensor.h': {'state': '55', 'friendly_name': 'Humidity'},
+            'sensor.p': {'state': '1013', 'friendly_name': 'Pressure'},
+        }[name]
+        mock_fetch_calendar.return_value = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-{17 + i // 3:02d}T{9 + i % 3:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-{17 + i // 3:02d}T{9 + i % 3:02d}:30:00+00:00'}}
+            for i in range(6)
+        ]
+        dashboard = {
+            'name': 'callarge',
+            'title': 'Cal Large',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home', 'large_display': True,
+                 'arguments': {'calendar_id': 'calendar.home'}},
+                {'type': 'entity', 'friendly_name': 'Temp',
+                 'entity_name': 'sensor.t'},
+                {'type': 'entity', 'friendly_name': 'Humidity',
+                 'entity_name': 'sensor.h'},
+                {'type': 'entity', 'friendly_name': 'Pressure',
+                 'entity_name': 'sensor.p'},
+            ],
+        }
+
+        from trmnl_server.components import _calendar_layout
+
+        # Large panel: full width, top half of the area below the header.
+        tile_w, tile_h = 800, (480 - 40) // 2
+        self.assertEqual(
+            _calendar_layout(list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger).mode,
+            'gutter',
+        )
+
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'calendar_large_display')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_calendar_large_display_prefix(self, mock_fetch_calendar, mock_get_entity_state):
+        """The large_display layout again, with two days that fit whole.
+
+        Two events on Wednesday and one on Thursday. The Thursday group holds
+        a single event, too short to carry a rotated spine, and the mode is
+        all-or-nothing, so the whole panel falls back to per-row day prefixes
+        -- the large-panel counterpart to test_calendar_prefix_fallback. At
+        three rows nothing overflows, so unlike test_calendar_large_display
+        this golden shows every event and both day groups.
+        """
+        mock_get_entity_state.side_effect = lambda name, logger: {
+            'sensor.t': {'state': '20.0', 'friendly_name': 'Temp'},
+            'sensor.h': {'state': '55', 'friendly_name': 'Humidity'},
+            'sensor.p': {'state': '1013', 'friendly_name': 'Pressure'},
+        }[name]
+        # 2024-01-17 is a Wednesday; tests pin TZ=UTC (see conftest) so these
+        # render at the wall-clock times written here.
+        mock_fetch_calendar.return_value = [
+            {'summary': 'Event 0',
+             'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T09:30:00+00:00'}},
+            {'summary': 'Event 1',
+             'start': {'dateTime': '2024-01-17T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-17T10:30:00+00:00'}},
+            {'summary': 'Event 2',
+             'start': {'dateTime': '2024-01-18T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-18T09:30:00+00:00'}},
+        ]
+        dashboard = {
+            'name': 'callargeprefix',
+            'title': 'Cal Large Prefix',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home', 'large_display': True,
+                 'arguments': {'calendar_id': 'calendar.home'}},
+                {'type': 'entity', 'friendly_name': 'Temp',
+                 'entity_name': 'sensor.t'},
+                {'type': 'entity', 'friendly_name': 'Humidity',
+                 'entity_name': 'sensor.h'},
+                {'type': 'entity', 'friendly_name': 'Pressure',
+                 'entity_name': 'sensor.p'},
+            ],
+        }
+
+        from trmnl_server.components import _calendar_layout
+
+        tile_w, tile_h = 800, (480 - 40) // 2
+        layout = _calendar_layout(
+            list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger)
+        self.assertEqual(layout.mode, 'prefix')
+        self.assertEqual([day for day, _ in layout.groups], ['Wed', 'Thu'])
+        # Every event is drawn: the golden is not hiding a group behind "+n more".
+        self.assertEqual(layout.overflow, 0)
+
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'calendar_large_display_prefix')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_row_body_text_size_harmonisation(self, mock_get_entity_state):
         """Four entity-list panels in a 2x2 grid: each row settles on one size.
 
