@@ -1639,10 +1639,13 @@ def _draw_calendar_component(
             if remaining <= 0:
                 break
             if index:
-                d.line(
-                    [(x_text, y_pos), (large_width - 20 * scale, y_pos)],
-                    fill='black', width=1,
-                )
+                # Whitespace alone divides day groups: the spine and its
+                # vertical rule already mark where one day ends in gutter
+                # mode, and every row carries its own day in prefix mode, so
+                # a horizontal rule restated a boundary both modes had
+                # covered. The gap it occupied stays, which is also what
+                # keeps _calendar_capacity's budget (it subtracts
+                # CALENDAR_SEP_H per gap) in step with what is drawn.
                 y_pos += CALENDAR_SEP_H * scale
             group_top = y_pos
             drawn_here = min(len(rows), remaining)

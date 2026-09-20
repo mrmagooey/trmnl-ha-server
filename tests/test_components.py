@@ -917,6 +917,53 @@ class TestCalendarGutterRendering(unittest.TestCase):
             [call.kwargs.get('width') for call in rule_calls],
         )
 
+    def _horizontal_line_calls(self, events, width=400, height=240):
+        """Every full-width horizontal line _draw_calendar_component draws.
+
+        Mocking the draw call is unambiguous where pixel-sniffing is not: a
+        1px rule on the 2x canvas downsamples to a faint grey that is hard to
+        tell from anti-aliased text.
+        """
+        with mock.patch('trmnl_server.components.ImageDraw.ImageDraw.line') as mock_line:
+            _draw_calendar_component('Cal', list(events), width, height, mock_logger)
+        return [
+            call for call in mock_line.call_args_list
+            if call.args[0][0][1] == call.args[0][1][1]
+        ]
+
+    def test_no_horizontal_rule_between_day_groups(self):
+        """Day groups are divided by whitespace, not a drawn rule.
+
+        The spine and its vertical rule already mark the boundary in gutter
+        mode, and every row carries its own day in prefix mode, so the
+        horizontal rule restated what both modes had covered. The fixture is
+        chosen to fit without overflow so that the footer rule -- which is a
+        different separator and is kept -- cannot mask a regression here.
+        """
+        events = self._events('2024-01-17', 2) + self._events('2024-01-18', 2)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertEqual(len(layout.groups), 2, "fixture must span two days")
+        self.assertFalse(layout.footer, "fixture must not overflow")
+        self.assertEqual(
+            self._horizontal_line_calls(events), [],
+            "no horizontal rule should be drawn between day groups",
+        )
+
+    def test_overflow_footer_rule_is_still_drawn(self):
+        """Removing the day rule must not take the footer rule with it.
+
+        The rule above "+N more" separates events from a count, not one day
+        from another, so it survives. Without this, the deletion could widen
+        silently into the footer and only a golden would catch it.
+        """
+        events = self._events('2024-01-17', 12)
+        layout = _calendar_layout(list(events), 400, 240, mock_logger)
+        self.assertTrue(layout.footer, "fixture must overflow to draw a footer")
+        self.assertEqual(
+            len(self._horizontal_line_calls(events)), 1,
+            "expected exactly the footer rule and no day-group rules",
+        )
+
     def test_prefix_mode_draws_no_vertical_rule(self):
         """Prefix mode reserves no gutter, so no rule should be drawn either."""
         # An unparseable event forces prefix mode. (A one-event second day no
