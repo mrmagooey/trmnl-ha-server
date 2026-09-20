@@ -817,14 +817,14 @@ class TestGoldenImages(unittest.TestCase):
     def test_calendar_large_display_overflow_footer(self, mock_fetch_calendar, mock_get_entity_state):
         """The mixed-spine layout again, but with more events than fit.
 
-        One event on Wednesday and five on Thursday. Two rows fit, so each
-        day draws exactly one and the remaining four collapse into a
-        "+4 more" footer. That makes this the golden covering three things
-        the other calendar goldens do not show together:
+        One event on Wednesday and five on Thursday. Three rows fit, so
+        Wednesday draws its one and Thursday draws two of its five, leaving
+        three behind a "+3 more" footer. That makes this the golden covering
+        three things the other calendar goldens do not show together:
 
         - both spine lengths ("We" and "Thu") alongside an overflow footer;
         - a group truncated by the row budget, whose vertical rule is sized
-          to the rows it actually drew rather than the five it holds;
+          to the two rows it actually drew rather than the five it holds;
         - the footer rule, which is the one horizontal rule the calendar
           still draws now that day groups are divided by whitespace.
         """
@@ -870,10 +870,11 @@ class TestGoldenImages(unittest.TestCase):
             list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger)
         self.assertEqual(layout.mode, 'gutter')
         self.assertEqual([label for label, _ in layout.groups], ['We', 'Thu'])
-        # One row drawn per group, four events left over behind the footer.
+        # Wednesday draws its single event, Thursday two of its five, and
+        # three are left over behind the footer.
         self.assertTrue(layout.footer)
-        self.assertEqual(layout.drawn_rows, 2)
-        self.assertEqual(layout.overflow, 4)
+        self.assertEqual(layout.drawn_rows, 3)
+        self.assertEqual(layout.overflow, 3)
 
         with mock.patch('datetime.datetime', mock_datetime()):
             img_io = render_dashboard_image(dashboard, mock_logger)

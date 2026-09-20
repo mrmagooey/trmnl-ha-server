@@ -931,6 +931,46 @@ class TestCalendarGutterRendering(unittest.TestCase):
             if call.args[0][0][1] == call.args[0][1][1]
         ]
 
+    def _bottom_ink_row(self, img):
+        """y of the lowest row containing any non-white pixel."""
+        gray = img.convert('L')
+        w, h = gray.size
+        px = gray.load()
+        return max(
+            (y for y in range(h) if any(px[x, y] < 250 for x in range(w))),
+            default=0,
+        )
+
+    def test_last_row_keeps_clearance_from_the_panel_foot(self):
+        """A full panel must not push its last row against the bottom edge.
+
+        CALENDAR_BOTTOM_MARGIN is measured from the last row's ADVANCE, and
+        the advance already carries descent plus line spacing, so the gap a
+        reader sees is bigger than the constant. Asserting the visible gap
+        is the point -- asserting the constant would just restate its value.
+        """
+        events = self._events('2024-01-17', 12)
+        img = _draw_calendar_component('Cal', list(events), 800, 220, mock_logger)
+        clearance = 220 - self._bottom_ink_row(img)
+        self.assertGreaterEqual(
+            clearance, 20,
+            f"last row sits {clearance}px from the foot; text is too close "
+            f"to the panel edge",
+        )
+
+    def test_a_tall_panel_spends_its_height_on_rows(self):
+        """Regression: the large_display panel banked 30% of its height blank.
+
+        A 220px-tall panel at the calendar's size floor has room for three
+        event rows plus an overflow footer. It previously drew two, because
+        the bottom margin double-counted the trailing gap already inside
+        each row's advance.
+        """
+        events = self._events('2024-01-17', 1) + self._events('2024-01-18', 5)
+        layout = _calendar_layout(list(events), 800, 220, mock_logger)
+        self.assertTrue(layout.footer)
+        self.assertEqual(layout.drawn_rows, 3)
+
     def test_no_horizontal_rule_between_day_groups(self):
         """Day groups are divided by whitespace, not a drawn rule.
 

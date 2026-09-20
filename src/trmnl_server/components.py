@@ -48,7 +48,14 @@ BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 CALENDAR_MIN_BODY_SIZE: int = 20
 CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
 CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
-CALENDAR_BOTTOM_MARGIN: int = 30  # unscaled space kept clear at the panel foot
+# Unscaled space kept clear at the panel foot. Counted from the last row's
+# ADVANCE, not its ink: the advance already carries descent + line spacing
+# (14 unscaled at size 20), so this yields roughly 30px of visible clearance
+# rather than 16. It was 30 -- a figure that predates advance-based row
+# spacing and so double-counted that trailing gap, costing a whole row on
+# panels whose height left little slack (a large_display calendar drew 2
+# rows and banked 30% of its height as blank).
+CALENDAR_BOTTOM_MARGIN: int = 16
 CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
 CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
 CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
