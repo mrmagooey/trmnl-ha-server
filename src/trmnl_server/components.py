@@ -36,6 +36,9 @@ TITLE_BAND_MAX_PERCENT: int = 45
 # _build_draw_segments for what each one draws.
 GAP_STYLES: tuple[str, ...] = ('hold', 'break', 'step')
 GAP_STYLE_DEFAULT: str = 'hold'
+# Two consecutive real readings further apart than this are treated as a gap
+# (drawn per gap_style) rather than joined by a solid line.
+MAX_GAP_MINUTES_DEFAULT: int = 15
 # Body text (entity-list rows, calendar events, todo items) is quantised to
 # these sizes for the same reason titles are: every row in a panel lands on one
 # rung instead of each row shrinking to its own arbitrary fit, which otherwise
@@ -967,16 +970,39 @@ def _resolve_gap_style(component: "ComponentConfig", logger: "Logger") -> str:
     return GAP_STYLE_DEFAULT
 
 
+def _resolve_max_gap(component: "ComponentConfig", logger: "Logger") -> float:
+    """Reads a history graph's max_gap_minutes setting, warning on an invalid one.
+
+    Args:
+        component: The component's configuration
+        logger: Logger instance
+
+    Returns:
+        A positive number of minutes; MAX_GAP_MINUTES_DEFAULT when unset or invalid
+    """
+    raw: object = component.get('max_gap_minutes', MAX_GAP_MINUTES_DEFAULT)
+    if not isinstance(raw, bool) and isinstance(raw, (int, float)) and raw > 0:
+        return raw
+    logger.warning(
+        "Invalid 'max_gap_minutes' (%r) for %s; expected a positive number. "
+        "Defaulting to %r.",
+        raw, component.get('friendly_name'), MAX_GAP_MINUTES_DEFAULT,
+    )
+    return MAX_GAP_MINUTES_DEFAULT
+
+
 def _build_draw_segments(
     data_points: list[tuple[datetime, float | None]],
     window_end: datetime,
     gap_style: str = GAP_STYLE_DEFAULT,
+    max_gap: timedelta | None = None,
 ) -> list[tuple[datetime, float, datetime, float, bool]]:
     """Splits history points into contiguous solid/dashed line segments.
 
     Consecutive real readings are joined with a solid segment. A gap between
-    two real readings — a None marker from an 'unavailable'/'unknown' state —
-    is never interpolated across, because that would draw a trend nobody
+    two real readings — a None marker from an 'unavailable'/'unknown' state,
+    or a silence longer than `max_gap` with no rows recorded at all — is
+    never interpolated across, because that would draw a trend nobody
     observed; `gap_style` chooses how it is depicted instead:
 
     - 'hold': a dashed segment holding the last known value flat up to the
@@ -1001,6 +1027,10 @@ def _build_draw_segments(
         window_end: Right edge of the plotted time window ("now").
         gap_style: One of GAP_STYLES. Unknown values fall back to the
             default; callers validate and warn.
+        max_gap: Two consecutive real readings strictly further apart than
+            this are treated exactly like an unavailable/unknown gap, so a
+            sensor that went silent and then reported again is not drawn as
+            a measured trend. None disables the check.
 
     Returns:
         (t0, v0, t1, v1, dashed) segments in chronological order. Every
@@ -1020,7 +1050,7 @@ def _build_draw_segments(
             continue
         if last_real is not None:
             t0, v0 = last_real
-            if gap_pending:
+            if gap_pending or (max_gap is not None and t - t0 > max_gap):
                 if gap_style != 'break':
                     segments.append((t0, v0, t, v0, True))
                 if gap_style == 'step' and v != v0:
@@ -1050,6 +1080,7 @@ def _draw_graph_component(
     window_end: datetime,
     zero_baseline: bool = False,
     gap_style: str = GAP_STYLE_DEFAULT,
+    max_gap: timedelta | None = None,
     title_font_size: int | None = None,
     title_lines: int = 1,
 ) -> Image.Image:
@@ -1067,6 +1098,9 @@ def _draw_graph_component(
         window_end: End of the fixed time window (x-axis right bound, typically "now").
         gap_style: How to depict an outage between two real readings; one
             of GAP_STYLES. See _build_draw_segments.
+        max_gap: Silence between two real readings beyond which the interval
+            is drawn as a gap per gap_style. None disables the check. See
+            _build_draw_segments.
         zero_baseline: When True, include 0 in the value range and draw a thin
             horizontal zero reference line with a labeled 0 y-tick.
         title_font_size: Title size resolved by the caller. When None, the
@@ -1302,7 +1336,7 @@ def _draw_graph_component(
     # (holding the last known value flat) across any gap — including the
     # live tail from the last reading forward to window_end ("now").
     for seg_t0, seg_v0, seg_t1, seg_v1, dashed in _build_draw_segments(
-        data_points, max_time, gap_style,
+        data_points, max_time, gap_style, max_gap,
     ):
         p0 = to_coords(seg_t0, seg_v0)
         p1 = to_coords(seg_t1, seg_v1)
@@ -2081,6 +2115,9 @@ def tile_components(
                 window_end=window_end_val,
                 zero_baseline=bool(render_data.get('zero_baseline', False)),
                 gap_style=str(render_data.get('gap_style', GAP_STYLE_DEFAULT)),
+                max_gap=timedelta(minutes=float(
+                    render_data.get('max_gap_minutes', MAX_GAP_MINUTES_DEFAULT),
+                )),
                 title_font_size=title_font_size,
                 title_lines=title_lines,
             )
@@ -2309,6 +2346,7 @@ def render_dashboard_image(
         todo_meta: tuple[int, str] | None = None
         graph_zero_baseline: bool = False
         graph_gap_style: str = GAP_STYLE_DEFAULT
+        graph_max_gap: float = MAX_GAP_MINUTES_DEFAULT
 
         if component_type == 'history_graph':
             entity_name = component.get('entity_name', '')
@@ -2326,6 +2364,7 @@ def render_dashboard_image(
             data = _process_history_to_points(history)
             graph_zero_baseline = bool(component.get('zero_baseline', False))
             graph_gap_style = _resolve_gap_style(component, logger)
+            graph_max_gap = _resolve_max_gap(component, logger)
         elif component_type == 'entity':
             entity_name = component.get('entity_name', '')
             attribute = component.get('attribute')
@@ -2394,6 +2433,8 @@ def render_dashboard_image(
             render_entry['zero_baseline'] = True
         if graph_gap_style != GAP_STYLE_DEFAULT:
             render_entry['gap_style'] = graph_gap_style
+        if graph_max_gap != MAX_GAP_MINUTES_DEFAULT:
+            render_entry['max_gap_minutes'] = graph_max_gap
         if todo_meta is not None:
             render_entry['columns'] = todo_meta[0]
             render_entry['todo_key'] = todo_meta[1]

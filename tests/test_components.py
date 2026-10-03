@@ -18,6 +18,8 @@ from trmnl_server.components import (
     _draw_dashed_line,
     _build_draw_segments,
     _resolve_gap_style,
+    _resolve_max_gap,
+    MAX_GAP_MINUTES_DEFAULT,
     GAP_STYLES,
     GAP_STYLE_DEFAULT,
     _draw_graph_component,
@@ -1738,6 +1740,138 @@ class TestGapStyleDispatch(unittest.TestCase):
     def test_invalid_style_defaults_rather_than_reaching_the_renderer(self):
         self.assertEqual(self._forwarded_style({'gap_style': 'zigzag'}),
                          GAP_STYLE_DEFAULT)
+
+
+class TestMaxGapSegments(unittest.TestCase):
+    """Unit: silence longer than max_gap between readings is a gap."""
+
+    @staticmethod
+    def T(h, m=0):
+        from datetime import datetime
+        return datetime(2025, 1, 15, h, m)
+
+    def _gap(self):
+        from datetime import timedelta
+        return timedelta(minutes=15)
+
+    def test_regression_silent_stretch_is_not_joined_by_a_solid_line(self):
+        """Two readings 4h apart with no rows between: dashed hold, not a trend."""
+        T = self.T
+        segs = _build_draw_segments(
+            [(T(8), 20.0), (T(12), 25.0)], T(12, 5), max_gap=self._gap(),
+        )
+        self.assertIn((T(8), 20.0, T(12), 20.0, True), segs)
+        self.assertEqual([], [s for s in segs if not s[4]])
+
+    def test_without_max_gap_the_old_behaviour_is_kept(self):
+        T = self.T
+        segs = _build_draw_segments([(T(8), 20.0), (T(12), 25.0)], T(12))
+        self.assertEqual(segs, [(T(8), 20.0, T(12), 25.0, False)])
+
+    def test_exactly_the_threshold_stays_solid(self):
+        T = self.T
+        segs = _build_draw_segments(
+            [(T(8), 20.0), (T(8, 15), 25.0)], T(8, 15), max_gap=self._gap(),
+        )
+        self.assertEqual(segs, [(T(8), 20.0, T(8, 15), 25.0, False)])
+
+    def test_just_over_the_threshold_is_a_gap(self):
+        T = self.T
+        segs = _build_draw_segments(
+            [(T(8), 20.0), (T(8, 16), 25.0)], T(8, 16), max_gap=self._gap(),
+        )
+        self.assertEqual(segs, [(T(8), 20.0, T(8, 16), 20.0, True)])
+
+    def test_custom_threshold(self):
+        from datetime import timedelta
+        T = self.T
+        pts = [(T(8), 20.0), (T(10), 25.0)]
+        self.assertFalse(_build_draw_segments(
+            pts, T(10), max_gap=timedelta(hours=3))[0][4])
+        self.assertTrue(_build_draw_segments(
+            pts, T(10), max_gap=timedelta(hours=1))[0][4])
+
+    def test_each_gap_style_applies_to_a_silent_stretch(self):
+        T = self.T
+        pts = [(T(8), 20.0), (T(12), 25.0)]
+        hold = _build_draw_segments(pts, T(12), 'hold', self._gap())
+        self.assertEqual(hold, [(T(8), 20.0, T(12), 20.0, True)])
+        self.assertEqual(
+            _build_draw_segments(pts, T(12), 'break', self._gap()), [])
+        step = _build_draw_segments(pts, T(12), 'step', self._gap())
+        self.assertEqual(step, [
+            (T(8), 20.0, T(12), 20.0, True),
+            (T(12), 20.0, T(12), 25.0, True),
+        ])
+
+    def test_trailing_tail_unchanged(self):
+        T = self.T
+        segs = _build_draw_segments(
+            [(T(8), 20.0)], T(12), max_gap=self._gap())
+        self.assertEqual(segs, [(T(8), 20.0, T(12), 20.0, True)])
+
+
+class TestResolveMaxGap(unittest.TestCase):
+    """Config validation for the max_gap_minutes option."""
+
+    def test_absent_gives_the_default(self):
+        self.assertEqual(_resolve_max_gap({}, mock_logger), MAX_GAP_MINUTES_DEFAULT)
+        self.assertEqual(MAX_GAP_MINUTES_DEFAULT, 15)
+
+    def test_valid_int_and_float_pass_through(self):
+        for v in (1, 30, 0.5, 90.5):
+            logger = mock.Mock(spec=logging.Logger)
+            self.assertEqual(_resolve_max_gap({'max_gap_minutes': v}, logger), v)
+            self.assertFalse(logger.warning.called)
+
+    def test_invalid_values_warn_and_default(self):
+        for v in (True, False, -5, 0, '30', None, [10]):
+            logger = mock.Mock(spec=logging.Logger)
+            self.assertEqual(
+                _resolve_max_gap({'max_gap_minutes': v}, logger),
+                MAX_GAP_MINUTES_DEFAULT, repr(v),
+            )
+            self.assertTrue(logger.warning.called, repr(v))
+
+
+class TestMaxGapDispatch(unittest.TestCase):
+    """Integration: max_gap_minutes flows from config through dispatch."""
+
+    HISTORY = [[
+        {'state': '20.0', 'last_changed': '2024-01-15T06:00:00+00:00'},
+        {'state': '22.0', 'last_changed': '2024-01-15T10:00:00+00:00'},
+    ]]
+
+    def _render(self, component_extra, draw_patch=True):
+        from datetime import datetime, timezone
+        dashboard = {'name': 'g', 'components': [{
+            'entity_name': 'sensor.t', 'friendly_name': 'Temperature',
+            'type': 'history_graph', **component_extra}]}
+        now = datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+        with mock.patch('trmnl_server.hass_client._fetch_history') as mock_fetch:
+            mock_fetch.return_value = self.HISTORY
+            return render_dashboard_image(dashboard, mock_logger, now=now)
+
+    def _forwarded(self, component_extra):
+        with mock.patch('trmnl_server.components._draw_graph_component') as mock_draw:
+            mock_draw.return_value = Image.new('RGB', (10, 10), 'white')
+            self._render(component_extra)
+        return mock_draw.call_args[1].get('max_gap')
+
+    def test_default_and_configured_threshold_reach_the_renderer(self):
+        from datetime import timedelta
+        self.assertEqual(self._forwarded({}), timedelta(minutes=15))
+        self.assertEqual(self._forwarded({'max_gap_minutes': 90}),
+                         timedelta(minutes=90))
+        self.assertEqual(self._forwarded({'max_gap_minutes': 'bad'}),
+                         timedelta(minutes=15))
+
+    def test_threshold_reaches_build_draw_segments(self):
+        from datetime import timedelta
+        with mock.patch('trmnl_server.components._build_draw_segments',
+                        wraps=_build_draw_segments) as spy:
+            self._render({'max_gap_minutes': 30})
+        self.assertEqual(spy.call_args[0][3], timedelta(minutes=30))
 
 
 class TestZeroBaselineDispatch(unittest.TestCase):

@@ -299,10 +299,11 @@ class TestAPISimple(unittest.TestCase):
         self.assertEqual(gap_img.size, (800, 480))
         self.assertEqual(gap_img.mode, '1')  # eink_display converts to 1-bit b/w
 
-        # Control: same two real readings, no gap in between.
+        # Control: two real readings close enough together (within the default
+        # max_gap_minutes) that nothing is treated as a gap.
         mock_fetch_history.return_value = [[
             {'state': '18.0', 'last_changed': (now - timedelta(hours=20)).isoformat()},
-            {'state': '25.0', 'last_changed': (now - timedelta(hours=10)).isoformat()},
+            {'state': '25.0', 'last_changed': (now - timedelta(hours=20) + timedelta(minutes=10)).isoformat()},
         ]]
         control_handler = self.create_handler('/static/gap_dashboard.png')
         control_handler._handle_static_png()
@@ -374,6 +375,45 @@ class TestAPISimple(unittest.TestCase):
             img = serve(style)
             self.assertEqual(img.size, (800, 480), f"gap_style {style!r}")
             self.assertEqual(img.mode, '1', f"gap_style {style!r}")
+
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_static_png_max_gap_minutes_changes_the_served_image(
+        self, mock_read_config, mock_fetch_history,
+    ):
+        """End-to-end: max_gap_minutes decides whether a silent stretch between
+        two readings is served as a solid line or a dashed hold."""
+        from datetime import datetime, timedelta, timezone
+        from PIL import Image, ImageChops
+
+        now = datetime.now(timezone.utc)
+        mock_fetch_history.return_value = [[
+            {'state': '20.0', 'last_changed': (now - timedelta(hours=20)).isoformat()},
+            {'state': '30.0', 'last_changed': (now - timedelta(hours=10)).isoformat()},
+        ]]
+
+        def serve(minutes):
+            mock_read_config.return_value = {
+                'devices': [],
+                'dashboards': [{'name': 'gap_dashboard', 'components': [{
+                    'entity_name': 'sensor.temperature',
+                    'friendly_name': 'Temperature',
+                    'type': 'history_graph', 'hours': 24,
+                    'max_gap_minutes': minutes,
+                }]}],
+            }
+            handler = self.create_handler('/static/gap_dashboard.png')
+            self.assertTrue(handler._handle_static_png())
+            handler.wfile.seek(0)
+            img = Image.open(handler.wfile)
+            img.load()
+            return img
+
+        small, large = serve(15), serve(1000)
+        self.assertIsNotNone(
+            ImageChops.difference(small, large).getbbox(),
+            "a 10h silence must render differently under 15 vs 1000 minutes",
+        )
 
     @mock.patch('trmnl_server.api.render_dashboard_image')
     @mock.patch('trmnl_server.api.read_config')
