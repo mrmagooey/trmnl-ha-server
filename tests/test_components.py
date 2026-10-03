@@ -1811,6 +1811,27 @@ class TestMaxGapSegments(unittest.TestCase):
         self.assertEqual(segs, [(T(8), 20.0, T(12), 20.0, True)])
 
 
+    def test_none_marker_over_threshold_gives_one_gap_depiction(self):
+        T = self.T
+        pts = [(T(8), 20.0), (T(9), None), (T(12), 25.0)]
+        segs = _build_draw_segments(pts, T(12), max_gap=self._gap())
+        self.assertEqual(segs, [(T(8), 20.0, T(12), 20.0, True)])
+
+    def test_none_marker_under_threshold_still_gaps(self):
+        T = self.T
+        pts = [(T(8), 20.0), (T(8, 5), None), (T(8, 10), 25.0)]
+        segs = _build_draw_segments(pts, T(8, 10), max_gap=self._gap())
+        self.assertEqual(segs, [(T(8), 20.0, T(8, 10), 20.0, True)])
+
+    def test_tz_aware_datetimes(self):
+        from datetime import datetime, timezone
+        def U(h):
+            return datetime(2025, 1, 15, h, tzinfo=timezone.utc)
+        segs = _build_draw_segments(
+            [(U(8), 20.0), (U(12), 25.0)], U(12), max_gap=self._gap())
+        self.assertEqual(segs, [(U(8), 20.0, U(12), 20.0, True)])
+
+
 class TestResolveMaxGap(unittest.TestCase):
     """Config validation for the max_gap_minutes option."""
 
@@ -1825,7 +1846,7 @@ class TestResolveMaxGap(unittest.TestCase):
             self.assertFalse(logger.warning.called)
 
     def test_invalid_values_warn_and_default(self):
-        for v in (True, False, -5, 0, '30', None, [10]):
+        for v in (True, False, -5, 0, '30', None, [10], float('inf'), float('nan'), 1e20):
             logger = mock.Mock(spec=logging.Logger)
             self.assertEqual(
                 _resolve_max_gap({'max_gap_minutes': v}, logger),
@@ -1842,7 +1863,7 @@ class TestMaxGapDispatch(unittest.TestCase):
         {'state': '22.0', 'last_changed': '2024-01-15T10:00:00+00:00'},
     ]]
 
-    def _render(self, component_extra, draw_patch=True):
+    def _render(self, component_extra):
         from datetime import datetime, timezone
         dashboard = {'name': 'g', 'components': [{
             'entity_name': 'sensor.t', 'friendly_name': 'Temperature',
@@ -1865,6 +1886,10 @@ class TestMaxGapDispatch(unittest.TestCase):
                          timedelta(minutes=90))
         self.assertEqual(self._forwarded({'max_gap_minutes': 'bad'}),
                          timedelta(minutes=15))
+
+    def test_infinite_threshold_does_not_abort_the_render(self):
+        img = self._render({'max_gap_minutes': float('inf')})
+        self.assertIsNotNone(img)
 
     def test_threshold_reaches_build_draw_segments(self):
         from datetime import timedelta

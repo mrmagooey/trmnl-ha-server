@@ -6,7 +6,7 @@ This module contains all the rendering functions for different component types
 
 from datetime import date, datetime, timedelta
 from io import BytesIO
-from math import ceil, sqrt
+from math import ceil, isfinite, sqrt
 from pathlib import Path
 from typing import NamedTuple, TYPE_CHECKING
 
@@ -982,9 +982,16 @@ def _resolve_max_gap(component: "ComponentConfig", logger: "Logger") -> float:
     """
     raw: object = component.get('max_gap_minutes', MAX_GAP_MINUTES_DEFAULT)
     if not isinstance(raw, bool) and isinstance(raw, (int, float)) and raw > 0:
-        return raw
+        try:
+            # Rejects inf/nan and values too large for a timedelta, which
+            # would otherwise raise later during tiling.
+            if isfinite(raw):
+                timedelta(minutes=raw)
+                return raw
+        except OverflowError:
+            pass
     logger.warning(
-        "Invalid 'max_gap_minutes' (%r) for %s; expected a positive number. "
+        "Invalid 'max_gap_minutes' (%r) for %s; expected a finite positive number. "
         "Defaulting to %r.",
         raw, component.get('friendly_name'), MAX_GAP_MINUTES_DEFAULT,
     )
