@@ -67,6 +67,7 @@ CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupi
 TODO_HEADER_H: int = 50
 # Top inset for a hide_title card: content starts here instead of below a title.
 NO_TITLE_CONTENT_TOP: int = 10
+GRAPH_NO_TITLE_MARGIN_TOP: int = 15  # unscaled; clears the top y-axis label's ink
 # A titleless todo keeps a band for its top-right page indicator (drawn at y=12,
 # ink ending ~32); fixed rather than pagination-dependent, since capacity decides
 # pagination and a pagination-dependent header would be circular.
@@ -1197,11 +1198,13 @@ def _draw_graph_component(
     # A wrapped title needs a taller top only, so the three are now distinct.
     margin_left: int = 40 * scale
     margin_bottom: int = 40 * scale
-    if title_lines > 1:
+    if title_lines == NO_TITLE_LINES:
+        margin_top: int = GRAPH_NO_TITLE_MARGIN_TOP * scale
+    elif title_lines > 1:
         band: int = _title_band_height(
             title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
         ) * scale
-        margin_top: int = max(40 * scale, 2 * scale + band + TITLE_BAND_GAP * scale)
+        margin_top = max(40 * scale, 2 * scale + band + TITLE_BAND_GAP * scale)
     else:
         margin_top = 40 * scale
     margin_right: int = ceil(margin_left * 1.6)
@@ -1223,26 +1226,27 @@ def _draw_graph_component(
         )
         return img.resize((width, height), Image.LANCZOS)
 
-    # Draw title
-    if title_lines > 1:
-        title_lines_text: list[str] = _wrap_title(
-            friendly_name, font_title, large_width - padding, title_lines
-        ) or [friendly_name]
-    else:
-        title_lines_text = [friendly_name]
-    title_lines_text = [
-        _ellipsize(line, font_title, large_width - padding, d)
-        for line in title_lines_text
-    ]
-    rendered_title: str = "\n".join(title_lines_text)
-    text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                     spacing=TITLE_LINE_SPACING * scale)
-    text_width = text_bbox[2] - text_bbox[0]
-    d.multiline_text(
-        ((large_width - text_width) / 2, 2 * scale), rendered_title,
-        font=font_title, fill='black', align='center',
-        spacing=TITLE_LINE_SPACING * scale,
-    )
+    if title_lines != NO_TITLE_LINES:
+        # Draw title
+        if title_lines > 1:
+            title_lines_text: list[str] = _wrap_title(
+                friendly_name, font_title, large_width - padding, title_lines
+            ) or [friendly_name]
+        else:
+            title_lines_text = [friendly_name]
+        title_lines_text = [
+            _ellipsize(line, font_title, large_width - padding, d)
+            for line in title_lines_text
+        ]
+        rendered_title: str = "\n".join(title_lines_text)
+        text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                         spacing=TITLE_LINE_SPACING * scale)
+        text_width = text_bbox[2] - text_bbox[0]
+        d.multiline_text(
+            ((large_width - text_width) / 2, 2 * scale), rendered_title,
+            font=font_title, fill='black', align='center',
+            spacing=TITLE_LINE_SPACING * scale,
+        )
 
     # Process data — min/max and the "last value" label are driven by real
     # (non-gap) readings only; gap markers only affect line drawing below.
@@ -1456,27 +1460,28 @@ def _draw_entity_component(
             _font_warned[0] = True
 
     y_tweak: int = 40
-    # Draw title
-    if title_lines > 1:
-        title_lines_text: list[str] = _wrap_title(
-            friendly_name, font_title, large_width - padding, title_lines
-        ) or [friendly_name]
-    else:
-        title_lines_text = [friendly_name]
-    title_lines_text = [
-        _ellipsize(line, font_title, large_width - padding, d)
-        for line in title_lines_text
-    ]
-    rendered_title: str = "\n".join(title_lines_text)
-    title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                       spacing=TITLE_LINE_SPACING * scale)
-    title_width: int = title_bbox[2] - title_bbox[0]
-    title_x: float = (large_width - title_width) / 2
-    title_y: float = 20 * scale - y_tweak
-    d.multiline_text(
-        (title_x, title_y), rendered_title, font=font_title, fill='black',
-        align='center', spacing=TITLE_LINE_SPACING * scale,
-    )
+    if title_lines != NO_TITLE_LINES:
+        # Draw title
+        if title_lines > 1:
+            title_lines_text: list[str] = _wrap_title(
+                friendly_name, font_title, large_width - padding, title_lines
+            ) or [friendly_name]
+        else:
+            title_lines_text = [friendly_name]
+        title_lines_text = [
+            _ellipsize(line, font_title, large_width - padding, d)
+            for line in title_lines_text
+        ]
+        rendered_title: str = "\n".join(title_lines_text)
+        title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                           spacing=TITLE_LINE_SPACING * scale)
+        title_width: int = title_bbox[2] - title_bbox[0]
+        title_x: float = (large_width - title_width) / 2
+        title_y: float = 20 * scale - y_tweak
+        d.multiline_text(
+            (title_x, title_y), rendered_title, font=font_title, fill='black',
+            align='center', spacing=TITLE_LINE_SPACING * scale,
+        )
 
     if title_lines > 1:
         band: int = _title_band_height(
@@ -1484,6 +1489,7 @@ def _draw_entity_component(
         ) * scale
         avail_top: int = band
     else:
+        # One title line overlaps the value's region; no title leaves it all.
         avail_top = 0
     avail_h: int = large_height - avail_top
 
@@ -1584,7 +1590,9 @@ def _draw_entity_component(
     value_height: int = value_bbox[3] - value_bbox[1]
 
     value_x: float = (large_width - value_width) / 2
-    if title_lines > 1:
+    if title_lines > 1 or title_lines == NO_TITLE_LINES:
+        # (A titleless card takes this path too: with no title to offset
+        # against, y_tweak would just shift the value off-centre.)
         # y_tweak below is a fixed offset tuned for the single-line path,
         # where the title overlaps the value's reserved region rather than
         # sitting in its own band. It doesn't scale with font size, so at

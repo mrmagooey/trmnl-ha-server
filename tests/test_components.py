@@ -1,6 +1,7 @@
 """Additional tests for components module to achieve full coverage."""
 
 import time
+from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
@@ -23,6 +24,7 @@ from trmnl_server.components import (
     NO_TITLE_LINES,
     NO_TITLE_CONTENT_TOP,
     TODO_NO_TITLE_HEADER_H,
+    GRAPH_NO_TITLE_MARGIN_TOP,
     _calendar_content_top,
     _resolve_hide_title,
     _panel_draws_a_title,
@@ -4170,6 +4172,59 @@ class TestTitlelessListDrawers(unittest.TestCase):
         self.assertLess(last, TODO_NO_TITLE_HEADER_H)
         left = img.crop((0, 0, 40, h))
         self.assertGreaterEqual(_first_ink_row(left), TODO_NO_TITLE_HEADER_H)
+
+
+class TestTitlelessGraphAndEntity(unittest.TestCase):
+    """Regression: graph and entity cards at title_lines=0 draw no title and use the space."""
+
+    @staticmethod
+    def _graph_args() -> tuple:
+        """Real data points and a 24h window (the no-data path uses the title text)."""
+        now = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
+        pts = [(now - timedelta(hours=2), 1.0), (now - timedelta(minutes=5), 3.0)]
+        return pts, dict(window_start=now - timedelta(hours=24), window_end=now)
+
+    def test_graph_plot_starts_higher(self):
+        """The y-axis line starts at the titleless margin, above the titled one."""
+        pts, kw = self._graph_args()
+        a = _draw_graph_component('Title', pts, 400, 240, mock.Mock(), title_lines=1, **kw)
+        b = _draw_graph_component('Title', pts, 400, 240, mock.Mock(),
+                                  title_lines=NO_TITLE_LINES, **kw)
+        axis_a = _first_ink_row(a.crop((38, 0, 42, 240)))
+        axis_b = _first_ink_row(b.crop((38, 0, 42, 240)))
+        self.assertLessEqual(axis_b, GRAPH_NO_TITLE_MARGIN_TOP + 1)
+        self.assertLess(axis_b, axis_a)
+
+    def test_graph_draws_no_title(self):
+        """A titleless graph renders identically whatever the title text is."""
+        pts, kw = self._graph_args()
+        draw = lambda t, d, w, h, lg, **k: _draw_graph_component(t, d, w, h, lg, **kw, **k)
+        TestTitlelessListDrawers._assert_no_title_ink(self, draw, pts, 400, 240)
+
+    def test_entity_draws_no_title(self):
+        """A titleless entity renders identically whatever the title text is."""
+        TestTitlelessListDrawers._assert_no_title_ink(
+            self, _draw_entity_component, 42, 300, 200)
+
+    def test_entity_value_is_centred(self):
+        """The titleless value's real ink box is centred in the full tile, unclipped."""
+        b = _draw_entity_component('Title', 42, 300, 200, mock.Mock(),
+                                   title_lines=NO_TITLE_LINES)
+        ba = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        self.assertLessEqual(abs(ba[1] - (200 - ba[3])), 4)
+        self.assertGreater(ba[3] - ba[1], 0)
+        self.assertGreaterEqual(ba[1], 0)
+        self.assertLessEqual(ba[3], 200)
+
+    def test_entity_long_string_stays_inside_tile(self):
+        """A long string value keeps at least 1px margin on every side."""
+        b = _draw_entity_component('Title', 'Partly cloudy with showers', 200, 120,
+                                   mock.Mock(), title_lines=NO_TITLE_LINES)
+        bb = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        self.assertGreaterEqual(bb[0], 1)
+        self.assertGreaterEqual(bb[1], 1)
+        self.assertLessEqual(bb[2], 199)
+        self.assertLessEqual(bb[3], 119)
 
 
 if __name__ == '__main__':
