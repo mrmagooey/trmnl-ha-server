@@ -20,6 +20,9 @@ from trmnl_server.components import (
     _resolve_gap_style,
     _resolve_max_gap,
     MAX_GAP_MINUTES_DEFAULT,
+    NO_TITLE_LINES,
+    _resolve_hide_title,
+    _panel_draws_a_title,
     GAP_STYLES,
     GAP_STYLE_DEFAULT,
     _draw_graph_component,
@@ -3945,6 +3948,111 @@ class TestCalendarProbeUsesBothFits(unittest.TestCase):
             _panel_body_fit(render_data, 400, 400, mock_logger),
             _panel_body_fit(render_data, 400, 120, mock_logger),
         )
+
+
+class TestResolveHideTitle(unittest.TestCase):
+    """Config validation for hide_title."""
+
+    def test_absent_is_false(self):
+        """No hide_title key means the title is shown."""
+        self.assertFalse(_resolve_hide_title({}, mock.Mock()))
+
+    def test_bools_pass_through(self):
+        """True and False are taken as given."""
+        self.assertTrue(_resolve_hide_title({'hide_title': True}, mock.Mock()))
+        self.assertFalse(_resolve_hide_title({'hide_title': False}, mock.Mock()))
+
+    def test_invalid_warns_and_shows_title(self):
+        """A non-bool value logs a warning and falls back to showing the title."""
+        for raw in ('yes', 1, 0, None, [True]):
+            logger = mock.Mock()
+            with self.subTest(raw=raw):
+                self.assertFalse(_resolve_hide_title({'hide_title': raw}, logger))
+                logger.warning.assert_called_once()
+
+
+class TestPanelDrawsATitleHidden(unittest.TestCase):
+    """_panel_draws_a_title honours hide_title."""
+
+    def test_hidden_title_does_not_count(self):
+        """A hide_title panel is excluded from the row title fit."""
+        self.assertFalse(_panel_draws_a_title(
+            {'type': 'entity', 'friendly_name': 'X', 'data': 5, 'hide_title': True}))
+
+
+class TestHideTitleTiling(unittest.TestCase):
+    """Integration: titleless cards get title_lines=0 and leave the row title fit."""
+
+    def _tile(self, render_data):
+        calls = {}
+
+        def _f(friendly_name, data, w, h, logger, **kw):
+            calls.setdefault(friendly_name, kw)
+            return Image.new('RGB', (w, h), 'white')
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=_f):
+            tile_components(render_data, 800, 480, 40, mock.Mock())
+        return calls
+
+    def test_mixed_row_titleless_gets_zero_neighbour_wraps(self):
+        """A titled neighbour that wraps to 2 lines must not give the titleless card 2."""
+        long_name = 'An extremely long panel title that has to wrap onto two lines'
+        calls = self._tile([
+            {'type': 'entity', 'friendly_name': long_name, 'data': 1, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'Hidden', 'data': 2, 'large_display': False,
+             'hide_title': True},
+        ])
+        self.assertEqual(calls['Hidden']['title_lines'], NO_TITLE_LINES)
+        self.assertEqual(calls[long_name]['title_lines'], 2)
+
+    def test_titleless_card_does_not_shrink_neighbour_title(self):
+        """A long hidden title is not measured, so the neighbour keeps the largest size."""
+        calls = self._tile([
+            {'type': 'entity', 'friendly_name': 'Short', 'data': 1, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'W' * 80, 'data': 2, 'large_display': False,
+             'hide_title': True},
+        ])
+        self.assertEqual(calls['Short']['title_font_size'], COMPONENT_TITLE_FONT_SIZE)
+
+    def test_all_titleless_row_renders(self):
+        """A row in which every card hides its title still tiles without error."""
+        calls = self._tile([
+            {'type': 'entity', 'friendly_name': 'A', 'data': 1, 'large_display': False,
+             'hide_title': True},
+            {'type': 'entity', 'friendly_name': 'B', 'data': 2, 'large_display': False,
+             'hide_title': True},
+        ])
+        self.assertEqual({c['title_lines'] for c in calls.values()}, {NO_TITLE_LINES})
+
+    def test_no_data_placeholder_unchanged(self):
+        """hide_title does not suppress the 'No data for X' placeholder."""
+        with mock.patch('trmnl_server.components._create_info_image',
+                        return_value=Image.new('RGB', (10, 10))) as info:
+            tile_components([{'type': 'entity', 'friendly_name': 'Gone', 'data': None,
+                              'large_display': False, 'hide_title': True}],
+                            800, 480, 40, mock.Mock())
+        self.assertIn('Gone', info.call_args[0][0])
+
+
+class TestHideTitleDispatch(unittest.TestCase):
+    """Integration: hide_title flows from config through dispatch to the drawer."""
+
+    def test_url_and_entity_components_reach_drawer_titleless(self):
+        """hide_title on url and entity components yields title_lines=NO_TITLE_LINES."""
+        dashboard = {'name': 'h', 'components': [
+            {'type': 'url', 'friendly_name': 'U', 'url': 'http://x', 'hide_title': True},
+            {'type': 'entity', 'friendly_name': 'E', 'entity_name': 'sensor.e',
+             'hide_title': True},
+        ]}
+        with mock.patch('trmnl_server.url_source.fetch_url_value', return_value='42'), \
+             mock.patch('trmnl_server.hass_client.get_entity_state',
+                        return_value={'state': '7', 'attributes': {}}), \
+             mock.patch('trmnl_server.components._draw_entity_component') as draw:
+            draw.return_value = Image.new('RGB', (10, 10), 'white')
+            render_dashboard_image(dashboard, mock_logger)
+        self.assertEqual(draw.call_count, 2)
+        for call in draw.call_args_list:
+            self.assertEqual(call[1]['title_lines'], NO_TITLE_LINES)
 
 
 if __name__ == '__main__':

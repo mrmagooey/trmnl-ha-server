@@ -36,6 +36,8 @@ TITLE_BAND_MAX_PERCENT: int = 45
 # _build_draw_segments for what each one draws.
 GAP_STYLES: tuple[str, ...] = ('hold', 'break', 'step')
 GAP_STYLE_DEFAULT: str = 'hold'
+# title_lines value for a card configured with hide_title: no title band at all.
+NO_TITLE_LINES: int = 0
 # Two consecutive real readings further apart than this are treated as a gap
 # (drawn per gap_style) rather than joined by a solid line.
 MAX_GAP_MINUTES_DEFAULT: int = 15
@@ -262,6 +264,7 @@ def _panel_draws_a_title(render_data: "RenderData") -> bool:
     data for ..." placeholder. Every other panel draws a title regardless of
     its data's content (e.g. an empty calendar still shows its title above
     "No upcoming events"), so it must still count toward the row minimum.
+    A panel configured with `hide_title` draws no title and never counts.
 
     Args:
         render_data: Component render data
@@ -269,6 +272,8 @@ def _panel_draws_a_title(render_data: "RenderData") -> bool:
     Returns:
         True if the panel will draw its title
     """
+    if render_data.get('hide_title'):
+        return False
     data = render_data.get('data')
     if data is None:
         return False
@@ -968,6 +973,26 @@ def _resolve_gap_style(component: "ComponentConfig", logger: "Logger") -> str:
         raw, component.get('friendly_name'), ", ".join(GAP_STYLES), GAP_STYLE_DEFAULT,
     )
     return GAP_STYLE_DEFAULT
+
+
+def _resolve_hide_title(component: "ComponentConfig", logger: "Logger") -> bool:
+    """Reads a component's hide_title setting, warning on an invalid one.
+
+    Args:
+        component: The component's configuration
+        logger: Logger instance
+
+    Returns:
+        True only when hide_title is the boolean True
+    """
+    raw: object = component.get('hide_title', False)
+    if isinstance(raw, bool):
+        return raw
+    logger.warning(
+        "Invalid 'hide_title' (%r) for %s; expected true or false. Showing the title.",
+        raw, component.get('friendly_name'),
+    )
+    return False
 
 
 def _resolve_max_gap(component: "ComponentConfig", logger: "Logger") -> float:
@@ -2278,6 +2303,9 @@ def tile_components(
         else:
             title_font_size, title_lines = s1, 1
 
+        def _lines_for(render_data: "RenderData") -> int:
+            return NO_TITLE_LINES if render_data.get('hide_title') else title_lines
+
         # Body rows harmonise the same way titles do: the row settles on the
         # smallest size any of its list-style panels needs, so a list beside a
         # list reads as one block rather than two unrelated type sizes. That
@@ -2290,7 +2318,7 @@ def tile_components(
             for render_data, _, _, tile_w, tile_h in row
             if (fit := _panel_body_fit(
                 render_data, tile_w, tile_h, logger,
-                title_font_size=title_font_size, title_lines=title_lines,
+                title_font_size=title_font_size, title_lines=_lines_for(render_data),
             )) is not None
         ]
         body_font_size: int | None = (
@@ -2300,7 +2328,7 @@ def tile_components(
 
         for render_data, x, y, tile_w, tile_h in row:
             component_image = _render_component(render_data, tile_w, tile_h,
-                                                title_font_size, title_lines,
+                                                title_font_size, _lines_for(render_data),
                                                 body_font_size)
             if component_image:
                 final_image.paste(component_image, (x, y))
@@ -2445,6 +2473,8 @@ def render_dashboard_image(
         if todo_meta is not None:
             render_entry['columns'] = todo_meta[0]
             render_entry['todo_key'] = todo_meta[1]
+        if _resolve_hide_title(component, logger):
+            render_entry['hide_title'] = True
         component_render_data.append(render_entry)
 
     if not component_render_data:
