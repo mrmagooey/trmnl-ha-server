@@ -21,6 +21,9 @@ from trmnl_server.components import (
     _resolve_max_gap,
     MAX_GAP_MINUTES_DEFAULT,
     NO_TITLE_LINES,
+    NO_TITLE_CONTENT_TOP,
+    TODO_NO_TITLE_HEADER_H,
+    _calendar_content_top,
     _resolve_hide_title,
     _panel_draws_a_title,
     GAP_STYLES,
@@ -4053,6 +4056,104 @@ class TestHideTitleDispatch(unittest.TestCase):
         self.assertEqual(draw.call_count, 2)
         for call in draw.call_args_list:
             self.assertEqual(call[1]['title_lines'], NO_TITLE_LINES)
+
+
+def _first_ink_row(img):
+    """First y containing any pixel darker than 128, or None."""
+    g = img.convert('L')
+    w, h = g.size
+    px = g.load()
+    for y in range(h):
+        if any(px[x, y] < 128 for x in range(w)):
+            return y
+    return None
+
+
+def _last_ink_row(img):
+    """Last y containing any pixel darker than 128, or None."""
+    g = img.convert('L')
+    w, h = g.size
+    px = g.load()
+    for y in range(h - 1, -1, -1):
+        if any(px[x, y] < 128 for x in range(w)):
+            return y
+    return None
+
+
+class TestTitlelessListLayout(unittest.TestCase):
+    """Unit: list cards at title_lines=0 start content higher and fit more rows."""
+
+    def test_calendar_content_top_shrinks(self):
+        """Calendar content top at NO_TITLE_LINES is the titleless inset."""
+        self.assertEqual(_calendar_content_top(None, NO_TITLE_LINES, mock.Mock()), NO_TITLE_CONTENT_TOP)
+        self.assertLess(NO_TITLE_CONTENT_TOP, _calendar_content_top(None, 1, mock.Mock()))
+
+    def test_todo_header_shrinks_but_keeps_indicator_band(self):
+        """Todo header at NO_TITLE_LINES is the fixed indicator band."""
+        self.assertEqual(_todo_header_height(None, NO_TITLE_LINES, mock.Mock()), TODO_NO_TITLE_HEADER_H)
+        self.assertLess(TODO_NO_TITLE_HEADER_H, _todo_header_height(None, 1, mock.Mock()))
+
+    def test_todo_capacity_grows(self):
+        """A titleless todo tile fits more rows than a titled one."""
+        _, cap1 = _todo_capacity(200, 1, COMPONENT_TITLE_FONT_SIZE, 1, mock.Mock())
+        _, cap0 = _todo_capacity(200, 1, COMPONENT_TITLE_FONT_SIZE, NO_TITLE_LINES, mock.Mock())
+        self.assertGreater(cap0, cap1)
+
+    def test_calendar_capacity_not_smaller(self):
+        """Titleless calendar capacity is never below the titled one, and grows at height 240."""
+        log = mock.Mock()
+        c1 = _calendar_capacity(28, 240, 1, log, title_lines=1)
+        c0 = _calendar_capacity(28, 240, 1, log, title_lines=NO_TITLE_LINES)
+        self.assertGreater(c0, c1)
+
+
+class TestTitlelessListDrawers(unittest.TestCase):
+    """Regression: title_lines=0 must not fall through the `<= 1` paths and still draw a title."""
+
+    def _both(self, draw, *args, **kw):
+        """(last ink row titled, last ink row titleless, titleless img).
+
+        The last row is used because a titled card's first ink is the title
+        itself; with a single content row, the row's bottom tracks where the
+        content starts.
+        """
+        a = draw(*args, title_lines=1, **kw)
+        b = draw(*args, title_lines=NO_TITLE_LINES, **kw)
+        return _last_ink_row(a), _last_ink_row(b), b
+
+    def test_entities(self):
+        """Titleless entities content starts above the titled content."""
+        rows = [{'friendly_name': 'Kitchen', 'state': '21.5'}]
+        t1, t0, _ = self._both(_draw_entities_component, 'Title', rows, 300, 200, mock_logger)
+        self.assertLess(t0, t1)
+
+    def test_calendar(self):
+        """Titleless calendar content starts above the titled content."""
+        events = [{'summary': 'Event 0',
+                   'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+                   'end': {'dateTime': '2024-01-17T09:30:00+00:00'}}]
+        t1, t0, _ = self._both(_draw_calendar_component, 'Title', events, 400, 240, mock_logger)
+        self.assertLess(t0, t1)
+
+    def test_todo(self):
+        """Titleless todo content starts above the titled content."""
+        items = [{'summary': 'Item 0', 'status': 'needs_action'}]
+        t1, t0, _ = self._both(_draw_todo_list_component, 'Title', items, 400, 200, mock_logger)
+        self.assertLess(t0, t1)
+
+    def test_todo_paginating_indicator_clear_of_rows(self):
+        """Paginated titleless todo: indicator ends above, and rows start at, the header band."""
+        items = [{'summary': f'Item {i}', 'status': 'needs_action'} for i in range(30)]
+        img = _draw_todo_list_component(
+            'Title', items, 400, 200, mock_logger, title_lines=NO_TITLE_LINES)
+        w, h = img.size
+        right = img.crop((w - 60, 0, w, h))
+        g = right.convert('L')
+        px = g.load()
+        last = max(y for y in range(h) if any(px[x, y] < 128 for x in range(60)))
+        self.assertLess(last, TODO_NO_TITLE_HEADER_H)
+        left = img.crop((0, 0, 40, h))
+        self.assertGreaterEqual(_first_ink_row(left), TODO_NO_TITLE_HEADER_H)
 
 
 if __name__ == '__main__':

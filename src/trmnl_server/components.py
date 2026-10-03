@@ -65,6 +65,12 @@ CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
 CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
 CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
 TODO_HEADER_H: int = 50
+# Top inset for a hide_title card: content starts here instead of below a title.
+NO_TITLE_CONTENT_TOP: int = 10
+# A titleless todo keeps a band for its top-right page indicator (drawn at y=12,
+# ink ending ~32); fixed rather than pagination-dependent, since capacity decides
+# pagination and a pagination-dependent header would be circular.
+TODO_NO_TITLE_HEADER_H: int = 40
 TODO_ROW_H: int = 36
 TODO_BOTTOM_PAD: int = 15
 NOTO_FONT: str = str(Path(__file__).parent / "assets" / "NotoSans-Regular.ttf")
@@ -640,8 +646,11 @@ def _calendar_content_top(title_font_size: int | None, title_lines: int, logger:
     disagreed, pagination and rendering would diverge and rows would fall
     off the bottom of the panel -- which is exactly what happened when a
     two-line title widened the drawn offset but the capacity calculation
-    kept assuming the fixed one-line CALENDAR_CONTENT_TOP.
+    kept assuming the fixed one-line CALENDAR_CONTENT_TOP. A titleless panel
+    (title_lines == NO_TITLE_LINES) starts at NO_TITLE_CONTENT_TOP.
     """
+    if title_lines == NO_TITLE_LINES:
+        return NO_TITLE_CONTENT_TOP
     if title_lines <= 1:
         return CALENDAR_CONTENT_TOP
     band = _title_band_height(title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger)
@@ -811,8 +820,11 @@ def _todo_header_height(title_font_size: int | None, title_lines: int, logger: "
     One definition shared by _todo_capacity (which paginates before drawing)
     and _draw_todo_list_component (which draws). If these ever disagreed,
     pagination and rendering would diverge and rows would fall off the
-    bottom of the panel.
+    bottom of the panel. A titleless panel (title_lines == NO_TITLE_LINES)
+    keeps only TODO_NO_TITLE_HEADER_H, for the page indicator.
     """
+    if title_lines == NO_TITLE_LINES:
+        return TODO_NO_TITLE_HEADER_H
     if title_lines <= 1:
         return TODO_HEADER_H
     return max(
@@ -1667,26 +1679,27 @@ def _draw_calendar_component(
         font_title = ImageFont.load_default()
         font_event = ImageFont.load_default()
 
-    # Draw title
-    if title_lines > 1:
-        title_lines_text: list[str] = _wrap_title(
-            friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
-        ) or [friendly_name]
-    else:
-        title_lines_text = [friendly_name]
-    title_lines_text = [
-        _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
-        for line in title_lines_text
-    ]
-    rendered_title: str = "\n".join(title_lines_text)
-    text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                     spacing=TITLE_LINE_SPACING * scale)
-    text_width: int = text_bbox[2] - text_bbox[0]
-    d.multiline_text(
-        ((large_width - text_width) / 2, 5 * scale), rendered_title,
-        font=font_title, fill='black', align='center',
-        spacing=TITLE_LINE_SPACING * scale,
-    )
+    if title_lines != NO_TITLE_LINES:
+        # Draw title
+        if title_lines > 1:
+            title_lines_text: list[str] = _wrap_title(
+                friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
+            ) or [friendly_name]
+        else:
+            title_lines_text = [friendly_name]
+        title_lines_text = [
+            _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
+            for line in title_lines_text
+        ]
+        rendered_title: str = "\n".join(title_lines_text)
+        text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                         spacing=TITLE_LINE_SPACING * scale)
+        text_width: int = text_bbox[2] - text_bbox[0]
+        d.multiline_text(
+            ((large_width - text_width) / 2, 5 * scale), rendered_title,
+            font=font_title, fill='black', align='center',
+            spacing=TITLE_LINE_SPACING * scale,
+        )
 
     y_pos: int = _calendar_content_top(title_font_size, title_lines, logger) * scale
 
@@ -1804,32 +1817,35 @@ def _draw_entities_component(
         font_title = ImageFont.load_default()
         font_list = ImageFont.load_default()
 
-    # Draw title
-    if title_lines > 1:
-        title_lines_text: list[str] = _wrap_title(
-            friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
-        ) or [friendly_name]
-    else:
-        title_lines_text = [friendly_name]
-    title_lines_text = [
-        _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
-        for line in title_lines_text
-    ]
-    rendered_title: str = "\n".join(title_lines_text)
-    text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                     spacing=TITLE_LINE_SPACING * scale)
-    text_width: int = text_bbox[2] - text_bbox[0]
-    d.multiline_text(
-        ((large_width - text_width) / 2, 5 * scale), rendered_title,
-        font=font_title, fill='black', align='center',
-        spacing=TITLE_LINE_SPACING * scale,
-    )
+    if title_lines != NO_TITLE_LINES:
+        # Draw title
+        if title_lines > 1:
+            title_lines_text: list[str] = _wrap_title(
+                friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
+            ) or [friendly_name]
+        else:
+            title_lines_text = [friendly_name]
+        title_lines_text = [
+            _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
+            for line in title_lines_text
+        ]
+        rendered_title: str = "\n".join(title_lines_text)
+        text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                         spacing=TITLE_LINE_SPACING * scale)
+        text_width: int = text_bbox[2] - text_bbox[0]
+        d.multiline_text(
+            ((large_width - text_width) / 2, 5 * scale), rendered_title,
+            font=font_title, fill='black', align='center',
+            spacing=TITLE_LINE_SPACING * scale,
+        )
 
-    if title_lines > 1:
+    if title_lines == NO_TITLE_LINES:
+        y_pos: int = NO_TITLE_CONTENT_TOP * scale
+    elif title_lines > 1:
         band: int = _title_band_height(
             title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
         ) * scale
-        y_pos: int = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
+        y_pos = max(50 * scale, 5 * scale + band + TITLE_BAND_GAP * scale)
     else:
         y_pos = 50 * scale
     line_spacing: int = 8 * scale
@@ -1969,27 +1985,28 @@ def _draw_todo_list_component(
     incomplete: list[dict[str, str]] = _incomplete_items(items)
     total: int = len(incomplete)
 
-    # Title with count.
-    title_text: str = f"{friendly_name} ({total})"
-    if title_lines > 1:
-        title_lines_text: list[str] = _wrap_title(
-            title_text, font_title, large_width - TITLE_PADDING * scale, title_lines
-        ) or [title_text]
-    else:
-        title_lines_text = [title_text]
-    title_lines_text = [
-        _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
-        for line in title_lines_text
-    ]
-    rendered_title: str = "\n".join(title_lines_text)
-    title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                      spacing=TITLE_LINE_SPACING * scale)
-    title_width: int = title_bbox[2] - title_bbox[0]
-    d.multiline_text(
-        ((large_width - title_width) / 2, 5 * scale), rendered_title,
-        font=font_title, fill='black', align='center',
-        spacing=TITLE_LINE_SPACING * scale,
-    )
+    if title_lines != NO_TITLE_LINES:
+        # Title with count.
+        title_text: str = f"{friendly_name} ({total})"
+        if title_lines > 1:
+            title_lines_text: list[str] = _wrap_title(
+                title_text, font_title, large_width - TITLE_PADDING * scale, title_lines
+            ) or [title_text]
+        else:
+            title_lines_text = [title_text]
+        title_lines_text = [
+            _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
+            for line in title_lines_text
+        ]
+        rendered_title: str = "\n".join(title_lines_text)
+        title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
+                                          spacing=TITLE_LINE_SPACING * scale)
+        title_width: int = title_bbox[2] - title_bbox[0]
+        d.multiline_text(
+            ((large_width - title_width) / 2, 5 * scale), rendered_title,
+            font=font_title, fill='black', align='center',
+            spacing=TITLE_LINE_SPACING * scale,
+        )
 
     header_y: int = _todo_header_height(title_font_size, title_lines, logger) * scale
 
