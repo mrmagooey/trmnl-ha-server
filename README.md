@@ -137,6 +137,7 @@ Set `large_display: true` on one component to give it the top half of the screen
 
 - `hours` (history_graph only, optional): width of the rolling time window in hours. Default `24`. The x-axis always ends at the current time; when an entity stops reporting, its last value is held forward as a dotted line.
 - `gap_style` (history_graph only, optional): how to draw an outage — a stretch where Home Assistant reported the entity as `unavailable` or `unknown` between two real readings. The graph never interpolates straight across one, since that would show a trend nobody measured. Default `hold`.
+- `max_gap_minutes` (history_graph only, optional, positive number, default `15`): two consecutive readings more than this many minutes apart are treated as a gap and drawn per `gap_style` (by default a dashed flat hold) instead of a solid line, so a sensor that went silent and then reported again does not show a trend nobody measured. Trade-off: Home Assistant only records history when a state changes, so a sensor whose value stays constant for longer than this threshold also shows as a dashed hold. Raise it for slow-changing sensors.
 
   | Value | Drawn as |
   |-------|----------|
