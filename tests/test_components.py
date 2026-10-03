@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest import mock
 import io
-from PIL import Image
+from PIL import Image, ImageChops
 import logging
 
 from trmnl_server import url_source
@@ -4121,11 +4121,25 @@ class TestTitlelessListDrawers(unittest.TestCase):
         b = draw(*args, title_lines=NO_TITLE_LINES, **kw)
         return _last_ink_row(a), _last_ink_row(b), b
 
+    def _assert_no_title_ink(self, draw, data, w, h):
+        """Titleless output is unscaled-size and independent of the title text.
+
+        Title ink starts at y~16 (past NO_TITLE_CONTENT_TOP), so a row bound
+        cannot catch it; instead a wildly different title must render
+        pixel-identically, which holds only if no title is drawn.
+        """
+        a = draw('Title', data, w, h, mock_logger, title_lines=NO_TITLE_LINES)
+        b = draw('A much longer, different heading', data, w, h, mock_logger,
+                 title_lines=NO_TITLE_LINES)
+        self.assertEqual(a.size, (w, h))
+        self.assertIsNone(ImageChops.difference(a.convert('L'), b.convert('L')).getbbox())
+
     def test_entities(self):
         """Titleless entities content starts above the titled content."""
         rows = [{'friendly_name': 'Kitchen', 'state': '21.5'}]
         t1, t0, _ = self._both(_draw_entities_component, 'Title', rows, 300, 200, mock_logger)
         self.assertLess(t0, t1)
+        self._assert_no_title_ink(_draw_entities_component, rows, 300, 200)
 
     def test_calendar(self):
         """Titleless calendar content starts above the titled content."""
@@ -4134,12 +4148,14 @@ class TestTitlelessListDrawers(unittest.TestCase):
                    'end': {'dateTime': '2024-01-17T09:30:00+00:00'}}]
         t1, t0, _ = self._both(_draw_calendar_component, 'Title', events, 400, 240, mock_logger)
         self.assertLess(t0, t1)
+        self._assert_no_title_ink(_draw_calendar_component, events, 400, 240)
 
     def test_todo(self):
         """Titleless todo content starts above the titled content."""
         items = [{'summary': 'Item 0', 'status': 'needs_action'}]
         t1, t0, _ = self._both(_draw_todo_list_component, 'Title', items, 400, 200, mock_logger)
         self.assertLess(t0, t1)
+        self._assert_no_title_ink(_draw_todo_list_component, items, 400, 200)
 
     def test_todo_paginating_indicator_clear_of_rows(self):
         """Paginated titleless todo: indicator ends above, and rows start at, the header band."""
