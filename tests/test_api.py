@@ -415,6 +415,38 @@ class TestAPISimple(unittest.TestCase):
             "a 10h silence must render differently under 15 vs 1000 minutes",
         )
 
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.api.read_config')
+    def test_static_png_hide_title_changes_the_served_image(
+        self, mock_read_config, mock_get_entity_state,
+    ):
+        """End-to-end: hide_title: true changes the PNG served over HTTP."""
+        from PIL import Image
+
+        mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
+
+        def serve(**extra):
+            mock_read_config.return_value = {
+                'devices': [],
+                'dashboards': [{'name': 'title_dashboard', 'components': [{
+                    'entity_name': 'sensor.temperature',
+                    'friendly_name': 'Temperature',
+                    'type': 'entity', **extra,
+                }]}],
+            }
+            handler = self.create_handler('/static/title_dashboard.png')
+            self.assertTrue(handler._handle_static_png())
+            handler.wfile.seek(0)
+            img = Image.open(handler.wfile)
+            img.load()
+            return img
+
+        shown, hidden = serve(), serve(hide_title=True)
+        for img in (shown, hidden):
+            self.assertEqual(img.size, (800, 480))
+            self.assertEqual(img.mode, '1')
+        self.assertNotEqual(shown.tobytes(), hidden.tobytes())
+
     @mock.patch('trmnl_server.api.render_dashboard_image')
     @mock.patch('trmnl_server.api.read_config')
     def test_static_png_without_device_id_header_renders(self, mock_read_config, mock_render):
