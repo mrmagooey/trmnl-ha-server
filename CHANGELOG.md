@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-02
+
+### Added
+- `max_gap_minutes` option for `history_graph` panels (default 15). Two readings further apart than this are treated as a gap and drawn according to `gap_style`, the same as an `unavailable`/`unknown` outage. Home Assistant only writes a history row when a state changes, so a stretch with no reported value is indistinguishable from a constant one; raise the threshold for slow-changing sensors whose flat stretches should stay solid. Invalid values (non-numeric, zero or negative, infinite, or too large to represent) log a warning and fall back to the default.
+
+### Fixed
+- A history graph's dotted line no longer turns solid once a silent sensor reports again. While an entity was quiet, the stretch after its last reading was drawn dashed up to "now" — but that tail was worked out afresh on every render rather than read from the data, so when a new reading arrived the two readings became consecutive points and were joined by a solid sloped line, showing a trend nobody measured. Silences longer than `max_gap_minutes` now stay drawn as gaps.
+
 ## [1.12.0] - 2026-09-19
 
 ### Changed
