@@ -1,5 +1,6 @@
 """Additional tests for components module to achieve full coverage."""
 
+import functools
 import time
 from datetime import datetime, timedelta, timezone
 import unittest
@@ -3986,13 +3987,14 @@ class TestPanelDrawsATitleHidden(unittest.TestCase):
 
 
 class TestHideTitleTiling(unittest.TestCase):
-    """Integration: titleless cards get title_lines=0 and leave the row title fit."""
+    """Tiling level (drawers mocked): titleless cards get title_lines=0 and leave the row title fit."""
 
     def _tile(self, render_data):
         calls = {}
 
         def _f(friendly_name, data, w, h, logger, **kw):
-            calls.setdefault(friendly_name, kw)
+            assert friendly_name not in calls, f'duplicate friendly_name {friendly_name!r}'
+            calls[friendly_name] = kw
             return Image.new('RGB', (w, h), 'white')
 
         with mock.patch('trmnl_server.components._draw_entity_component', side_effect=_f):
@@ -4060,26 +4062,24 @@ class TestHideTitleDispatch(unittest.TestCase):
             self.assertEqual(call[1]['title_lines'], NO_TITLE_LINES)
 
 
-def _first_ink_row(img):
-    """First y containing any pixel darker than 128, or None."""
-    g = img.convert('L')
-    w, h = g.size
-    px = g.load()
-    for y in range(h):
-        if any(px[x, y] < 128 for x in range(w)):
-            return y
-    return None
+def _ink_rows(img):
+    """(first, last) y containing any pixel darker than 128, or None if blank."""
+    bbox = img.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+    return None if bbox is None else (bbox[1], bbox[3] - 1)
 
 
-def _last_ink_row(img):
-    """Last y containing any pixel darker than 128, or None."""
-    g = img.convert('L')
-    w, h = g.size
-    px = g.load()
-    for y in range(h - 1, -1, -1):
-        if any(px[x, y] < 128 for x in range(w)):
-            return y
-    return None
+def _assert_no_title_ink(test, draw, data, w, h):
+    """Asserts titleless output is unscaled-size and independent of the title text.
+
+    Title ink starts at y~16 (past NO_TITLE_CONTENT_TOP), so a row bound
+    cannot catch it; instead a wildly different title must render
+    pixel-identically, which holds only if no title is drawn.
+    """
+    a = draw('Title', data, w, h, mock_logger, title_lines=NO_TITLE_LINES)
+    b = draw('A much longer, different heading', data, w, h, mock_logger,
+             title_lines=NO_TITLE_LINES)
+    test.assertEqual(a.size, (w, h))
+    test.assertIsNone(ImageChops.difference(a.convert('L'), b.convert('L')).getbbox())
 
 
 class TestTitlelessListLayout(unittest.TestCase):
@@ -4101,8 +4101,8 @@ class TestTitlelessListLayout(unittest.TestCase):
         _, cap0 = _todo_capacity(200, 1, COMPONENT_TITLE_FONT_SIZE, NO_TITLE_LINES, mock.Mock())
         self.assertGreater(cap0, cap1)
 
-    def test_calendar_capacity_not_smaller(self):
-        """Titleless calendar capacity is never below the titled one, and grows at height 240."""
+    def test_calendar_capacity_grows(self):
+        """A titleless calendar tile at height 240 fits strictly more rows than a titled one."""
         log = mock.Mock()
         c1 = _calendar_capacity(28, 240, 1, log, title_lines=1)
         c0 = _calendar_capacity(28, 240, 1, log, title_lines=NO_TITLE_LINES)
@@ -4113,7 +4113,7 @@ class TestTitlelessListDrawers(unittest.TestCase):
     """Regression: title_lines=0 must not fall through the `<= 1` paths and still draw a title."""
 
     def _both(self, draw, *args, **kw):
-        """(last ink row titled, last ink row titleless, titleless img).
+        """(last ink row titled, last ink row titleless).
 
         The last row is used because a titled card's first ink is the title
         itself; with a single content row, the row's bottom tracks where the
@@ -4121,43 +4121,30 @@ class TestTitlelessListDrawers(unittest.TestCase):
         """
         a = draw(*args, title_lines=1, **kw)
         b = draw(*args, title_lines=NO_TITLE_LINES, **kw)
-        return _last_ink_row(a), _last_ink_row(b), b
-
-    def _assert_no_title_ink(self, draw, data, w, h):
-        """Titleless output is unscaled-size and independent of the title text.
-
-        Title ink starts at y~16 (past NO_TITLE_CONTENT_TOP), so a row bound
-        cannot catch it; instead a wildly different title must render
-        pixel-identically, which holds only if no title is drawn.
-        """
-        a = draw('Title', data, w, h, mock_logger, title_lines=NO_TITLE_LINES)
-        b = draw('A much longer, different heading', data, w, h, mock_logger,
-                 title_lines=NO_TITLE_LINES)
-        self.assertEqual(a.size, (w, h))
-        self.assertIsNone(ImageChops.difference(a.convert('L'), b.convert('L')).getbbox())
+        return _ink_rows(a)[1], _ink_rows(b)[1]
 
     def test_entities(self):
         """Titleless entities content starts above the titled content."""
         rows = [{'friendly_name': 'Kitchen', 'state': '21.5'}]
-        t1, t0, _ = self._both(_draw_entities_component, 'Title', rows, 300, 200, mock_logger)
+        t1, t0 = self._both(_draw_entities_component, 'Title', rows, 300, 200, mock_logger)
         self.assertLess(t0, t1)
-        self._assert_no_title_ink(_draw_entities_component, rows, 300, 200)
+        _assert_no_title_ink(self, _draw_entities_component, rows, 300, 200)
 
     def test_calendar(self):
         """Titleless calendar content starts above the titled content."""
         events = [{'summary': 'Event 0',
                    'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
                    'end': {'dateTime': '2024-01-17T09:30:00+00:00'}}]
-        t1, t0, _ = self._both(_draw_calendar_component, 'Title', events, 400, 240, mock_logger)
+        t1, t0 = self._both(_draw_calendar_component, 'Title', events, 400, 240, mock_logger)
         self.assertLess(t0, t1)
-        self._assert_no_title_ink(_draw_calendar_component, events, 400, 240)
+        _assert_no_title_ink(self, _draw_calendar_component, events, 400, 240)
 
     def test_todo(self):
         """Titleless todo content starts above the titled content."""
         items = [{'summary': 'Item 0', 'status': 'needs_action'}]
-        t1, t0, _ = self._both(_draw_todo_list_component, 'Title', items, 400, 200, mock_logger)
+        t1, t0 = self._both(_draw_todo_list_component, 'Title', items, 400, 200, mock_logger)
         self.assertLess(t0, t1)
-        self._assert_no_title_ink(_draw_todo_list_component, items, 400, 200)
+        _assert_no_title_ink(self, _draw_todo_list_component, items, 400, 200)
 
     def test_todo_paginating_indicator_clear_of_rows(self):
         """Paginated titleless todo: indicator ends above, and rows start at, the header band."""
@@ -4171,7 +4158,7 @@ class TestTitlelessListDrawers(unittest.TestCase):
         last = max(y for y in range(h) if any(px[x, y] < 128 for x in range(60)))
         self.assertLess(last, TODO_NO_TITLE_HEADER_H)
         left = img.crop((0, 0, 40, h))
-        self.assertGreaterEqual(_first_ink_row(left), TODO_NO_TITLE_HEADER_H)
+        self.assertGreaterEqual(_ink_rows(left)[0], TODO_NO_TITLE_HEADER_H)
 
 
 class TestTitlelessGraphAndEntity(unittest.TestCase):
@@ -4190,31 +4177,63 @@ class TestTitlelessGraphAndEntity(unittest.TestCase):
         a = _draw_graph_component('Title', pts, 400, 240, mock.Mock(), title_lines=1, **kw)
         b = _draw_graph_component('Title', pts, 400, 240, mock.Mock(),
                                   title_lines=NO_TITLE_LINES, **kw)
-        axis_a = _first_ink_row(a.crop((38, 0, 42, 240)))
-        axis_b = _first_ink_row(b.crop((38, 0, 42, 240)))
+        axis_a = _ink_rows(a.crop((38, 0, 42, 240)))[0]
+        axis_b = _ink_rows(b.crop((38, 0, 42, 240)))[0]
         self.assertLessEqual(axis_b, GRAPH_NO_TITLE_MARGIN_TOP + 1)
         self.assertLess(axis_b, axis_a)
+
+    def test_graph_labels_stay_on_canvas(self):
+        """Top y-axis label and last-value label (max is the last point) are not clipped."""
+        pts, kw = self._graph_args()
+        img = _draw_graph_component('Title', pts, 400, 240, mock.Mock(),
+                                    title_lines=NO_TITLE_LINES, **kw)
+        label_col = _ink_rows(img.crop((0, 0, 38, 240)))   # left of the y-axis line
+        value_col = _ink_rows(img.crop((300, 0, 400, 60)))  # last-value label, top right
+        self.assertIsNotNone(label_col)
+        self.assertIsNotNone(value_col)
+        self.assertGreater(label_col[0], 0)
+        self.assertGreater(value_col[0], 0)
+        # Nothing, plot or label, touches the top row of the canvas.
+        self.assertGreater(_ink_rows(img)[0], 0)
+        # The labels sit at the top margin rather than far below it.
+        self.assertLessEqual(label_col[0], GRAPH_NO_TITLE_MARGIN_TOP * 2)
+        self.assertLessEqual(value_col[0], GRAPH_NO_TITLE_MARGIN_TOP * 2)
 
     def test_graph_draws_no_title(self):
         """A titleless graph renders identically whatever the title text is."""
         pts, kw = self._graph_args()
-        draw = lambda t, d, w, h, lg, **k: _draw_graph_component(t, d, w, h, lg, **kw, **k)
-        TestTitlelessListDrawers._assert_no_title_ink(self, draw, pts, 400, 240)
+        draw = functools.partial(_draw_graph_component, **kw)
+        _assert_no_title_ink(self, draw, pts, 400, 240)
 
     def test_entity_draws_no_title(self):
         """A titleless entity renders identically whatever the title text is."""
-        TestTitlelessListDrawers._assert_no_title_ink(
-            self, _draw_entity_component, 42, 300, 200)
+        _assert_no_title_ink(self, _draw_entity_component, 42, 300, 200)
 
     def test_entity_value_is_centred(self):
         """The titleless value's real ink box is centred in the full tile, unclipped."""
         b = _draw_entity_component('Title', 42, 300, 200, mock.Mock(),
                                    title_lines=NO_TITLE_LINES)
         ba = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
-        self.assertLessEqual(abs(ba[1] - (200 - ba[3])), 4)
+        self.assertLessEqual(abs(ba[1] - (200 - ba[3])), 1)
         self.assertGreater(ba[3] - ba[1], 0)
         self.assertGreaterEqual(ba[1], 0)
         self.assertLessEqual(ba[3], 200)
+
+    def test_entity_multiline_value_is_centred(self):
+        """A value wrapping onto several lines in a narrow tile is centred and unclipped."""
+        w = h = 160
+        b = _draw_entity_component('Title', 'Partly cloudy with showers today and tomorrow',
+                                   w, h, mock.Mock(), title_lines=NO_TITLE_LINES)
+        bb = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        single = _draw_entity_component('Title', 'Partly cloudy with showers today and tomorrow',
+                                        900, h, mock.Mock(), title_lines=NO_TITLE_LINES)
+        sb = single.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        self.assertGreater(bb[3] - bb[1], 1.5 * (sb[3] - sb[1]))  # wrapped vs one line in a wide tile
+        self.assertLessEqual(abs(bb[1] - (h - bb[3])), 1)
+        self.assertGreaterEqual(bb[0], 1)
+        self.assertGreaterEqual(bb[1], 1)
+        self.assertLessEqual(bb[2], w - 1)
+        self.assertLessEqual(bb[3], h - 1)
 
     def test_entity_long_string_stays_inside_tile(self):
         """A long string value keeps at least 1px margin on every side."""
