@@ -420,7 +420,11 @@ class TestAPISimple(unittest.TestCase):
     def test_static_png_hide_title_changes_the_served_image(
         self, mock_read_config, mock_get_entity_state,
     ):
-        """End-to-end: hide_title: true changes the PNG served over HTTP."""
+        """End-to-end: hide_title: true removes the card title from the served PNG.
+
+        The wall clock is frozen so both renders share it; the title band just
+        below the 40px dashboard header must hold ink only when the title shows.
+        """
         from PIL import Image
 
         mock_get_entity_state.return_value = {'state': '20.0', 'friendly_name': 'Temp'}
@@ -434,18 +438,26 @@ class TestAPISimple(unittest.TestCase):
                     'type': 'entity', **extra,
                 }]}],
             }
-            handler = self.create_handler('/static/title_dashboard.png')
-            self.assertTrue(handler._handle_static_png())
+            clock = mock.MagicMock()
+            clock.now.return_value.astimezone.return_value.strftime.return_value = '12:00'
+            with mock.patch('datetime.datetime', clock):
+                handler = self.create_handler('/static/title_dashboard.png')
+                self.assertTrue(handler._handle_static_png())
             handler.wfile.seek(0)
             img = Image.open(handler.wfile)
             img.load()
             return img
 
+        def band_ink(img):
+            band = img.convert('L').crop((0, 45, 800, 85))
+            return sum(1 for px in band.getdata() if px < 128)
+
         shown, hidden = serve(), serve(hide_title=True)
         for img in (shown, hidden):
             self.assertEqual(img.size, (800, 480))
             self.assertEqual(img.mode, '1')
-        self.assertNotEqual(shown.tobytes(), hidden.tobytes())
+        self.assertGreater(band_ink(shown), 100, "titled card must draw its title")
+        self.assertEqual(band_ink(hidden), 0, "hide_title must leave the title band empty")
 
     @mock.patch('trmnl_server.api.render_dashboard_image')
     @mock.patch('trmnl_server.api.read_config')

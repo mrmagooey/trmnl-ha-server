@@ -934,7 +934,6 @@ class TestGoldenImages(unittest.TestCase):
             img_io = render_dashboard_image(dashboard, mock_logger)
         assert_golden(img_io, 'todo_two_column_overflow')
 
-
     @mock.patch('trmnl_server.hass_client._fetch_todo_list')
     @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
     @mock.patch('trmnl_server.hass_client.get_entity_state')
