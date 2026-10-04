@@ -1,10 +1,12 @@
 """Additional tests for components module to achieve full coverage."""
 
+import functools
 import time
+from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image
+from PIL import Image, ImageChops
 import logging
 
 from trmnl_server import url_source
@@ -20,6 +22,13 @@ from trmnl_server.components import (
     _resolve_gap_style,
     _resolve_max_gap,
     MAX_GAP_MINUTES_DEFAULT,
+    NO_TITLE_LINES,
+    NO_TITLE_CONTENT_TOP,
+    TODO_NO_TITLE_HEADER_H,
+    GRAPH_NO_TITLE_MARGIN_TOP,
+    _calendar_content_top,
+    _resolve_hide_title,
+    _panel_draws_a_title,
     GAP_STYLES,
     GAP_STYLE_DEFAULT,
     _draw_graph_component,
@@ -3945,6 +3954,298 @@ class TestCalendarProbeUsesBothFits(unittest.TestCase):
             _panel_body_fit(render_data, 400, 400, mock_logger),
             _panel_body_fit(render_data, 400, 120, mock_logger),
         )
+
+
+class TestResolveHideTitle(unittest.TestCase):
+    """Config validation for hide_title."""
+
+    def test_absent_is_false(self):
+        """No hide_title key means the title is shown."""
+        self.assertFalse(_resolve_hide_title({}, mock.Mock()))
+
+    def test_bools_pass_through(self):
+        """True and False are taken as given."""
+        self.assertTrue(_resolve_hide_title({'hide_title': True}, mock.Mock()))
+        self.assertFalse(_resolve_hide_title({'hide_title': False}, mock.Mock()))
+
+    def test_invalid_warns_and_shows_title(self):
+        """A non-bool value logs a warning and falls back to showing the title."""
+        for raw in ('yes', 1, 0, None, [True]):
+            logger = mock.Mock()
+            with self.subTest(raw=raw):
+                self.assertFalse(_resolve_hide_title({'hide_title': raw}, logger))
+                logger.warning.assert_called_once()
+
+
+class TestPanelDrawsATitleHidden(unittest.TestCase):
+    """_panel_draws_a_title honours hide_title."""
+
+    def test_hidden_title_does_not_count(self):
+        """A hide_title panel is excluded from the row title fit."""
+        self.assertFalse(_panel_draws_a_title(
+            {'type': 'entity', 'friendly_name': 'X', 'data': 5, 'hide_title': True}))
+
+
+class TestHideTitleTiling(unittest.TestCase):
+    """Tiling level (drawers mocked): titleless cards get title_lines=0 and leave the row title fit."""
+
+    def _tile(self, render_data):
+        calls = {}
+
+        def _f(friendly_name, data, w, h, logger, **kw):
+            assert friendly_name not in calls, f'duplicate friendly_name {friendly_name!r}'
+            calls[friendly_name] = kw
+            return Image.new('RGB', (w, h), 'white')
+
+        with mock.patch('trmnl_server.components._draw_entity_component', side_effect=_f):
+            tile_components(render_data, 800, 480, 40, mock.Mock())
+        return calls
+
+    def test_mixed_row_titleless_gets_zero_neighbour_wraps(self):
+        """A titled neighbour that wraps to 2 lines must not give the titleless card 2."""
+        long_name = 'An extremely long panel title that has to wrap onto two lines'
+        calls = self._tile([
+            {'type': 'entity', 'friendly_name': long_name, 'data': 1, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'Hidden', 'data': 2, 'large_display': False,
+             'hide_title': True},
+        ])
+        self.assertEqual(calls['Hidden']['title_lines'], NO_TITLE_LINES)
+        self.assertEqual(calls[long_name]['title_lines'], 2)
+
+    def test_titleless_card_does_not_shrink_neighbour_title(self):
+        """A long hidden title is not measured, so the neighbour keeps the largest size."""
+        calls = self._tile([
+            {'type': 'entity', 'friendly_name': 'Short', 'data': 1, 'large_display': False},
+            {'type': 'entity', 'friendly_name': 'W' * 80, 'data': 2, 'large_display': False,
+             'hide_title': True},
+        ])
+        self.assertEqual(calls['Short']['title_font_size'], COMPONENT_TITLE_FONT_SIZE)
+
+    def test_all_titleless_row_renders(self):
+        """A row in which every card hides its title still tiles without error."""
+        calls = self._tile([
+            {'type': 'entity', 'friendly_name': 'A', 'data': 1, 'large_display': False,
+             'hide_title': True},
+            {'type': 'entity', 'friendly_name': 'B', 'data': 2, 'large_display': False,
+             'hide_title': True},
+        ])
+        self.assertEqual({c['title_lines'] for c in calls.values()}, {NO_TITLE_LINES})
+
+    def test_no_data_placeholder_unchanged(self):
+        """hide_title does not suppress the 'No data for X' placeholder."""
+        with mock.patch('trmnl_server.components._create_info_image',
+                        return_value=Image.new('RGB', (10, 10))) as info:
+            tile_components([{'type': 'entity', 'friendly_name': 'Gone', 'data': None,
+                              'large_display': False, 'hide_title': True}],
+                            800, 480, 40, mock.Mock())
+        self.assertIn('Gone', info.call_args[0][0])
+
+
+class TestHideTitleDispatch(unittest.TestCase):
+    """Integration: hide_title flows from config through dispatch to the drawer."""
+
+    def test_url_and_entity_components_reach_drawer_titleless(self):
+        """hide_title on url and entity components yields title_lines=NO_TITLE_LINES."""
+        dashboard = {'name': 'h', 'components': [
+            {'type': 'url', 'friendly_name': 'U', 'url': 'http://x', 'hide_title': True},
+            {'type': 'entity', 'friendly_name': 'E', 'entity_name': 'sensor.e',
+             'hide_title': True},
+        ]}
+        with mock.patch('trmnl_server.url_source.fetch_url_value', return_value='42'), \
+             mock.patch('trmnl_server.hass_client.get_entity_state',
+                        return_value={'state': '7', 'attributes': {}}), \
+             mock.patch('trmnl_server.components._draw_entity_component') as draw:
+            draw.return_value = Image.new('RGB', (10, 10), 'white')
+            render_dashboard_image(dashboard, mock_logger)
+        self.assertEqual(draw.call_count, 2)
+        for call in draw.call_args_list:
+            self.assertEqual(call[1]['title_lines'], NO_TITLE_LINES)
+
+
+def _ink_rows(img):
+    """(first, last) y containing any pixel darker than 128, or None if blank."""
+    bbox = img.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+    return None if bbox is None else (bbox[1], bbox[3] - 1)
+
+
+def _assert_no_title_ink(test, draw, data, w, h):
+    """Asserts titleless output is unscaled-size and independent of the title text.
+
+    Title ink starts at y~16 (past NO_TITLE_CONTENT_TOP), so a row bound
+    cannot catch it; instead a wildly different title must render
+    pixel-identically, which holds only if no title is drawn.
+    """
+    a = draw('Title', data, w, h, mock_logger, title_lines=NO_TITLE_LINES)
+    b = draw('A much longer, different heading', data, w, h, mock_logger,
+             title_lines=NO_TITLE_LINES)
+    test.assertEqual(a.size, (w, h))
+    test.assertIsNone(ImageChops.difference(a.convert('L'), b.convert('L')).getbbox())
+
+
+class TestTitlelessListLayout(unittest.TestCase):
+    """Unit: list cards at title_lines=0 start content higher and fit more rows."""
+
+    def test_calendar_content_top_shrinks(self):
+        """Calendar content top at NO_TITLE_LINES is the titleless inset."""
+        self.assertEqual(_calendar_content_top(None, NO_TITLE_LINES, mock.Mock()), NO_TITLE_CONTENT_TOP)
+        self.assertLess(NO_TITLE_CONTENT_TOP, _calendar_content_top(None, 1, mock.Mock()))
+
+    def test_todo_header_shrinks_but_keeps_indicator_band(self):
+        """Todo header at NO_TITLE_LINES is the fixed indicator band."""
+        self.assertEqual(_todo_header_height(None, NO_TITLE_LINES, mock.Mock()), TODO_NO_TITLE_HEADER_H)
+        self.assertLess(TODO_NO_TITLE_HEADER_H, _todo_header_height(None, 1, mock.Mock()))
+
+    def test_todo_capacity_grows(self):
+        """A titleless todo tile fits more rows than a titled one."""
+        _, cap1 = _todo_capacity(200, 1, COMPONENT_TITLE_FONT_SIZE, 1, mock.Mock())
+        _, cap0 = _todo_capacity(200, 1, COMPONENT_TITLE_FONT_SIZE, NO_TITLE_LINES, mock.Mock())
+        self.assertGreater(cap0, cap1)
+
+    def test_calendar_capacity_grows(self):
+        """A titleless calendar tile at height 240 fits strictly more rows than a titled one."""
+        log = mock.Mock()
+        c1 = _calendar_capacity(28, 240, 1, log, title_lines=1)
+        c0 = _calendar_capacity(28, 240, 1, log, title_lines=NO_TITLE_LINES)
+        self.assertGreater(c0, c1)
+
+
+class TestTitlelessListDrawers(unittest.TestCase):
+    """Regression: title_lines=0 must not fall through the `<= 1` paths and still draw a title."""
+
+    def _both(self, draw, *args, **kw):
+        """(last ink row titled, last ink row titleless).
+
+        The last row is used because a titled card's first ink is the title
+        itself; with a single content row, the row's bottom tracks where the
+        content starts.
+        """
+        a = draw(*args, title_lines=1, **kw)
+        b = draw(*args, title_lines=NO_TITLE_LINES, **kw)
+        return _ink_rows(a)[1], _ink_rows(b)[1]
+
+    def test_entities(self):
+        """Titleless entities content starts above the titled content."""
+        rows = [{'friendly_name': 'Kitchen', 'state': '21.5'}]
+        t1, t0 = self._both(_draw_entities_component, 'Title', rows, 300, 200, mock_logger)
+        self.assertLess(t0, t1)
+        _assert_no_title_ink(self, _draw_entities_component, rows, 300, 200)
+
+    def test_calendar(self):
+        """Titleless calendar content starts above the titled content."""
+        events = [{'summary': 'Event 0',
+                   'start': {'dateTime': '2024-01-17T09:00:00+00:00'},
+                   'end': {'dateTime': '2024-01-17T09:30:00+00:00'}}]
+        t1, t0 = self._both(_draw_calendar_component, 'Title', events, 400, 240, mock_logger)
+        self.assertLess(t0, t1)
+        _assert_no_title_ink(self, _draw_calendar_component, events, 400, 240)
+
+    def test_todo(self):
+        """Titleless todo content starts above the titled content."""
+        items = [{'summary': 'Item 0', 'status': 'needs_action'}]
+        t1, t0 = self._both(_draw_todo_list_component, 'Title', items, 400, 200, mock_logger)
+        self.assertLess(t0, t1)
+        _assert_no_title_ink(self, _draw_todo_list_component, items, 400, 200)
+
+    def test_todo_paginating_indicator_clear_of_rows(self):
+        """Paginated titleless todo: indicator ends above, and rows start at, the header band."""
+        items = [{'summary': f'Item {i}', 'status': 'needs_action'} for i in range(30)]
+        img = _draw_todo_list_component(
+            'Title', items, 400, 200, mock_logger, title_lines=NO_TITLE_LINES)
+        w, h = img.size
+        right = img.crop((w - 60, 0, w, h))
+        g = right.convert('L')
+        px = g.load()
+        last = max(y for y in range(h) if any(px[x, y] < 128 for x in range(60)))
+        self.assertLess(last, TODO_NO_TITLE_HEADER_H)
+        left = img.crop((0, 0, 40, h))
+        self.assertGreaterEqual(_ink_rows(left)[0], TODO_NO_TITLE_HEADER_H)
+
+
+class TestTitlelessGraphAndEntity(unittest.TestCase):
+    """Regression: graph and entity cards at title_lines=0 draw no title and use the space."""
+
+    @staticmethod
+    def _graph_args() -> tuple:
+        """Real data points and a 24h window (the no-data path uses the title text)."""
+        now = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
+        pts = [(now - timedelta(hours=2), 1.0), (now - timedelta(minutes=5), 3.0)]
+        return pts, dict(window_start=now - timedelta(hours=24), window_end=now)
+
+    def test_graph_plot_starts_higher(self):
+        """The y-axis line starts at the titleless margin, above the titled one."""
+        pts, kw = self._graph_args()
+        a = _draw_graph_component('Title', pts, 400, 240, mock.Mock(), title_lines=1, **kw)
+        b = _draw_graph_component('Title', pts, 400, 240, mock.Mock(),
+                                  title_lines=NO_TITLE_LINES, **kw)
+        axis_a = _ink_rows(a.crop((38, 0, 42, 240)))[0]
+        axis_b = _ink_rows(b.crop((38, 0, 42, 240)))[0]
+        self.assertLessEqual(axis_b, GRAPH_NO_TITLE_MARGIN_TOP + 1)
+        self.assertLess(axis_b, axis_a)
+
+    def test_titleless_graph_keeps_a_top_margin(self):
+        """A titleless graph keeps GRAPH_NO_TITLE_MARGIN_TOP: no ink touches the top edge.
+
+        The regression guard is the row-0 check (with the margin at 0 the
+        plot's axis line lands on row 0). The label checks are sanity checks
+        that the top y-axis and last-value labels are drawn near the top.
+        """
+        pts, kw = self._graph_args()
+        img = _draw_graph_component('Title', pts, 400, 240, mock.Mock(),
+                                    title_lines=NO_TITLE_LINES, **kw)
+        self.assertGreater(_ink_rows(img)[0], 0)
+        # Sanity: labels exist and sit near the top margin.
+        label_col = _ink_rows(img.crop((0, 0, 38, 240)))   # left of the y-axis line
+        value_col = _ink_rows(img.crop((300, 0, 400, 60)))  # last-value label, top right
+        self.assertIsNotNone(label_col)
+        self.assertIsNotNone(value_col)
+        self.assertLessEqual(label_col[0], GRAPH_NO_TITLE_MARGIN_TOP * 2)
+        self.assertLessEqual(value_col[0], GRAPH_NO_TITLE_MARGIN_TOP * 2)
+
+    def test_graph_draws_no_title(self):
+        """A titleless graph renders identically whatever the title text is."""
+        pts, kw = self._graph_args()
+        draw = functools.partial(_draw_graph_component, **kw)
+        _assert_no_title_ink(self, draw, pts, 400, 240)
+
+    def test_entity_draws_no_title(self):
+        """A titleless entity renders identically whatever the title text is."""
+        _assert_no_title_ink(self, _draw_entity_component, 42, 300, 200)
+
+    def test_entity_value_is_centred(self):
+        """The titleless value's real ink box is centred in the full tile, unclipped."""
+        b = _draw_entity_component('Title', 42, 300, 200, mock.Mock(),
+                                   title_lines=NO_TITLE_LINES)
+        ba = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        self.assertLessEqual(abs(ba[1] - (200 - ba[3])), 1)
+        self.assertGreater(ba[3] - ba[1], 0)
+        self.assertGreaterEqual(ba[1], 0)
+        self.assertLessEqual(ba[3], 200)
+
+    def test_entity_multiline_value_is_centred(self):
+        """A value wrapping onto several lines in a narrow tile is centred and unclipped."""
+        w = h = 160
+        b = _draw_entity_component('Title', 'Partly cloudy with showers today and tomorrow',
+                                   w, h, mock.Mock(), title_lines=NO_TITLE_LINES)
+        bb = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        single = _draw_entity_component('Title', 'Partly cloudy with showers today and tomorrow',
+                                        900, h, mock.Mock(), title_lines=NO_TITLE_LINES)
+        sb = single.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        self.assertGreater(bb[3] - bb[1], 1.5 * (sb[3] - sb[1]))  # wrapped vs one line in a wide tile
+        self.assertLessEqual(abs(bb[1] - (h - bb[3])), 1)
+        self.assertGreaterEqual(bb[0], 1)
+        self.assertGreaterEqual(bb[1], 1)
+        self.assertLessEqual(bb[2], w - 1)
+        self.assertLessEqual(bb[3], h - 1)
+
+    def test_entity_long_string_stays_inside_tile(self):
+        """A long string value keeps at least 1px margin on every side."""
+        b = _draw_entity_component('Title', 'Partly cloudy with showers', 200, 120,
+                                   mock.Mock(), title_lines=NO_TITLE_LINES)
+        bb = b.convert('L').point(lambda p: 255 if p < 128 else 0).getbbox()
+        self.assertGreaterEqual(bb[0], 1)
+        self.assertGreaterEqual(bb[1], 1)
+        self.assertLessEqual(bb[2], 199)
+        self.assertLessEqual(bb[3], 119)
 
 
 if __name__ == '__main__':

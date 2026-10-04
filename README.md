@@ -155,6 +155,7 @@ Set `large_display: true` on one component to give it the top half of the screen
   ```
 
 - `zero_baseline` (history_graph only, optional): when `true`, the graph includes 0 in its value range and draws a thin horizontal reference line at 0, with a labeled `0` on the y-axis. Use this for values that go both positive and negative (e.g. net power import/export) so you can see at a glance which side of zero the line is on. Default `false`.
+- `hide_title` (any component, optional): when `true`, the card draws no title and its content moves up into the freed space. Default `false`. The value must be a YAML boolean: unquoted `true`/`false` (PyYAML also reads `yes`/`on` as true); anything else, such as the quoted string `"true"`, logs a warning and the title is shown. `friendly_name` is still required: a card with no data still shows "No data for <friendly_name>". A todo list loses its "(N)" item count with the title but keeps its page indicator. Body text stays at the size shared across its row, so the space goes to extra rows rather than larger text.
 - `columns` (todo_list only, optional): number of columns to lay items into. Default `1`. When incomplete items overflow the card, it paginates — cycling to the next page on each refresh — and shows the item count plus a page indicator.
 - **`attribute`** (`entity` and `entities`, optional): display a specific Home Assistant entity *attribute* instead of the entity state. Omit it to show the state (the default). For `entities`, set `attribute` per row. A missing attribute renders blank.
 

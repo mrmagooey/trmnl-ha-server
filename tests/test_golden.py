@@ -934,6 +934,100 @@ class TestGoldenImages(unittest.TestCase):
             img_io = render_dashboard_image(dashboard, mock_logger)
         assert_golden(img_io, 'todo_two_column_overflow')
 
+    @mock.patch('trmnl_server.hass_client._fetch_todo_list')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_hide_title_all_types(
+        self, mock_fetch_history, mock_get_entity_state, mock_fetch_calendar, mock_fetch_todo,
+    ):
+        """One of every component type with hide_title, plus one titled entity.
+
+        Pins that each type drops its title and reclaims the band, and that the
+        single titled entity keeps its title beside titleless neighbours.
+        """
+        url_source.reset_cache()
+        mock_fetch_history.return_value = [[
+            {'state': '18.0', 'last_changed': '2024-01-15T08:00:00+00:00'},
+            {'state': '21.0', 'last_changed': '2024-01-15T12:00:00+00:00'},
+            {'state': '19.0', 'last_changed': '2024-01-15T16:00:00+00:00'},
+        ]]
+        mock_get_entity_state.side_effect = lambda name, logger: {
+            'sensor.t': {'state': '20.0', 'friendly_name': 'Temp'},
+            'sensor.h': {'state': '55', 'friendly_name': 'Humidity'},
+            'sensor.a': {'state': '21.5', 'attributes': {}},
+            'sensor.b': {'state': '19.8', 'attributes': {}},
+        }[name]
+        mock_fetch_calendar.return_value = [
+            {'summary': 'Standup',
+             'start': {'dateTime': '2024-01-15T09:00:00+00:00'},
+             'end': {'dateTime': '2024-01-15T09:15:00+00:00'}},
+            {'summary': 'Planning',
+             'start': {'dateTime': '2024-01-16T10:00:00+00:00'},
+             'end': {'dateTime': '2024-01-16T11:00:00+00:00'}},
+            {'summary': 'Dentist', 'start': {'date': '2024-01-17'}},
+        ]
+        mock_fetch_todo.return_value = [
+            {'summary': f'Task {i}', 'status': 'needs_action'} for i in range(5)
+        ]
+        dashboard = {
+            'name': 'hide_title',
+            'title': 'Hide Title',
+            'components': [
+                {'type': 'history_graph', 'friendly_name': 'Graph',
+                 'entity_name': 'sensor.temperature', 'hide_title': True},
+                {'type': 'entity', 'friendly_name': 'Temp',
+                 'entity_name': 'sensor.t', 'hide_title': True},
+                {'type': 'entity', 'friendly_name': 'Humidity',
+                 'entity_name': 'sensor.h'},
+                {'type': 'url', 'friendly_name': 'Bitcoin',
+                 'url': 'http://e.com/price', 'json_path': '.data.amount',
+                 'hide_title': True},
+                {'type': 'entities', 'friendly_name': 'Sensors', 'hide_title': True,
+                 'entities': [
+                     {'entity_name': 'sensor.a', 'friendly_name': 'Kitchen'},
+                     {'entity_name': 'sensor.b', 'friendly_name': 'Hall'},
+                 ]},
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home', 'hide_title': True,
+                 'arguments': {'calendar_id': 'calendar.home'}},
+                {'type': 'todo_list', 'friendly_name': 'Tasks',
+                 'entity_name': 'todo.tasks', 'hide_title': True},
+            ],
+        }
+        fixed_now = datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc)
+        with mock.patch.object(
+            url_source, 'urlopen', return_value=_FakeResponse(b'{"data": {"amount": "64231"}}')
+        ):
+            render_dashboard_image(dashboard, mock_logger, now=fixed_now)  # schedules fetch
+            url_source._wait_for_pending()
+            with mock.patch('datetime.datetime', mock_datetime()):
+                img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+        assert_golden(img_io, 'hide_title_all_types')
+
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_hide_title_large_display_calendar(self, mock_fetch_calendar):
+        """A titleless large_display calendar shows extra rows in the freed band."""
+        mock_fetch_calendar.return_value = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-{17 + i // 3:02d}T{9 + i % 3:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-{17 + i // 3:02d}T{9 + i % 3:02d}:30:00+00:00'}}
+            for i in range(12)
+        ]
+        dashboard = {
+            'name': 'hide_title_cal',
+            'title': 'Hide Title Cal',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home', 'large_display': True,
+                 'hide_title': True,
+                 'arguments': {'calendar_id': 'calendar.home'}},
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'hide_title_large_display_calendar')
+
 
 if __name__ == '__main__':
     unittest.main()
