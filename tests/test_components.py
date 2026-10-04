@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 import logging
 
 from trmnl_server import url_source
@@ -26,6 +26,7 @@ from trmnl_server.components import (
     NO_TITLE_CONTENT_TOP,
     TODO_NO_TITLE_HEADER_H,
     GRAPH_NO_TITLE_MARGIN_TOP,
+    GRAPH_VALUE_LABEL_AXIS_GAP,
     _calendar_content_top,
     _resolve_hide_title,
     _panel_draws_a_title,
@@ -511,6 +512,69 @@ class TestDrawGraphComponent(unittest.TestCase):
         )
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
+
+
+class TestGraphValueLabelAxisClearance(unittest.TestCase):
+    """The latest-value label must stay above the x-axis line."""
+
+    WIDTH = 400
+    HEIGHT = 240
+
+    def _render(self, values: list[float], **kwargs) -> Image.Image:
+        """Render a 24h graph with readings at 20h/15h/10h/5h ago and 6 min ago."""
+        now = datetime(2025, 1, 15, 12, 0)
+        ages = [timedelta(hours=20), timedelta(hours=15), timedelta(hours=10),
+                timedelta(hours=5), timedelta(minutes=6)]
+        pts = [(now - a, v) for a, v in zip(ages, values)]
+        return _draw_graph_component(
+            'Power', pts, self.WIDTH, self.HEIGHT, mock.Mock(),
+            window_start=now - timedelta(hours=24), window_end=now, **kwargs,
+        )
+
+    def _label_rows(self, img: Image.Image) -> list[int]:
+        """Rows with ink in the right-margin column above the x-tick label band."""
+        axis_y = self.HEIGHT - 40
+        x0 = self.WIDTH - -(-40 * 16 // 10) + 5
+        gray = img.convert('L')
+        return [
+            y for y in range(axis_y + 5)
+            if any(gray.getpixel((x, y)) < 128 for x in range(x0, self.WIDTH))
+        ]
+
+    def _assert_clear(self, img: Image.Image) -> None:
+        rows = self._label_rows(img)
+        self.assertTrue(rows, "value label should be drawn")
+        axis_y = self.HEIGHT - 40
+        self.assertLess(max(rows), axis_y - GRAPH_VALUE_LABEL_AXIS_GAP + 1)
+
+    def test_decay_to_zero_label_clears_axis(self):
+        """A value decaying to 0.0 keeps its label ink above the x-axis."""
+        self._assert_clear(self._render([5.0, 3.0, 1.5, 0.6, 0.0]))
+
+    def test_zero_baseline_last_value_zero_clears_axis(self):
+        """zero_baseline with last value 0.0 at range bottom clears the axis."""
+        self._assert_clear(self._render([5.0, 3.0, 1.5, 0.6, 0.0], zero_baseline=True))
+
+    def test_titleless_last_value_minimum_clears_axis(self):
+        """A titleless graph with last value at the minimum clears the axis."""
+        self._assert_clear(
+            self._render([5.0, 3.0, 1.5, 0.6, 0.0], title_lines=NO_TITLE_LINES)
+        )
+
+    def test_mid_range_label_position_unchanged(self):
+        """A label that already clears the axis keeps the unclamped position."""
+        img = self._render([1.0, 2.0, 3.0, 4.0, 3.0])
+        # Last value 3.0 of range 1..4: unclamped label centred on last_y.
+        scale = 2
+        margin_top, margin_bottom = 40 * scale, 40 * scale
+        graph_h = self.HEIGHT * scale - margin_top - margin_bottom - 10 * scale
+        last_y = (self.HEIGHT * scale - margin_bottom) - (2.0 / 3.0) * graph_h
+        font = _load_font(30 * scale, mock.Mock())
+        bb = ImageDraw.Draw(Image.new('RGB', (10, 10))).textbbox((0, 0), "3.0", font=font)
+        text_y = last_y - (bb[3] - bb[1]) / 2
+        expect_top = (text_y + bb[1]) / scale
+        rows = self._label_rows(img)
+        self.assertAlmostEqual(min(rows), expect_top, delta=2)
 
 
 class TestBuildDrawSegments(unittest.TestCase):

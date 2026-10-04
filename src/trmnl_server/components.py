@@ -68,6 +68,9 @@ TODO_HEADER_H: int = 50
 # Top inset for a hide_title card: content starts here instead of below a title.
 NO_TITLE_CONTENT_TOP: int = 10
 GRAPH_NO_TITLE_MARGIN_TOP: int = 15  # unscaled; clears the top y-axis label's ink
+# Unscaled gap kept between the latest-value label's ink bottom and the x-axis
+# line, so a value at the bottom of the range doesn't collide with the axis.
+GRAPH_VALUE_LABEL_AXIS_GAP: int = 4
 # A titleless todo keeps a band for its top-right page indicator (drawn at y=12,
 # ink ending ~32); fixed rather than pagination-dependent, since capacity decides
 # pagination and a pagination-dependent header would be circular.
@@ -1437,6 +1440,12 @@ def _draw_graph_component(
     text_height = text_bbox[3] - text_bbox[1]
     text_x: float = large_width - margin_right + (5 * scale)
     text_y: float = last_y - (text_height / 2)
+    # A value at the bottom of the range puts last_y on the x-axis; keep the
+    # label's ink bottom a gap above the axis line's top edge (half its width).
+    max_text_y: float = (
+        (large_height - margin_bottom) - scale - (GRAPH_VALUE_LABEL_AXIS_GAP * scale) - text_bbox[3]
+    )
+    text_y = min(text_y, max_text_y)
     d.text((text_x, text_y), last_value_text, font=font_value, fill='black')
 
     # Draw data line: solid between consecutive real readings, dashed
