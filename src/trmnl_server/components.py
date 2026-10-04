@@ -262,6 +262,65 @@ def _panel_title_text(render_data: "RenderData") -> str:
     return name
 
 
+def _hides_title(render_data: "RenderData") -> bool:
+    """Returns whether the panel is configured with `hide_title`.
+
+    Args:
+        render_data: Component render data
+
+    Returns:
+        True only when `hide_title` is the boolean True
+    """
+    return render_data.get('hide_title') is True
+
+
+def _panel_title_lines(render_data: "RenderData", row_title_lines: int) -> int:
+    """Returns the title line count for a panel within a row.
+
+    Args:
+        render_data: Component render data
+        row_title_lines: Title lines the row settled on for titled panels
+
+    Returns:
+        NO_TITLE_LINES if the panel hides its title, else row_title_lines
+    """
+    return NO_TITLE_LINES if _hides_title(render_data) else row_title_lines
+
+
+def _draw_panel_title(
+    d: "ImageDraw.ImageDraw",
+    text: str,
+    font_title: "ImageFont.ImageFont | ImageFont.FreeTypeFont",
+    large_width: int,
+    title_lines: int,
+    scale: int,
+) -> None:
+    """Draws a centred, wrapped, ellipsized title at the top of a panel.
+
+    Args:
+        d: Draw context
+        text: Title text
+        font_title: Title font
+        large_width: Panel width in pixels
+        title_lines: Maximum title lines (> 0)
+        scale: Render scale factor
+    """
+    max_width: int = large_width - TITLE_PADDING * scale
+    if title_lines > 1:
+        lines: list[str] = _wrap_title(text, font_title, max_width, title_lines) or [text]
+    else:
+        lines = [text]
+    lines = [_ellipsize(line, font_title, max_width, d) for line in lines]
+    rendered: str = "\n".join(lines)
+    bbox = d.multiline_textbbox((0, 0), rendered, font=font_title,
+                                spacing=TITLE_LINE_SPACING * scale)
+    d.multiline_text(
+        ((large_width - (bbox[2] - bbox[0])) / 2, 5 * scale), rendered,
+        font=font_title, fill='black', align='center',
+        spacing=TITLE_LINE_SPACING * scale,
+    )
+
+
 def _panel_draws_a_title(render_data: "RenderData") -> bool:
     """Returns whether the panel will draw a title, rather than a centred placeholder.
 
@@ -279,7 +338,7 @@ def _panel_draws_a_title(render_data: "RenderData") -> bool:
     Returns:
         True if the panel will draw its title
     """
-    if render_data.get('hide_title'):
+    if _hides_title(render_data):
         return False
     data = render_data.get('data')
     if data is None:
@@ -1688,26 +1747,7 @@ def _draw_calendar_component(
         font_event = ImageFont.load_default()
 
     if title_lines != NO_TITLE_LINES:
-        # Draw title
-        if title_lines > 1:
-            title_lines_text: list[str] = _wrap_title(
-                friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
-            ) or [friendly_name]
-        else:
-            title_lines_text = [friendly_name]
-        title_lines_text = [
-            _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
-            for line in title_lines_text
-        ]
-        rendered_title: str = "\n".join(title_lines_text)
-        text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                         spacing=TITLE_LINE_SPACING * scale)
-        text_width: int = text_bbox[2] - text_bbox[0]
-        d.multiline_text(
-            ((large_width - text_width) / 2, 5 * scale), rendered_title,
-            font=font_title, fill='black', align='center',
-            spacing=TITLE_LINE_SPACING * scale,
-        )
+        _draw_panel_title(d, friendly_name, font_title, large_width, title_lines, scale)
 
     y_pos: int = _calendar_content_top(title_font_size, title_lines, logger) * scale
 
@@ -1826,26 +1866,7 @@ def _draw_entities_component(
         font_list = ImageFont.load_default()
 
     if title_lines != NO_TITLE_LINES:
-        # Draw title
-        if title_lines > 1:
-            title_lines_text: list[str] = _wrap_title(
-                friendly_name, font_title, large_width - TITLE_PADDING * scale, title_lines
-            ) or [friendly_name]
-        else:
-            title_lines_text = [friendly_name]
-        title_lines_text = [
-            _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
-            for line in title_lines_text
-        ]
-        rendered_title: str = "\n".join(title_lines_text)
-        text_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                         spacing=TITLE_LINE_SPACING * scale)
-        text_width: int = text_bbox[2] - text_bbox[0]
-        d.multiline_text(
-            ((large_width - text_width) / 2, 5 * scale), rendered_title,
-            font=font_title, fill='black', align='center',
-            spacing=TITLE_LINE_SPACING * scale,
-        )
+        _draw_panel_title(d, friendly_name, font_title, large_width, title_lines, scale)
 
     if title_lines == NO_TITLE_LINES:
         y_pos: int = NO_TITLE_CONTENT_TOP * scale
@@ -1994,27 +2015,7 @@ def _draw_todo_list_component(
     total: int = len(incomplete)
 
     if title_lines != NO_TITLE_LINES:
-        # Title with count.
-        title_text: str = f"{friendly_name} ({total})"
-        if title_lines > 1:
-            title_lines_text: list[str] = _wrap_title(
-                title_text, font_title, large_width - TITLE_PADDING * scale, title_lines
-            ) or [title_text]
-        else:
-            title_lines_text = [title_text]
-        title_lines_text = [
-            _ellipsize(line, font_title, large_width - TITLE_PADDING * scale, d)
-            for line in title_lines_text
-        ]
-        rendered_title: str = "\n".join(title_lines_text)
-        title_bbox = d.multiline_textbbox((0, 0), rendered_title, font=font_title,
-                                          spacing=TITLE_LINE_SPACING * scale)
-        title_width: int = title_bbox[2] - title_bbox[0]
-        d.multiline_text(
-            ((large_width - title_width) / 2, 5 * scale), rendered_title,
-            font=font_title, fill='black', align='center',
-            spacing=TITLE_LINE_SPACING * scale,
-        )
+        _draw_panel_title(d, f"{friendly_name} ({total})", font_title, large_width, title_lines, scale)
 
     header_y: int = _todo_header_height(title_font_size, title_lines, logger) * scale
 
@@ -2328,9 +2329,6 @@ def tile_components(
         else:
             title_font_size, title_lines = s1, 1
 
-        def _lines_for(render_data: "RenderData") -> int:
-            return NO_TITLE_LINES if render_data.get('hide_title') else title_lines
-
         # Body rows harmonise the same way titles do: the row settles on the
         # smallest size any of its list-style panels needs, so a list beside a
         # list reads as one block rather than two unrelated type sizes. That
@@ -2343,7 +2341,7 @@ def tile_components(
             for render_data, _, _, tile_w, tile_h in row
             if (fit := _panel_body_fit(
                 render_data, tile_w, tile_h, logger,
-                title_font_size=title_font_size, title_lines=_lines_for(render_data),
+                title_font_size=title_font_size, title_lines=_panel_title_lines(render_data, title_lines),
             )) is not None
         ]
         body_font_size: int | None = (
@@ -2353,7 +2351,8 @@ def tile_components(
 
         for render_data, x, y, tile_w, tile_h in row:
             component_image = _render_component(render_data, tile_w, tile_h,
-                                                title_font_size, _lines_for(render_data),
+                                                title_font_size,
+                                                _panel_title_lines(render_data, title_lines),
                                                 body_font_size)
             if component_image:
                 final_image.paste(component_image, (x, y))
