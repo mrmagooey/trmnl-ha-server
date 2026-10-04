@@ -2,11 +2,12 @@
 
 import functools
 import time
+from math import ceil
 from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops
 import logging
 
 from trmnl_server import url_source
@@ -531,21 +532,24 @@ class TestGraphValueLabelAxisClearance(unittest.TestCase):
             window_start=now - timedelta(hours=24), window_end=now, **kwargs,
         )
 
+    # Mirror the drawer's unscaled margins (margin_bottom = 40, margin_right = ceil(40 * 1.6)).
+    AXIS_Y = HEIGHT - 40
+    MARGIN_RIGHT = ceil(40 * 1.6)
+
     def _label_rows(self, img: Image.Image) -> list[int]:
         """Rows with ink in the right-margin column above the x-tick label band."""
-        axis_y = self.HEIGHT - 40
-        x0 = self.WIDTH - -(-40 * 16 // 10) + 5
+        x0 = self.WIDTH - self.MARGIN_RIGHT + 5
         gray = img.convert('L')
         return [
-            y for y in range(axis_y + 5)
+            y for y in range(self.AXIS_Y + 5)
             if any(gray.getpixel((x, y)) < 128 for x in range(x0, self.WIDTH))
         ]
 
     def _assert_clear(self, img: Image.Image) -> None:
         rows = self._label_rows(img)
         self.assertTrue(rows, "value label should be drawn")
-        axis_y = self.HEIGHT - 40
-        self.assertLess(max(rows), axis_y - GRAPH_VALUE_LABEL_AXIS_GAP + 1)
+        # Axis top edge is AXIS_Y - 1; ink must end GAP rows above it.
+        self.assertLessEqual(max(rows), self.AXIS_Y - GRAPH_VALUE_LABEL_AXIS_GAP - 1)
 
     def test_decay_to_zero_label_clears_axis(self):
         """A value decaying to 0.0 keeps its label ink above the x-axis."""
@@ -562,19 +566,12 @@ class TestGraphValueLabelAxisClearance(unittest.TestCase):
         )
 
     def test_mid_range_label_position_unchanged(self):
-        """A label that already clears the axis keeps the unclamped position."""
-        img = self._render([1.0, 2.0, 3.0, 4.0, 3.0])
-        # Last value 3.0 of range 1..4: unclamped label centred on last_y.
-        scale = 2
-        margin_top, margin_bottom = 40 * scale, 40 * scale
-        graph_h = self.HEIGHT * scale - margin_top - margin_bottom - 10 * scale
-        last_y = (self.HEIGHT * scale - margin_bottom) - (2.0 / 3.0) * graph_h
-        font = _load_font(30 * scale, mock.Mock())
-        bb = ImageDraw.Draw(Image.new('RGB', (10, 10))).textbbox((0, 0), "3.0", font=font)
-        text_y = last_y - (bb[3] - bb[1]) / 2
-        expect_top = (text_y + bb[1]) / scale
-        rows = self._label_rows(img)
-        self.assertAlmostEqual(min(rows), expect_top, delta=2)
+        """A label that already clears the axis renders identically to no clamp."""
+        values = [1.0, 2.0, 3.0, 4.0, 3.0]
+        clamped = self._render(values)
+        with mock.patch('trmnl_server.components.GRAPH_VALUE_LABEL_AXIS_GAP', -1000):
+            unclamped = self._render(values)
+        self.assertIsNone(ImageChops.difference(clamped, unclamped).getbbox())
 
 
 class TestBuildDrawSegments(unittest.TestCase):

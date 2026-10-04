@@ -1443,7 +1443,8 @@ def _draw_graph_component(
     # A value at the bottom of the range puts last_y on the x-axis; keep the
     # label's ink bottom a gap above the axis line's top edge (half its width).
     max_text_y: float = (
-        (large_height - margin_bottom) - scale - (GRAPH_VALUE_LABEL_AXIS_GAP * scale) - text_bbox[3]
+        (large_height - margin_bottom) - scale
+        - (GRAPH_VALUE_LABEL_AXIS_GAP * scale) - text_bbox[3]
     )
     text_y = min(text_y, max_text_y)
     d.text((text_x, text_y), last_value_text, font=font_value, fill='black')
