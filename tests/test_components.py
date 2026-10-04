@@ -4182,20 +4182,22 @@ class TestTitlelessGraphAndEntity(unittest.TestCase):
         self.assertLessEqual(axis_b, GRAPH_NO_TITLE_MARGIN_TOP + 1)
         self.assertLess(axis_b, axis_a)
 
-    def test_graph_labels_stay_on_canvas(self):
-        """Top y-axis label and last-value label (max is the last point) are not clipped."""
+    def test_titleless_graph_keeps_a_top_margin(self):
+        """A titleless graph keeps GRAPH_NO_TITLE_MARGIN_TOP: no ink touches the top edge.
+
+        The regression guard is the row-0 check (with the margin at 0 the
+        plot's axis line lands on row 0). The label checks are sanity checks
+        that the top y-axis and last-value labels are drawn near the top.
+        """
         pts, kw = self._graph_args()
         img = _draw_graph_component('Title', pts, 400, 240, mock.Mock(),
                                     title_lines=NO_TITLE_LINES, **kw)
+        self.assertGreater(_ink_rows(img)[0], 0)
+        # Sanity: labels exist and sit near the top margin.
         label_col = _ink_rows(img.crop((0, 0, 38, 240)))   # left of the y-axis line
         value_col = _ink_rows(img.crop((300, 0, 400, 60)))  # last-value label, top right
         self.assertIsNotNone(label_col)
         self.assertIsNotNone(value_col)
-        self.assertGreater(label_col[0], 0)
-        self.assertGreater(value_col[0], 0)
-        # Nothing, plot or label, touches the top row of the canvas.
-        self.assertGreater(_ink_rows(img)[0], 0)
-        # The labels sit at the top margin rather than far below it.
         self.assertLessEqual(label_col[0], GRAPH_NO_TITLE_MARGIN_TOP * 2)
         self.assertLessEqual(value_col[0], GRAPH_NO_TITLE_MARGIN_TOP * 2)
 

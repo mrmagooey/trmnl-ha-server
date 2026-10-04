@@ -2015,7 +2015,9 @@ def _draw_todo_list_component(
     total: int = len(incomplete)
 
     if title_lines != NO_TITLE_LINES:
-        _draw_panel_title(d, f"{friendly_name} ({total})", font_title, large_width, title_lines, scale)
+        _draw_panel_title(
+            d, f"{friendly_name} ({total})", font_title, large_width, title_lines, scale
+        )
 
     header_y: int = _todo_header_height(title_font_size, title_lines, logger) * scale
 
@@ -2341,7 +2343,8 @@ def tile_components(
             for render_data, _, _, tile_w, tile_h in row
             if (fit := _panel_body_fit(
                 render_data, tile_w, tile_h, logger,
-                title_font_size=title_font_size, title_lines=_panel_title_lines(render_data, title_lines),
+                title_font_size=title_font_size,
+                title_lines=_panel_title_lines(render_data, title_lines),
             )) is not None
         ]
         body_font_size: int | None = (
