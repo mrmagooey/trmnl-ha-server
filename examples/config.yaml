@@ -75,6 +75,8 @@ dashboards:
       - entity_name: "sensor.sensor_name"
         friendly_name: "UV Forecast"
         type: entity
+        # Hide the card title so the value uses the freed space (must be unquoted true/false)
+        hide_title: true
 
       # Show a specific attribute instead of the entity state
       - entity_name: "climate.living_room"
