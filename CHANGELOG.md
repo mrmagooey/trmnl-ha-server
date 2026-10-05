@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-04
+
+### Added
+- `hide_title` option for every component type (default `false`). A card with `hide_title: true` draws no title and its content moves up into the freed space: graphs start their plot near the top, a single value is centred in the whole card, and calendars, entity lists and todo lists start near the top and fit more rows (a full-width calendar shows three events where it showed two). A hidden title is left out of the row's shared title size, so it no longer shrinks its neighbours' titles. `friendly_name` is still required — a card with no data still shows "No data for <friendly_name>". A todo list loses its "(N)" count with the title but keeps its page indicator. Body text stays at the size shared across its row. The value must be a YAML boolean; anything else, such as the quoted string `"true"`, logs a warning and shows the title.
+
+### Fixed
+- A history graph's latest-value label no longer collides with the x-axis and its time labels when the latest reading is at the bottom of the range, such as a value decaying to zero. The label is kept clear of the axis.
+- The latest-value label now sits level with the end of the line; it was drawn about 10px low on every graph.
+- The latest-value label no longer runs off the right edge of a narrow card. It steps down through a set of sizes (30, 26, 22, 18, 15) until it fits, so long values such as `-1234.5` stay inside the card while short values on wide cards keep the full size.
+- On short graph cards the latest-value label no longer rises into the title; it stays between the title and the axis, and keeps clear of the axis when there is not room for both.
+- With `zero_baseline: true`, a y-axis label that would overlap the extra `0.0` label no longer prints on top of it; its tick mark is kept and `0.0` is always shown.
+
 ## [1.13.0] - 2026-10-02
 
 ### Added
