@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFont
 import logging
 
 from trmnl_server import url_source
@@ -28,6 +28,10 @@ from trmnl_server.components import (
     TODO_NO_TITLE_HEADER_H,
     GRAPH_NO_TITLE_MARGIN_TOP,
     GRAPH_VALUE_LABEL_AXIS_GAP,
+    GRAPH_VALUE_LABEL_SIZES,
+    NOTO_FONT,
+    COMPONENT_SCALE,
+    COMPONENT_TITLE_FONT_SIZE,
     _calendar_content_top,
     _resolve_hide_title,
     _panel_draws_a_title,
@@ -572,6 +576,152 @@ class TestGraphValueLabelAxisClearance(unittest.TestCase):
         with mock.patch('trmnl_server.components.GRAPH_VALUE_LABEL_AXIS_GAP', -1000):
             unclamped = self._render(values)
         self.assertIsNone(ImageChops.difference(clamped, unclamped).getbbox())
+
+
+class _GraphLabelBase(unittest.TestCase):
+    """Shared render and ink-measuring helpers for latest-value / y-label tests."""
+
+    WIDTH = 400
+    HEIGHT = 240
+
+    def _render(self, values: list[float], width: int | None = None,
+                height: int | None = None, **kwargs) -> Image.Image:
+        """Render a 24h graph with readings at 20h/15h/10h/5h ago and 6 min ago."""
+        now = datetime(2025, 1, 15, 12, 0)
+        ages = [timedelta(hours=20), timedelta(hours=15), timedelta(hours=10),
+                timedelta(hours=5), timedelta(minutes=6)]
+        pts = [(now - a, v) for a, v in zip(ages, values)]
+        return _draw_graph_component(
+            'Power', pts, width or self.WIDTH, height or self.HEIGHT, mock.Mock(),
+            window_start=now - timedelta(hours=24), window_end=now, **kwargs,
+        )
+
+    @staticmethod
+    def _value_rows_cols(img: Image.Image, axis_y: int) -> tuple[list[int], list[int]]:
+        """Rows and columns with ink in the right margin above the x-tick label band."""
+        x0 = img.width - ceil(40 * 1.6) + 5
+        gray = img.convert('L')
+        rows = [y for y in range(axis_y + 5)
+                if any(gray.getpixel((x, y)) < 128 for x in range(x0, img.width))]
+        cols = [x for x in range(x0, img.width)
+                if any(gray.getpixel((x, y)) < 128 for y in range(axis_y + 5))]
+        return rows, cols
+
+    @staticmethod
+    def _runs(rows: list[int]) -> list[tuple[int, int]]:
+        """Group sorted row indices into (first, last) contiguous runs."""
+        runs: list[tuple[int, int]] = []
+        for r in rows:
+            if runs and r == runs[-1][1] + 1:
+                runs[-1] = (runs[-1][0], r)
+            else:
+                runs.append((r, r))
+        return runs
+
+    @staticmethod
+    def _font_ink_height(text: str, size: int) -> float:
+        """Unscaled ink height of text in the Noto font at an unscaled size."""
+        b = ImageFont.truetype(NOTO_FONT, size * COMPONENT_SCALE).getbbox(text)
+        return (b[3] - b[1]) / COMPONENT_SCALE
+
+
+class TestGraphValueLabelCentring(_GraphLabelBase):
+    """The latest-value label's ink is centred on the line end."""
+
+    def test_label_ink_centre_on_line_end(self):
+        """A flat mid-range series puts the line end at plot centre; ink centres there."""
+        img = self._render([5.0] * 5)
+        rows, _ = self._value_rows_cols(img, self.HEIGHT - 40)
+        # graph_height = 240 - 40 - 40 - 10 = 150; flat series sits at half range.
+        line_y = (self.HEIGHT - 40) - 75
+        centre = (rows[0] + rows[-1] + 1) / 2
+        self.assertLessEqual(abs(centre - line_y), 1.0)
+
+
+class TestGraphZeroBaselineLabelOverlap(_GraphLabelBase):
+    """The extra zero label must not collide with a neighbouring y-label."""
+
+    def _label_runs(self, img: Image.Image) -> list[tuple[int, int]]:
+        gray = img.convert('L')
+        rows = [y for y in range(self.HEIGHT - 40 + 8)
+                if any(gray.getpixel((x, y)) < 128 for x in range(0, 34))]
+        return self._runs(rows)
+
+    def test_colliding_neighbour_text_omitted_tick_kept(self):
+        """-3..2 range: the 0.3 tick sits 10px above zero; its text goes, its tick stays."""
+        img = self._render([-3.0, -1.0, 0.5, 2.0, 0.1], zero_baseline=True)
+        runs = self._label_runs(img)
+        # Labels -3.0, -1.3, 0.0, 2.0 remain; the "0.3" text would merge with 0.0.
+        self.assertEqual(len(runs), 4, runs)
+        zero_y = (self.HEIGHT - 40) - 90
+        self.assertTrue(any(a <= zero_y <= b for a, b in runs), runs)
+        # No run is taller than a single 15pt label (~12px) -> no merged pair.
+        self.assertTrue(all(b - a + 1 <= 14 for a, b in runs), runs)
+        # The omitted label's tick mark (y = axis - 100) is still drawn.
+        gray = img.convert('L')
+        tick_y = (self.HEIGHT - 40) - 100
+        self.assertTrue(any(gray.getpixel((x, tick_y)) < 200 for x in range(36, 40)))
+
+    def test_non_colliding_zero_label_keeps_all_labels(self):
+        """-2..2: the zero label is 25px from neighbours, so all 5 labels are drawn."""
+        img = self._render([-2.0, -1.0, 0.0, 1.0, 2.0], zero_baseline=True)
+        self.assertEqual(len(self._label_runs(img)), 5)
+
+
+class TestGraphValueLabelFit(_GraphLabelBase):
+    """The latest-value label shrinks to fit the right margin and short cards."""
+
+    def test_wide_tile_short_value_uses_default_size(self):
+        """'5.0' in a wide tile is drawn at the 30pt default."""
+        img = self._render([5.0] * 5)
+        rows, _ = self._value_rows_cols(img, self.HEIGHT - 40)
+        self.assertEqual(GRAPH_VALUE_LABEL_SIZES[0], 30)
+        self.assertAlmostEqual(len(rows), self._font_ink_height('5.0', 30), delta=1.5)
+
+    def test_long_negative_value_stays_inside_tile_and_shrinks(self):
+        """-1234.5 in 266x146 is smaller than 30pt and does not touch the right edge."""
+        img = self._render([-1234.5] * 5, width=266, height=146)
+        rows, cols = self._value_rows_cols(img, 146 - 40)
+        self.assertTrue(cols)
+        self.assertLess(max(cols), 266 - 1)
+        self.assertLess(len(rows), self._font_ink_height('-1234.5', 30) - 2)
+
+    def test_four_digit_value_does_not_touch_edge(self):
+        """59.0 (reported touching the edge) now keeps a right pad."""
+        img = self._render([59.0] * 5, width=266, height=146)
+        _, cols = self._value_rows_cols(img, 146 - 40)
+        self.assertLess(max(cols), 266 - 1)
+
+
+class TestGraphValueLabelShortCard(_GraphLabelBase):
+    """On short tiles the label stays between the title and the x-axis."""
+
+    W = 266
+
+    def _title_bottom(self) -> int:
+        size = COMPONENT_TITLE_FONT_SIZE * COMPONENT_SCALE
+        b = ImageFont.truetype(NOTO_FONT, size).getbbox('Power')
+        return ceil((2 * COMPONENT_SCALE + b[3]) / COMPONENT_SCALE)
+
+    def test_label_between_title_and_axis_at_extremes(self):
+        """100px card: label ink top >= title bottom + GAP and bottom <= axis top - GAP."""
+        h = 100
+        axis_top = h - 40 - 1
+        for name, values in (('max', [0.0, 1.0, 2.0, 3.0, 4.0]),
+                             ('min', [4.0, 3.0, 2.0, 1.0, 0.0])):
+            with self.subTest(name):
+                img = self._render(values, width=self.W, height=h)
+                rows, _ = self._value_rows_cols(img, h - 40)
+                self.assertGreaterEqual(rows[0], self._title_bottom() + GRAPH_VALUE_LABEL_AXIS_GAP - 1)
+                self.assertLessEqual(rows[-1], axis_top - GRAPH_VALUE_LABEL_AXIS_GAP)
+
+    def test_degenerate_height_axis_clearance_wins(self):
+        """80px card cannot fit the floor label in the span; only axis clearance holds."""
+        h = 80
+        for values in ([0.0, 1.0, 2.0, 3.0, 4.0], [4.0, 3.0, 2.0, 1.0, 0.0]):
+            img = self._render(values, width=self.W, height=h)
+            rows, _ = self._value_rows_cols(img, h - 40)
+            self.assertLessEqual(rows[-1], (h - 40 - 1) - GRAPH_VALUE_LABEL_AXIS_GAP)
 
 
 class TestBuildDrawSegments(unittest.TestCase):
