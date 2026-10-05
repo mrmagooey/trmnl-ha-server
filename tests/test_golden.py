@@ -279,6 +279,29 @@ class TestGoldenImages(unittest.TestCase):
             img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
         assert_golden(img_io, 'history_graph_bipolar')
 
+    @mock.patch('trmnl_server.hass_client._fetch_history')
+    def test_history_graph_decay_to_zero(self, mock_fetch_history):
+        """A series decaying to 0 keeps its latest-value label above the x-axis."""
+        mock_fetch_history.return_value = [[
+            {'state': '5.0', 'last_changed': '2024-01-14T21:00:00+00:00'},
+            {'state': '3.0', 'last_changed': '2024-01-15T02:00:00+00:00'},
+            {'state': '1.5', 'last_changed': '2024-01-15T07:00:00+00:00'},
+            {'state': '0.6', 'last_changed': '2024-01-15T12:00:00+00:00'},
+            {'state': '0.0', 'last_changed': '2024-01-15T16:54:00+00:00'},
+        ]]
+        dashboard = {
+            'name': 'power',
+            'title': 'Power',
+            'components': [
+                {'entity_name': 'sensor.power', 'friendly_name': 'Power',
+                 'type': 'history_graph', 'hours': 24},
+            ],
+        }
+        fixed_now = datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc)
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger, now=fixed_now)
+        assert_golden(img_io, 'history_graph_decay_to_zero')
+
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_entity_dashboard(self, mock_get_entity_state):
         """Single entity value displayed large."""

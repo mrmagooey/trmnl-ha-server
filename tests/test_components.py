@@ -2,11 +2,12 @@
 
 import functools
 import time
+from math import ceil
 from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFont
 import logging
 
 from trmnl_server import url_source
@@ -26,6 +27,11 @@ from trmnl_server.components import (
     NO_TITLE_CONTENT_TOP,
     TODO_NO_TITLE_HEADER_H,
     GRAPH_NO_TITLE_MARGIN_TOP,
+    GRAPH_VALUE_LABEL_AXIS_GAP,
+    GRAPH_VALUE_LABEL_SIZES,
+    NOTO_FONT,
+    COMPONENT_SCALE,
+    TITLE_BAND_GAP,
     _calendar_content_top,
     _resolve_hide_title,
     _panel_draws_a_title,
@@ -511,6 +517,266 @@ class TestDrawGraphComponent(unittest.TestCase):
         )
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (400, 300))
+
+
+class TestGraphValueLabelAxisClearance(unittest.TestCase):
+    """The latest-value label must stay above the x-axis line."""
+
+    WIDTH = 400
+    HEIGHT = 240
+
+    def _render(self, values: list[float], **kwargs) -> Image.Image:
+        """Render a 24h graph with readings at 20h/15h/10h/5h ago and 6 min ago."""
+        now = datetime(2025, 1, 15, 12, 0)
+        ages = [timedelta(hours=20), timedelta(hours=15), timedelta(hours=10),
+                timedelta(hours=5), timedelta(minutes=6)]
+        pts = [(now - a, v) for a, v in zip(ages, values)]
+        return _draw_graph_component(
+            'Power', pts, self.WIDTH, self.HEIGHT, mock.Mock(),
+            window_start=now - timedelta(hours=24), window_end=now, **kwargs,
+        )
+
+    # Mirror the drawer's unscaled margins (margin_bottom = 40, margin_right = ceil(40 * 1.6)).
+    AXIS_Y = HEIGHT - 40
+    MARGIN_RIGHT = ceil(40 * 1.6)
+
+    def _label_rows(self, img: Image.Image) -> list[int]:
+        """Rows with ink in the right-margin column above the x-tick label band."""
+        x0 = self.WIDTH - self.MARGIN_RIGHT + 5
+        gray = img.convert('L')
+        return [
+            y for y in range(self.AXIS_Y + 5)
+            if any(gray.getpixel((x, y)) < 128 for x in range(x0, self.WIDTH))
+        ]
+
+    def _assert_clear(self, img: Image.Image) -> None:
+        rows = self._label_rows(img)
+        self.assertTrue(rows, "value label should be drawn")
+        # Axis top edge is AXIS_Y - 1; ink must end GAP rows above it.
+        self.assertLessEqual(max(rows), self.AXIS_Y - GRAPH_VALUE_LABEL_AXIS_GAP - 1)
+
+    def test_decay_to_zero_label_clears_axis(self):
+        """A value decaying to 0.0 keeps its label ink above the x-axis."""
+        self._assert_clear(self._render([5.0, 3.0, 1.5, 0.6, 0.0]))
+
+    def test_zero_baseline_last_value_zero_clears_axis(self):
+        """zero_baseline with last value 0.0 at range bottom clears the axis."""
+        self._assert_clear(self._render([5.0, 3.0, 1.5, 0.6, 0.0], zero_baseline=True))
+
+    def test_titleless_last_value_minimum_clears_axis(self):
+        """A titleless graph with last value at the minimum clears the axis."""
+        self._assert_clear(
+            self._render([5.0, 3.0, 1.5, 0.6, 0.0], title_lines=NO_TITLE_LINES)
+        )
+
+    def test_mid_range_label_position_unchanged(self):
+        """A label that already clears the axis renders identically to no clamp."""
+        values = [1.0, 2.0, 3.0, 4.0, 3.0]
+        clamped = self._render(values)
+        with mock.patch('trmnl_server.components.GRAPH_VALUE_LABEL_AXIS_GAP', -1000):
+            unclamped = self._render(values)
+        self.assertIsNone(ImageChops.difference(clamped, unclamped).getbbox())
+
+
+MARGIN_RIGHT = ceil(40 * 1.6)  # the drawer's unscaled right margin
+
+
+class _GraphLabelBase(unittest.TestCase):
+    """Shared render and ink-measuring helpers for latest-value / y-label tests."""
+
+    WIDTH = 400
+    HEIGHT = 240
+
+    def _render(self, values: list[float], width: int | None = None,
+                height: int | None = None, name: str = 'Power',
+                **kwargs) -> Image.Image:
+        """Render a 24h graph with readings at 20h/15h/10h/5h ago and 6 min ago."""
+        now = datetime(2025, 1, 15, 12, 0)
+        ages = [timedelta(hours=20), timedelta(hours=15), timedelta(hours=10),
+                timedelta(hours=5), timedelta(minutes=6)]
+        pts = [(now - a, v) for a, v in zip(ages, values)]
+        return _draw_graph_component(
+            name, pts, width or self.WIDTH, height or self.HEIGHT, mock.Mock(),
+            window_start=now - timedelta(hours=24), window_end=now, **kwargs,
+        )
+
+    @staticmethod
+    def _ink(img: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
+        """Crop box and threshold it to a mask where ink is non-zero."""
+        return img.convert('L').crop(box).point(lambda v: 255 if v < 128 else 0)
+
+    def _value_box(self, img: Image.Image, axis_y: int,
+                   x0: int | None = None) -> tuple[int, int, int, int]:
+        """Absolute (left, top, right, bottom) ink box of the latest-value label.
+
+        right and bottom are exclusive. Scans the right margin above the x-tick
+        label band, from x0 (default: the label's origin x).
+        """
+        x0 = img.width - MARGIN_RIGHT + 5 if x0 is None else x0
+        box = self._ink(img, (x0, 0, img.width, axis_y + 5)).getbbox()
+        self.assertIsNotNone(box, "value label should be drawn")
+        return (box[0] + x0, box[1], box[2] + x0, box[3])
+
+    def _title_bottom(self, img: Image.Image, margin_top: int) -> int:
+        """Exclusive ink bottom of the title, read from pixels.
+
+        Above margin_top - 3 the central band holds only the title: the y-labels
+        are at the left and the data line sits at or below margin_top - 1.
+        """
+        box = self._ink(img, (img.width // 2 - 40, 0, img.width // 2 + 40,
+                              margin_top - 3)).getbbox()
+        self.assertIsNotNone(box, "title should be drawn")
+        return box[3]
+
+    def _label_runs(self, img: Image.Image, axis_y: int) -> list[tuple[int, int]]:
+        """Contiguous (first, last) row runs of y-label ink left of the tick marks."""
+        _, yproj = self._ink(img, (0, 0, 34, axis_y + 8)).getprojection()
+        runs: list[tuple[int, int]] = []
+        for r, on in enumerate(yproj):
+            if not on:
+                continue
+            if runs and r == runs[-1][1] + 1:
+                runs[-1] = (runs[-1][0], r)
+            else:
+                runs.append((r, r))
+        return runs
+
+    @staticmethod
+    def _font_ink_height(text: str, size: int) -> float:
+        """Unscaled ink height of text in the Noto font at an unscaled size."""
+        b = ImageFont.truetype(NOTO_FONT, size * COMPONENT_SCALE).getbbox(text)
+        return (b[3] - b[1]) / COMPONENT_SCALE
+
+
+class TestGraphValueLabelCentring(_GraphLabelBase):
+    """The latest-value label's ink is centred on the line end."""
+
+    def test_label_ink_centre_on_line_end(self):
+        """A flat mid-range series puts the line end at plot centre; ink centres there."""
+        img = self._render([5.0] * 5)
+        _, top, _, bottom = self._value_box(img, self.HEIGHT - 40)
+        # graph_height = 240 - 40 - 40 - 10 = 150; flat series sits at half range.
+        line_y = (self.HEIGHT - 40) - 75
+        self.assertLessEqual(abs((top + bottom) / 2 - line_y), 1.0)
+
+
+class TestGraphZeroBaselineLabelOverlap(_GraphLabelBase):
+    """The extra zero label must not collide with a neighbouring y-label."""
+
+    AXIS_Y = 240 - 40
+
+    def test_colliding_neighbour_text_omitted_tick_kept(self):
+        """-3..2 range: the 0.3 tick sits 10px above zero; its text goes, its tick stays."""
+        img = self._render([-3.0, -1.0, 0.5, 2.0, 0.1], zero_baseline=True)
+        runs = self._label_runs(img, self.AXIS_Y)
+        # Labels -3.0, -1.3, 0.0, 2.0 remain; the "0.3" text would merge with 0.0.
+        self.assertEqual(len(runs), 4, runs)
+        zero_y = self.AXIS_Y - 90
+        self.assertTrue(any(a <= zero_y <= b for a, b in runs), runs)
+        # No run is taller than a single 15pt label (~12px) -> no merged pair.
+        self.assertTrue(all(b - a + 1 <= 14 for a, b in runs), runs)
+        # The omitted label's tick mark (y = axis - 100) is still drawn.
+        tick_y = self.AXIS_Y - 100
+        extrema = img.convert('L').crop((36, tick_y, 40, tick_y + 1)).getextrema()
+        self.assertLess(extrema[0], 200)
+
+    def test_non_colliding_zero_label_keeps_all_labels(self):
+        """-2..2: the zero label is 25px from neighbours, so all 5 labels are drawn."""
+        img = self._render([-2.0, -1.0, 0.0, 1.0, 2.0], zero_baseline=True)
+        self.assertEqual(len(self._label_runs(img, self.AXIS_Y)), 5)
+
+    def test_negative_only_range_has_tick_on_zero_and_keeps_all_labels(self):
+        """-3..0 with zero_baseline: the top tick is 0, no extra label, all 4 drawn."""
+        img = self._render([-3.0, -2.0, -1.0, -0.5, -1.0], zero_baseline=True)
+        self.assertEqual(len(self._label_runs(img, self.AXIS_Y)), 4)
+
+
+class TestGraphValueLabelFit(_GraphLabelBase):
+    """The latest-value label shrinks to fit the right margin."""
+
+    def _assert_rung(self, img: Image.Image, text: str, size: int, h: int,
+                     w: int) -> None:
+        """Label is inside the tile with a 2px pad and drawn at the given ladder size."""
+        _, top, right, bottom = self._value_box(img, h - 40)
+        self.assertLessEqual(right, w - 2)
+        self.assertAlmostEqual(bottom - top, self._font_ink_height(text, size), delta=1.5)
+
+    def test_wide_tile_short_value_uses_default_size(self):
+        """'5.0' in a wide tile is drawn at the 30pt default."""
+        self.assertEqual(GRAPH_VALUE_LABEL_SIZES[0], 30)
+        img = self._render([5.0] * 5)
+        self._assert_rung(img, '5.0', 30, self.HEIGHT, self.WIDTH)
+
+    def test_long_negative_value_drops_to_floor_inside_tile(self):
+        """-1234.5 in 266x146 fits only at a small rung and stays inside the tile."""
+        img = self._render([-1234.5] * 5, width=266, height=146)
+        self._assert_rung(img, '-1234.5', 18, 146, 266)
+
+    def test_four_digit_value_steps_down_to_keep_right_pad(self):
+        """59.0 (reported touching the edge) steps down the ladder to keep a pad."""
+        img = self._render([59.0] * 5, width=266, height=146)
+        self._assert_rung(img, '59.0', 26, 146, 266)
+
+
+class TestGraphValueLabelTitleBound(_GraphLabelBase):
+    """The label stays between the title (or canvas top) and the x-axis."""
+
+    W = 266
+    MAX_SERIES = [0.0, 0.0, 0.0, 0.0, 4.0]
+    MIN_SERIES = [4.0, 4.0, 4.0, 4.0, 0.0]
+
+    def test_single_line_title_short_card_label_below_title(self):
+        """100px card: label ink top >= title ink bottom + GAP, bottom <= axis top - GAP."""
+        h = 100
+        axis_top = h - 40 - 1
+        for name, values in (('max', self.MAX_SERIES), ('min', self.MIN_SERIES)):
+            with self.subTest(name):
+                img = self._render(values, width=self.W, height=h)
+                _, top, _, bottom = self._value_box(img, h - 40)
+                self.assertGreaterEqual(
+                    top, self._title_bottom(img, 40) + GRAPH_VALUE_LABEL_AXIS_GAP - 1)
+                self.assertLessEqual(bottom - 1, axis_top - GRAPH_VALUE_LABEL_AXIS_GAP)
+
+    def test_two_line_title_label_below_title(self):
+        """A wrapped two-line title raises margin_top; the label still stays below it.
+
+        At 105px the axis clamp would push a full-size label up into the title,
+        so the title bound is what forces the smaller rung.
+        """
+        h = 105
+        name = 'Living room average temperature'
+        for series_name, values in (('max', self.MAX_SERIES), ('min', self.MIN_SERIES)):
+            with self.subTest(series_name):
+                img = self._render(values, width=self.W, height=h, name=name,
+                                   title_font_size=16, title_lines=2)
+                # A wrapped title's first line reaches ~x=211, just into the label's
+                # column range; scan from 214 so only the label's digits are measured.
+                _, top, _, bottom = self._value_box(img, h - 40, x0=214)
+                band = _title_band_height(16, 2, mock.Mock())
+                margin_top = max(40, 2 + band + TITLE_BAND_GAP)
+                title_bottom = self._title_bottom(img, margin_top)
+                self.assertGreaterEqual(top, title_bottom + GRAPH_VALUE_LABEL_AXIS_GAP - 1)
+                self.assertLessEqual(bottom - 1, (h - 40 - 1) - GRAPH_VALUE_LABEL_AXIS_GAP)
+
+    def test_titleless_label_keeps_gap_from_canvas_top(self):
+        """With no title the upper bound is the canvas top plus GAP.
+
+        GRAPH_NO_TITLE_MARGIN_TOP is patched to 2 so the line end at the max sits
+        near the canvas top; unclamped centring would put the ink above the GAP.
+        """
+        with mock.patch('trmnl_server.components.GRAPH_NO_TITLE_MARGIN_TOP', 2):
+            img = self._render(self.MAX_SERIES, width=self.W, height=120,
+                               title_lines=NO_TITLE_LINES)
+        _, top, _, _ = self._value_box(img, 120 - 40)
+        self.assertGreaterEqual(top, GRAPH_VALUE_LABEL_AXIS_GAP)
+
+    def test_degenerate_height_axis_clearance_wins(self):
+        """80px card cannot fit the floor label in the span; only axis clearance holds."""
+        h = 80
+        for values in (self.MAX_SERIES, self.MIN_SERIES):
+            img = self._render(values, width=self.W, height=h)
+            _, _, _, bottom = self._value_box(img, h - 40)
+            self.assertLessEqual(bottom - 1, (h - 40 - 1) - GRAPH_VALUE_LABEL_AXIS_GAP)
 
 
 class TestBuildDrawSegments(unittest.TestCase):

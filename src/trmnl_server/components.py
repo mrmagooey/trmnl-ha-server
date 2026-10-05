@@ -68,6 +68,16 @@ TODO_HEADER_H: int = 50
 # Top inset for a hide_title card: content starts here instead of below a title.
 NO_TITLE_CONTENT_TOP: int = 10
 GRAPH_NO_TITLE_MARGIN_TOP: int = 15  # unscaled; clears the top y-axis label's ink
+# Unscaled gap kept between the latest-value label's ink bottom and the x-axis
+# line, so a value at the bottom of the range doesn't collide with the axis.
+GRAPH_VALUE_LABEL_AXIS_GAP: int = 4
+# Unscaled font sizes tried, largest first, for the latest-value label; the first
+# whose ink fits the right margin and the free vertical span is used. 15 is the
+# y-axis font size and the floor: it is drawn even if it still doesn't fit.
+GRAPH_VALUE_LABEL_SIZES: tuple[int, ...] = (30, 26, 22, 18, 15)
+# Unscaled gap between the zero-baseline "0.0" label's ink and a neighbouring
+# y-label's ink; a regular label closer than this loses its text (keeps its tick).
+GRAPH_ZERO_LABEL_GAP: int = 2
 # A titleless todo keeps a band for its top-right page indicator (drawn at y=12,
 # ink ending ~32); fixed rather than pagination-dependent, since capacity decides
 # pagination and a pagination-dependent header would be circular.
@@ -1173,6 +1183,53 @@ def _build_draw_segments(
     return segments
 
 
+def _fit_graph_value_label(
+    d: ImageDraw.ImageDraw,
+    text: str,
+    last_y: float,
+    max_right: float,
+    ink_top_min: float,
+    ink_bottom_max: float,
+    scale: int,
+    logger: "Logger",
+) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, float]:
+    """Chooses the latest-value label font and vertical draw origin.
+
+    Picks the largest size in GRAPH_VALUE_LABEL_SIZES whose ink fits within
+    max_right horizontally and the [ink_top_min, ink_bottom_max] span
+    vertically. If none fits, the smallest (floor) size is used anyway: a
+    too-wide label then overflows the right edge, and a too-tall one is
+    placed by the axis clamp below.
+
+    Args:
+        d: Draw context used to measure text.
+        text: The label text.
+        last_y: Y of the line end (scaled pixels); the ink is centred on it.
+        max_right: Largest allowed ink right edge, relative to the draw
+            origin x (scaled pixels).
+        ink_top_min: Smallest allowed ink top y (scaled pixels).
+        ink_bottom_max: Largest allowed ink bottom y (scaled pixels).
+        scale: Supersampling factor applied to the unscaled font sizes.
+        logger: Logger passed to ``_load_font`` for the missing-font warning.
+
+    Returns:
+        (font, text_y) where text_y is the y to pass to ``d.text``.
+    """
+    for size in GRAPH_VALUE_LABEL_SIZES:
+        font = _load_font(size * scale, logger)
+        bbox = d.textbbox((0, 0), text, font=font)
+        if bbox[2] <= max_right and bbox[3] - bbox[1] <= ink_bottom_max - ink_top_min:
+            break
+    # Centre the ink (not the draw box) on the line end, then keep it clear of
+    # the axis, then of the title. If the span is too short even for the floor
+    # size, the final axis clamp wins so the label never collides with the axis.
+    text_y: float = last_y - (bbox[1] + bbox[3]) / 2
+    text_y = min(text_y, ink_bottom_max - bbox[3])
+    text_y = max(text_y, ink_top_min - bbox[1])
+    text_y = min(text_y, ink_bottom_max - bbox[3])
+    return font, text_y
+
+
 def _draw_graph_component(
     friendly_name: str,
     data_points: list[tuple[datetime, float | None]],
@@ -1243,14 +1300,12 @@ def _draw_graph_component(
                 title_width_val = title_bbox[2] - title_bbox[0]
 
         font_axes = ImageFont.truetype(NOTO_FONT, 15 * scale)
-        font_value = ImageFont.truetype(NOTO_FONT, 30 * scale)
     except IOError:
         if not _font_warned[0]:
             logger.warning("%s not found. Using default font.", NOTO_FONT)
             _font_warned[0] = True
         font_title = ImageFont.load_default()
         font_axes = ImageFont.load_default()
-        font_value = ImageFont.load_default()
 
     # Define graph dimensions
     # `margin` historically meant both the left inset and the top/bottom inset.
@@ -1285,6 +1340,7 @@ def _draw_graph_component(
         )
         return img.resize((width, height), Image.LANCZOS)
 
+    title_bottom: float = 0  # ink bottom of the drawn title; 0 when titleless
     if title_lines != NO_TITLE_LINES:
         # Draw title
         if title_lines > 1:
@@ -1306,6 +1362,7 @@ def _draw_graph_component(
             font=font_title, fill='black', align='center',
             spacing=TITLE_LINE_SPACING * scale,
         )
+        title_bottom = 2 * scale + text_bbox[3]
 
     # Process data — min/max and the "last value" label are driven by real
     # (non-gap) readings only; gap markers only affect line drawing below.
@@ -1346,10 +1403,31 @@ def _draw_graph_component(
         width=scale * 2,
     )
 
-    # Draw Y-axis labels
+    # Bipolar variant: an extra "0.0" tick label is needed unless a regular tick
+    # already lands on 0. Measure its ink first so colliding neighbours can yield.
     num_y_labels: int = 3
+    tick_vals: list[float] = [
+        min_val + (max_val - min_val) * i / num_y_labels
+        for i in range(num_y_labels + 1)
+    ]
+    draw_zero_label: bool = zero_baseline and not any(abs(v) < 1e-9 for v in tick_vals)
+    zlabel: str = "0.0"
+    zero_y: float = 0.0
+    zero_origin_y: float = 0.0
+    ztext_width: int = 0
+    zero_ink: tuple[float, float] = (0.0, 0.0)
+    if draw_zero_label:
+        zero_y = (large_height - margin_bottom) - (
+            (0.0 - min_val) / (max_val - min_val)
+        ) * graph_height
+        ztext_bbox = d.textbbox((0, 0), zlabel, font=font_axes)
+        ztext_width = ztext_bbox[2] - ztext_bbox[0]
+        zero_origin_y = zero_y - (ztext_bbox[3] - ztext_bbox[1]) / 2
+        zero_ink = (zero_origin_y + ztext_bbox[1], zero_origin_y + ztext_bbox[3])
+
+    # Draw Y-axis labels
     for i in range(num_y_labels + 1):
-        val: float = min_val + (max_val - min_val) * i / num_y_labels
+        val: float = tick_vals[i]
         y: float = (large_height - margin_bottom) - (i / num_y_labels) * graph_height
         if i == 0:
             y -= 10
@@ -1357,39 +1435,33 @@ def _draw_graph_component(
         text_bbox = d.textbbox((0, 0), label, font=font_axes)
         text_width = text_bbox[2] - text_bbox[0]
         text_height = text_bbox[3] - text_bbox[1]
-        d.text(
-            (margin_left - text_width - (5 * scale), y - text_height / 2),
-            label,
-            font=font_axes,
-            fill='black',
+        origin_y: float = y - text_height / 2
+        collides: bool = draw_zero_label and (
+            origin_y + text_bbox[1] < zero_ink[1] + GRAPH_ZERO_LABEL_GAP * scale
+            and origin_y + text_bbox[3] > zero_ink[0] - GRAPH_ZERO_LABEL_GAP * scale
         )
-        d.line([(margin_left - (5 * scale), y), (margin_left, y)], fill='black', width=scale)
-
-    # Bipolar variant: guarantee a labeled "0" tick (unless one already lands on 0).
-    if zero_baseline:
-        existing_tick_vals = [
-            min_val + (max_val - min_val) * i / num_y_labels
-            for i in range(num_y_labels + 1)
-        ]
-        if not any(abs(v) < 1e-9 for v in existing_tick_vals):
-            zero_y: float = (large_height - margin_bottom) - (
-                (0.0 - min_val) / (max_val - min_val)
-            ) * graph_height
-            zlabel: str = "0.0"
-            ztext_bbox = d.textbbox((0, 0), zlabel, font=font_axes)
-            ztext_width: int = ztext_bbox[2] - ztext_bbox[0]
-            ztext_height: int = ztext_bbox[3] - ztext_bbox[1]
+        if not collides:  # the tick mark below is kept either way
             d.text(
-                (margin_left - ztext_width - (5 * scale), zero_y - ztext_height / 2),
-                zlabel,
+                (margin_left - text_width - (5 * scale), origin_y),
+                label,
                 font=font_axes,
                 fill='black',
             )
-            d.line(
-                [(margin_left - (5 * scale), zero_y), (margin_left, zero_y)],
-                fill='black',
-                width=scale,
-            )
+        d.line([(margin_left - (5 * scale), y), (margin_left, y)], fill='black', width=scale)
+
+    # Bipolar variant: guarantee a labeled "0" tick (unless one already lands on 0).
+    if draw_zero_label:
+        d.text(
+            (margin_left - ztext_width - (5 * scale), zero_origin_y),
+            zlabel,
+            font=font_axes,
+            fill='black',
+        )
+        d.line(
+            [(margin_left - (5 * scale), zero_y), (margin_left, zero_y)],
+            fill='black',
+            width=scale,
+        )
 
     # Draw X-axis labels
     if (max_time - min_time).total_seconds() > 0:
@@ -1433,10 +1505,17 @@ def _draw_graph_component(
     # Display last value (the most recent REAL reading, computed above)
     last_value_text: str = f"{last_value:.1f}"
     _last_x, last_y = to_coords(last_real_time, last_value)
-    text_bbox = d.textbbox((0, 0), last_value_text, font=font_value)
-    text_height = text_bbox[3] - text_bbox[1]
     text_x: float = large_width - margin_right + (5 * scale)
-    text_y: float = last_y - (text_height / 2)
+    # The axis line's top edge is half its width above its centre y.
+    font_value, text_y = _fit_graph_value_label(
+        d, last_value_text, last_y,
+        max_right=large_width - text_x - 2 * scale,
+        ink_top_min=title_bottom + GRAPH_VALUE_LABEL_AXIS_GAP * scale,
+        ink_bottom_max=(large_height - margin_bottom) - scale
+        - GRAPH_VALUE_LABEL_AXIS_GAP * scale,
+        scale=scale,
+        logger=logger,
+    )
     d.text((text_x, text_y), last_value_text, font=font_value, fill='black')
 
     # Draw data line: solid between consecutive real readings, dashed
