@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from math import ceil, isfinite, sqrt
 from pathlib import Path
-from typing import Any, NamedTuple, TYPE_CHECKING
+from typing import NamedTuple, TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -1191,7 +1191,8 @@ def _fit_graph_value_label(
     ink_top_min: float,
     ink_bottom_max: float,
     scale: int,
-) -> tuple[ImageFont.ImageFont | ImageFont.FreeTypeFont, float]:
+    logger: "Logger",
+) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, float]:
     """Chooses the latest-value label font and vertical draw origin.
 
     Picks the largest size in GRAPH_VALUE_LABEL_SIZES whose ink fits within
@@ -1204,26 +1205,21 @@ def _fit_graph_value_label(
         d: Draw context used to measure text.
         text: The label text.
         last_y: Y of the line end (scaled pixels); the ink is centred on it.
-        max_right: Largest allowed ink right edge, measured from the draw
+        max_right: Largest allowed ink right edge, relative to the draw
             origin x (scaled pixels).
         ink_top_min: Smallest allowed ink top y (scaled pixels).
         ink_bottom_max: Largest allowed ink bottom y (scaled pixels).
         scale: Supersampling factor applied to the unscaled font sizes.
+        logger: Logger passed to ``_load_font`` for the missing-font warning.
 
     Returns:
         (font, text_y) where text_y is the y to pass to ``d.text``.
     """
-    chosen: tuple[Any, tuple[int, int, int, int]] | None = None
     for size in GRAPH_VALUE_LABEL_SIZES:
-        try:
-            font = ImageFont.truetype(NOTO_FONT, size * scale)
-        except IOError:
-            font = ImageFont.load_default()
+        font = _load_font(size * scale, logger)
         bbox = d.textbbox((0, 0), text, font=font)
-        chosen = (font, bbox)
         if bbox[2] <= max_right and bbox[3] - bbox[1] <= ink_bottom_max - ink_top_min:
             break
-    font, bbox = chosen  # type: ignore[misc]
     # Centre the ink (not the draw box) on the line end, then keep it clear of
     # the axis, then of the title. If the span is too short even for the floor
     # size, the final axis clamp wins so the label never collides with the axis.
@@ -1414,18 +1410,20 @@ def _draw_graph_component(
         min_val + (max_val - min_val) * i / num_y_labels
         for i in range(num_y_labels + 1)
     ]
-    zero_y: float = (large_height - margin_bottom) - (
-        (0.0 - min_val) / (max_val - min_val)
-    ) * graph_height
-    zlabel: str = "0.0"
-    ztext_bbox = d.textbbox((0, 0), zlabel, font=font_axes)
-    ztext_width: int = ztext_bbox[2] - ztext_bbox[0]
-    ztext_height: int = ztext_bbox[3] - ztext_bbox[1]
-    zero_origin_y: float = zero_y - ztext_height / 2
     draw_zero_label: bool = zero_baseline and not any(abs(v) < 1e-9 for v in tick_vals)
-    zero_ink: tuple[float, float] = (
-        zero_origin_y + ztext_bbox[1], zero_origin_y + ztext_bbox[3]
-    )
+    zlabel: str = "0.0"
+    zero_y: float = 0.0
+    zero_origin_y: float = 0.0
+    ztext_width: int = 0
+    zero_ink: tuple[float, float] = (0.0, 0.0)
+    if draw_zero_label:
+        zero_y = (large_height - margin_bottom) - (
+            (0.0 - min_val) / (max_val - min_val)
+        ) * graph_height
+        ztext_bbox = d.textbbox((0, 0), zlabel, font=font_axes)
+        ztext_width = ztext_bbox[2] - ztext_bbox[0]
+        zero_origin_y = zero_y - (ztext_bbox[3] - ztext_bbox[1]) / 2
+        zero_ink = (zero_origin_y + ztext_bbox[1], zero_origin_y + ztext_bbox[3])
 
     # Draw Y-axis labels
     for i in range(num_y_labels + 1):
@@ -1516,6 +1514,7 @@ def _draw_graph_component(
         ink_bottom_max=(large_height - margin_bottom) - scale
         - GRAPH_VALUE_LABEL_AXIS_GAP * scale,
         scale=scale,
+        logger=logger,
     )
     d.text((text_x, text_y), last_value_text, font=font_value, fill='black')
 
