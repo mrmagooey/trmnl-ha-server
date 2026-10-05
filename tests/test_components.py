@@ -697,7 +697,7 @@ class TestGraphValueLabelFit(_GraphLabelBase):
     def _assert_rung(self, img: Image.Image, text: str, size: int, h: int,
                      w: int) -> None:
         """Label is inside the tile with a 2px pad and drawn at the given ladder size."""
-        left, top, right, bottom = self._value_box(img, h - 40)
+        _, top, right, bottom = self._value_box(img, h - 40)
         self.assertLessEqual(right, w - 2)
         self.assertAlmostEqual(bottom - top, self._font_ink_height(text, size), delta=1.5)
 
@@ -759,13 +759,16 @@ class TestGraphValueLabelTitleBound(_GraphLabelBase):
                 self.assertLessEqual(bottom - 1, (h - 40 - 1) - GRAPH_VALUE_LABEL_AXIS_GAP)
 
     def test_titleless_label_keeps_gap_from_canvas_top(self):
-        """With no title the upper bound is the canvas top plus GAP."""
-        for values in (self.MAX_SERIES, self.MIN_SERIES):
-            img = self._render(values, width=self.W, height=100,
+        """With no title the upper bound is the canvas top plus GAP.
+
+        GRAPH_NO_TITLE_MARGIN_TOP is patched to 2 so the line end at the max sits
+        near the canvas top; unclamped centring would put the ink above the GAP.
+        """
+        with mock.patch('trmnl_server.components.GRAPH_NO_TITLE_MARGIN_TOP', 2):
+            img = self._render(self.MAX_SERIES, width=self.W, height=120,
                                title_lines=NO_TITLE_LINES)
-            _, top, _, bottom = self._value_box(img, 100 - 40)
-            self.assertGreaterEqual(top, GRAPH_VALUE_LABEL_AXIS_GAP - 1)
-            self.assertLessEqual(bottom - 1, (100 - 40 - 1) - GRAPH_VALUE_LABEL_AXIS_GAP)
+        _, top, _, _ = self._value_box(img, 120 - 40)
+        self.assertGreaterEqual(top, GRAPH_VALUE_LABEL_AXIS_GAP)
 
     def test_degenerate_height_axis_clearance_wins(self):
         """80px card cannot fit the floor label in the span; only axis clearance holds."""
