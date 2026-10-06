@@ -9,6 +9,7 @@ A Python HTTP server that fetches data from Home Assistant and renders black-and
 - **Per-device scheduling**: Each device has an independent schedule mapping dashboards to time windows and days of the week.
 - **Multiple component types**: Dashboards can mix history graphs, single entity values, entity lists, calendar events, todo lists, and values scraped from external URLs.
 - **Sleep windows**: Devices can be configured with a sleep window; during sleep the server returns a refresh rate equal to the seconds until wake-up.
+- **Firmware updates**: Optionally serves device firmware from a GitHub release, prompting devices whose `FW-Version` differs from the configured version to update.
 - **Home Assistant integration**: Fetches entity state, history, calendar events, and todo lists from the Home Assistant API.
 - **E-ink optimized**: All images are rendered in black and white at double resolution then downscaled.
 - **Containerized**: Multi-stage `Dockerfile` using `uv` for efficient builds.
@@ -30,7 +31,7 @@ A Python HTTP server that fetches data from Home Assistant and renders black-and
 
 ### Configuration File (`config.yaml`)
 
-The config file has two top-level sections: `devices` and `dashboards`.
+The config file has two required top-level sections, `devices` and `dashboards`, plus an optional `firmware` section.
 
 #### `devices`
 
@@ -120,7 +121,7 @@ devices:
     firmware_asset_pattern: "*seeed_xiao_esp32c3*.bin"
 ```
 
-If `firmware:` is omitted, `/api/display` always returns `update_firmware: false` and `firmware_url: null` (unchanged from previous versions of this server). Any resolution failure (repo/tag not found, no asset matches the pattern, GitHub unreachable) degrades the same way and logs a warning — it never affects dashboard image serving.
+If `firmware:` is omitted, `/api/display` always returns `update_firmware: false` and `firmware_url: null` (unchanged from previous versions of this server). Any resolution failure (repo/tag not found, no asset matches the pattern, GitHub unreachable) degrades the same way and logs a warning — it never affects dashboard image serving. After a failure, that repo/version/pattern combination isn't retried against GitHub for 5 minutes, so fixing the cause on the GitHub side (e.g. publishing the missing release or asset) can take up to 5 minutes to be picked up; changing `repo`, `version` or the asset pattern takes effect immediately.
 
 #### Component Types
 
