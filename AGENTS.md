@@ -108,10 +108,12 @@ docker run -p 8000:8000 --env-file .env trmnl-server
 - `HASS_TOKEN`: API access token
 - `CONFIG_PATH`: Path to config.yaml (default: `config.yaml`)
 - `SERVER_NAME`: Server URL for display
+- `FIRMWARE_CACHE_DIR`: Directory for cached firmware binaries (default: `firmware_cache`)
 
 ## API Endpoints
 - `GET /api/display`: Returns next dashboard image URL (JSON)
 - `GET /static/<name>.png`: Serves generated PNG images
+- `GET /static/firmware/<version>/<filename>`: Serves a cached firmware binary (only when `firmware:` is configured)
 - `POST /api/logs`: Debug endpoint for logging requests
 
 ## Component Notes
