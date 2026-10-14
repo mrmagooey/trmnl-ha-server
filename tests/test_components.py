@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image, ImageChops, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 import logging
 
 from trmnl_server import url_source
@@ -54,6 +54,8 @@ from trmnl_server.components import (
     _spine_ink_height,
     _calendar_row_advance,
     CALENDAR_MIN_BODY_SIZE,
+    CALENDAR_SEP_H,
+    CALENDAR_BOTTOM_MARGIN,
     CALENDAR_GUTTER_W,
     _calendar_event_row,
     _calendar_day_groups,
@@ -1011,7 +1013,9 @@ class TestDrawCalendarComponent(unittest.TestCase):
             title_font_size=35, title_lines=2,
         )
         width, height = img.size
-        bottom_margin = img.crop((0, height - 30, width, height)).convert("L").getextrema()[0]
+        bottom_margin = img.crop(
+            (0, height - CALENDAR_BOTTOM_MARGIN, width, height)
+        ).convert("L").getextrema()[0]
         self.assertEqual(
             bottom_margin, 255,
             "row/footer ink was drawn inside the panel's bottom margin",
@@ -1238,15 +1242,16 @@ class TestCalendarGutterRendering(unittest.TestCase):
     def test_a_tall_panel_spends_its_height_on_rows(self):
         """Regression: the large_display panel banked 30% of its height blank.
 
-        A 220px-tall panel at the calendar's size floor has room for three
-        event rows plus an overflow footer. It previously drew two, because
-        the bottom margin double-counted the trailing gap already inside
-        each row's advance.
+        A 220px-tall panel at the calendar's size floor has room for four
+        event rows plus an overflow footer (it drew two before the bottom
+        margin stopped double-counting each row's trailing gap, then three
+        until the footer was charged at SEP + ascent and rows were spaced
+        more tightly).
         """
         events = self._events('2024-01-17', 1) + self._events('2024-01-18', 5)
         layout = _calendar_layout(list(events), 800, 220, mock_logger)
         self.assertTrue(layout.footer)
-        self.assertEqual(layout.drawn_rows, 3)
+        self.assertEqual(layout.drawn_rows, 4)
 
     def test_no_horizontal_rule_between_day_groups(self):
         """Day groups are divided by whitespace, not a drawn rule.
@@ -4134,9 +4139,11 @@ class TestCalendarOverflowRow(unittest.TestCase):
         few = _calendar_layout(self._events(3), 400, 240, mock_logger)
         self.assertGreater(many.overflow, 0)
         self.assertEqual(few.overflow, 0)
-        # The reserved footer row costs one event.
-        capacity = _calendar_capacity(many.size, 240, 1, mock_logger)
-        self.assertEqual(many.drawn_rows, capacity - 1)
+        # The footer is charged at SEP + ascent (not a full row advance), so
+        # the rows left over are those _calendar_capacity grants with the
+        # footer reserve applied.
+        capacity = _calendar_capacity(many.size, 240, [12], mock_logger, footer=True)
+        self.assertEqual(many.drawn_rows, capacity)
 
     def test_counts_every_undrawn_event_including_the_displaced_one(self):
         layout = _calendar_layout(self._events(12), 400, 240, mock_logger)
@@ -4161,17 +4168,111 @@ class TestCalendarOverflowRow(unittest.TestCase):
         self.assertIsNotNone(ImageChops.difference(img, fitting).getbbox())
 
     def test_a_panel_too_short_for_a_footer_shows_events_instead(self):
-        # At the floor size on a 120px tile, reserving a footer (one row plus
-        # its separator) leaves zero rows for events. A bare "+N more" with
-        # nothing above it is worse than silent truncation, so the resolver
-        # must spend every available row on events instead.
+        # At the floor size on a 100px tile one row fits, but reserving a
+        # footer (separator + ascent) leaves zero rows for events. A bare
+        # "+N more" with nothing above it is worse than silent truncation, so
+        # the resolver must spend every available row on events instead.
         layout = _calendar_layout(
-            self._events(12), 400, 120, mock_logger, fixed_size=CALENDAR_MIN_BODY_SIZE
+            self._events(12), 400, 100, mock_logger, fixed_size=CALENDAR_MIN_BODY_SIZE
         )
         total = sum(len(rows) for _, rows in layout.groups)
         self.assertFalse(layout.footer)
         self.assertGreaterEqual(layout.drawn_rows, 1)
         self.assertEqual(layout.drawn_rows + layout.overflow, total)
+
+
+class TestCalendarSeparatorAndFooterAccounting(unittest.TestCase):
+    """Regression: whitespace was reserved for day groups and footers never drawn."""
+
+    def _days(self, sizes):
+        """Events for consecutive days (from 2024-01-17) with the given counts."""
+        out = []
+        for day_offset, count in enumerate(sizes):
+            day = (datetime(2024, 1, 17) + timedelta(days=day_offset)).strftime('%Y-%m-%d')
+            for i in range(count):
+                out.append({
+                    'summary': f'Event {day_offset}.{i}',
+                    'start': {'dateTime': f'{day}T{9 + i:02d}:00:00+00:00'},
+                    'end': {'dateTime': f'{day}T{9 + i:02d}:30:00+00:00'},
+                })
+        return out
+
+    def test_separators_for_undrawn_groups_are_not_charged(self):
+        """Hidden day groups must not shrink the rows drawn.
+
+        The capacity used to subtract a separator per group in the whole
+        calendar, so seven overflowing single-event days drew fewer rows than
+        two did even though the extra five days never reach the canvas.
+        """
+        few = _calendar_layout(self._days([1] * 10), 800, 220, mock_logger, fixed_size=20)
+        many = _calendar_layout(self._days([1] * 25), 800, 220, mock_logger, fixed_size=20)
+        self.assertTrue(few.footer)
+        self.assertTrue(many.footer)
+        self.assertEqual(few.drawn_rows, many.drawn_rows)
+
+    def test_capacity_walk_charges_a_separator_only_between_drawn_groups(self):
+        """Capacity is a walk over the groups: rows plus a gap before each later group."""
+        log = mock_logger
+        advance = _calendar_row_advance(20, log)
+        sep = CALENDAR_SEP_H * COMPONENT_SCALE
+        content_top = _calendar_content_top(None, 1, log)
+        height = 220
+        budget = (height - content_top - CALENDAR_BOTTOM_MARGIN) * COMPONENT_SCALE
+        # Exactly enough for 3 singles and their 2 separators.
+        tight = -(-(3 * advance + 2 * sep) // COMPONENT_SCALE) + content_top + CALENDAR_BOTTOM_MARGIN
+        self.assertEqual(_calendar_capacity(20, tight, [1] * 9, log), 3)
+        # Two unscaled pixels short (one is rounding slack) drops the third row.
+        self.assertEqual(_calendar_capacity(20, tight - 2, [1] * 9, log), 2)
+        self.assertGreater(budget, 0)
+
+    def test_footer_reserves_separator_plus_ascent_not_a_full_advance(self):
+        """The footer line costs CALENDAR_SEP_H + the text ascent below the last row."""
+        log = mock_logger
+        size = 20
+        ascent = _load_font(size * COMPONENT_SCALE, log).getmetrics()[0]
+        reserve = CALENDAR_SEP_H * COMPONENT_SCALE + ascent
+        advance = _calendar_row_advance(size, log)
+        self.assertLess(reserve, advance)
+        content_top = _calendar_content_top(None, 1, log)
+        # A height whose budget holds 4 rows plus the footer reserve exactly.
+        scaled = 4 * advance + reserve + 3 * CALENDAR_SEP_H * COMPONENT_SCALE
+        height = -(-scaled // COMPONENT_SCALE) + content_top + CALENDAR_BOTTOM_MARGIN
+        self.assertEqual(_calendar_capacity(size, height, [1] * 9, log, footer=True), 4)
+        self.assertEqual(_calendar_capacity(size, height - 4, [1] * 9, log, footer=True), 3)
+
+    def test_footer_dropped_when_it_would_leave_no_room_for_an_event(self):
+        """A footer that costs the only row that fits is not drawn; the row is."""
+        log = mock_logger
+        advance = _calendar_row_advance(20, log)
+        content_top = _calendar_content_top(None, 1, log)
+        height = content_top + CALENDAR_BOTTOM_MARGIN + (advance + 2) // COMPONENT_SCALE + 1
+        layout = _calendar_layout(self._days([3]), 800, height, mock_logger, fixed_size=20)
+        self.assertFalse(layout.footer)
+        self.assertEqual(layout.drawn_rows, 1)
+        self.assertEqual(layout.overflow, 2)
+
+    def test_layout_drawn_rows_matches_rows_actually_drawn(self):
+        """The layout's drawn_rows is exactly the event rows the draw renders."""
+        for sizes in ([2, 1, 1, 2, 1, 1, 2], [1] * 12, [5, 5], [3]):
+            with self.subTest(sizes=sizes):
+                events = self._days(sizes)
+                layout = _calendar_layout(list(events), 800, 220, mock_logger)
+                drawn = []
+                real_text = ImageDraw.ImageDraw.text
+
+                def spy(self_, xy, text, *a, **kw):
+                    drawn.append(str(text))
+                    return real_text(self_, xy, text, *a, **kw)
+
+                with mock.patch.object(ImageDraw.ImageDraw, 'text', spy):
+                    _draw_calendar_component(
+                        'Cal', list(events), 800, 220, mock_logger,
+                        body_font_size=layout.size,
+                    )
+                rows = [r for r in drawn if r.startswith('Event') or 'Event ' in r]
+                self.assertEqual(len(rows), layout.drawn_rows)
+                self.assertEqual(
+                    any(t.endswith(' more') for t in drawn), layout.footer)
 
 
 class TestCalendarProbeUsesBothFits(unittest.TestCase):
@@ -4370,8 +4471,8 @@ class TestTitlelessListLayout(unittest.TestCase):
     def test_calendar_capacity_grows(self):
         """A titleless calendar tile at height 240 fits strictly more rows than a titled one."""
         log = mock.Mock()
-        c1 = _calendar_capacity(28, 240, 1, log, title_lines=1)
-        c0 = _calendar_capacity(28, 240, 1, log, title_lines=NO_TITLE_LINES)
+        c1 = _calendar_capacity(28, 240, [99], log, title_lines=1)
+        c0 = _calendar_capacity(28, 240, [99], log, title_lines=NO_TITLE_LINES)
         self.assertGreater(c0, c1)
 
 

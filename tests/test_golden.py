@@ -840,14 +840,14 @@ class TestGoldenImages(unittest.TestCase):
     def test_calendar_large_display_overflow_footer(self, mock_fetch_calendar, mock_get_entity_state):
         """The mixed-spine layout again, but with more events than fit.
 
-        One event on Wednesday and five on Thursday. Three rows fit, so
-        Wednesday draws its one and Thursday draws two of its five, leaving
-        three behind a "+3 more" footer. That makes this the golden covering
+        One event on Wednesday and five on Thursday. Four rows fit, so
+        Wednesday draws its one and Thursday draws three of its five, leaving
+        two behind a "+2 more" footer. That makes this the golden covering
         three things the other calendar goldens do not show together:
 
         - both spine lengths ("We" and "Thu") alongside an overflow footer;
         - a group truncated by the row budget, whose vertical rule is sized
-          to the two rows it actually drew rather than the five it holds;
+          to the three rows it actually drew rather than the five it holds;
         - the footer rule, which is the one horizontal rule the calendar
           still draws now that day groups are divided by whitespace.
         """
@@ -893,15 +893,65 @@ class TestGoldenImages(unittest.TestCase):
             list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger)
         self.assertEqual(layout.mode, 'gutter')
         self.assertEqual([label for label, _ in layout.groups], ['We', 'Thu'])
-        # Wednesday draws its single event, Thursday two of its five, and
-        # three are left over behind the footer.
+        # Wednesday draws its single event, Thursday three of its five, and
+        # two are left over behind the footer.
         self.assertTrue(layout.footer)
-        self.assertEqual(layout.drawn_rows, 3)
-        self.assertEqual(layout.overflow, 3)
+        self.assertEqual(layout.drawn_rows, 4)
+        self.assertEqual(layout.overflow, 2)
 
         with mock.patch('datetime.datetime', mock_datetime()):
             img_io = render_dashboard_image(dashboard, mock_logger)
         assert_golden(img_io, 'calendar_large_display_overflow_footer')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_calendar_large_display_many_days(self, mock_fetch_calendar, mock_get_entity_state):
+        """A large_display calendar spanning seven days above four entity cards.
+
+        The user-reported whitespace scenario: ten events over seven day
+        groups ([2,1,1,2,1,1,2]). Separators for groups hidden behind the
+        footer used to be reserved, so only two rows drew above "+8 more"
+        with a band of blank space below; now four rows draw above "+6 more"
+        and the footer sits close to the panel foot.
+        """
+        mock_get_entity_state.side_effect = lambda name, logger: {
+            'sensor.a': {'state': '1', 'friendly_name': 'A'},
+            'sensor.b': {'state': '2', 'friendly_name': 'B'},
+            'sensor.c': {'state': '3', 'friendly_name': 'C'},
+            'sensor.d': {'state': '4', 'friendly_name': 'D'},
+        }[name]
+        days = [17, 17, 18, 19, 19, 20, 21, 22, 23, 23]
+        mock_fetch_calendar.return_value = [
+            {'summary': f'Event {i}',
+             'start': {'dateTime': f'2024-01-{d}T{9 + i % 2:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-{d}T{9 + i % 2:02d}:30:00+00:00'}}
+            for i, d in enumerate(days)
+        ]
+        dashboard = {
+            'name': 'calmanydays',
+            'title': 'Cal Many Days',
+            'components': [
+                {'type': 'calendar', 'friendly_name': 'Calendar',
+                 'entity_name': 'calendar.home', 'large_display': True,
+                 'arguments': {'calendar_id': 'calendar.home'}},
+            ] + [
+                {'type': 'entity', 'friendly_name': n, 'entity_name': f'sensor.{k}'}
+                for n, k in (('A', 'a'), ('B', 'b'), ('C', 'c'), ('D', 'd'))
+            ],
+        }
+
+        from trmnl_server.components import _calendar_layout
+
+        tile_w, tile_h = 800, (480 - 40) // 2
+        layout = _calendar_layout(
+            list(mock_fetch_calendar.return_value), tile_w, tile_h, mock_logger)
+        self.assertTrue(layout.footer)
+        self.assertEqual(layout.drawn_rows, 4)
+        self.assertEqual(layout.overflow, 6)
+
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'calendar_large_display_many_days')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_row_body_text_size_harmonisation(self, mock_get_entity_state):

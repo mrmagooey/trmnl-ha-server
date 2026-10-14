@@ -51,19 +51,19 @@ BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 # ponytail: one constant for every calendar. Promote to a per-component
 # `min_font_size` option if a second calendar ever needs a different floor.
 CALENDAR_MIN_BODY_SIZE: int = 20
-CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
+CALENDAR_LINE_SPACING: int = 4    # unscaled gap below each row
 CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
-# Unscaled space kept clear at the panel foot. Counted from the last row's
-# ADVANCE, not its ink: the advance already carries descent + line spacing
-# (14 unscaled at size 20), so this yields roughly 30px of visible clearance
-# rather than 16. It was 30 -- a figure that predates advance-based row
-# spacing and so double-counted that trailing gap, costing a whole row on
-# panels whose height left little slack (a large_display calendar drew 2
-# rows and banked 30% of its height as blank).
-CALENDAR_BOTTOM_MARGIN: int = 16
+# Unscaled space kept clear below the last thing the calendar draws. With
+# events only that is the last row's ADVANCE, which already carries descent
+# plus line spacing (~11 unscaled at size 20), so the visible clearance is
+# larger than the constant. With a footer it is the "+N more" line's ascent
+# (see _calendar_capacity), so the margin is the descent-and-then-some of
+# that text. It was 30, then 16: both predate the tighter spacing and the
+# footer charged at SEP + ascent, and each banked a row's worth of blank.
+CALENDAR_BOTTOM_MARGIN: int = 8
 CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
 CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
-CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
+CALENDAR_SEP_H: int = 3           # unscaled vertical space one separator occupies
 TODO_HEADER_H: int = 50
 # Top inset for a hide_title card: content starts here instead of below a title.
 NO_TITLE_CONTENT_TOP: int = 10
@@ -668,19 +668,20 @@ def _calendar_layout(
                 for _, label, rows in raw_groups
             ]
             gutter = 0
+        group_sizes = [len(rows) for _, _, rows in raw_groups]
         capacity = _calendar_capacity(
-            size, height, len(raw_groups), logger,
+            size, height, group_sizes, logger,
             title_font_size=title_font_size, title_lines=title_lines,
         )
         if n_rows <= capacity:
             drawn, footer = n_rows, False
         else:
             footer_rows = _calendar_capacity(
-                size, height, len(raw_groups) + 1, logger,
+                size, height, group_sizes, logger, footer=True,
                 title_font_size=title_font_size, title_lines=title_lines,
             )
-            if footer_rows - 1 >= 1:
-                drawn, footer = footer_rows - 1, True
+            if footer_rows >= 1:
+                drawn, footer = footer_rows, True
             else:
                 # A footer would leave no room for any event at all. A bare
                 # "+N more" with nothing above it is worse than silent
@@ -730,27 +731,60 @@ def _calendar_content_top(title_font_size: int | None, title_lines: int, logger:
 def _calendar_capacity(
     size: int,
     height: int,
-    n_groups: int,
+    group_sizes: list[int],
     logger: "Logger",
     *,
+    footer: bool = False,
     title_font_size: int | None = None,
     title_lines: int = 1,
 ) -> int:
-    """How many rows fit the panel at this size, after separators.
+    """How many rows fit the panel at this size.
 
-    Separators are counted in both modes — prefix mode keeps them, which is
-    what makes the vertical budget mode-independent so it need not be resolved
-    after the mode.
+    Walks the day groups in draw order, mirroring _draw_calendar_component:
+    each row costs one advance, and a CALENDAR_SEP_H gap is charged before
+    every group after the first that draws at least one row. A group the
+    budget never reaches costs nothing, so hidden days behind the footer do
+    not shrink the visible list. Separators are counted in both modes --
+    prefix mode keeps them -- so the budget is mode-independent.
+
+    Args:
+        size: Body font size (unscaled)
+        height: Unscaled tile height
+        group_sizes: Row count of each day group, in draw order
+        logger: Logger instance
+        footer: Reserve room for the "+N more" line: CALENDAR_SEP_H (the gap
+            between its rule and its text) plus the text's ascent. That is
+            all the footer draws below the last row's advance; a full row
+            advance would double-count its descent and line spacing.
+        title_font_size: Title size resolved by the caller
+        title_lines: Title line count resolved by the caller
+
+    Returns:
+        The number of rows that can be drawn (0 if none fit)
     """
     content_top = _calendar_content_top(title_font_size, title_lines, logger)
     budget = (
         height * COMPONENT_SCALE
         - content_top * COMPONENT_SCALE
         - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
-        - max(0, n_groups - 1) * CALENDAR_SEP_H * COMPONENT_SCALE
     )
+    if footer:
+        ascent = _load_font(size * COMPONENT_SCALE, logger).getmetrics()[0]
+        budget -= CALENDAR_SEP_H * COMPONENT_SCALE + ascent
     advance = _calendar_row_advance(size, logger)
-    return max(0, budget // advance)
+    sep = CALENDAR_SEP_H * COMPONENT_SCALE
+    used = 0
+    rows = 0
+    for count in group_sizes:
+        gap = sep if rows else 0
+        fit = max(0, min(count, (budget - used - gap) // advance))
+        if fit == 0:
+            break
+        used += gap + fit * advance
+        rows += fit
+        if fit < count:
+            break
+    return rows
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:
@@ -1857,8 +1891,9 @@ def _draw_calendar_component(
                 # mode, and every row carries its own day in prefix mode, so
                 # a horizontal rule restated a boundary both modes had
                 # covered. The gap it occupied stays, which is also what
-                # keeps _calendar_capacity's budget (it subtracts
-                # CALENDAR_SEP_H per gap) in step with what is drawn.
+                # keeps _calendar_capacity's walk (it charges CALENDAR_SEP_H
+                # before each later group that draws a row) in step with
+                # what is drawn.
                 y_pos += CALENDAR_SEP_H * scale
             group_top = y_pos
             drawn_here = min(len(rows), remaining)
