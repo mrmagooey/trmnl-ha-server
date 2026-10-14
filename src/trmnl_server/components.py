@@ -640,7 +640,9 @@ def _calendar_layout(
         A CalendarLayout. `groups` rows are the FINAL strings for the chosen
         mode: already prefixed with the day in prefix mode, bare in gutter
         mode. In gutter mode, the group label is also final: shortened to
-        two letters for single-event groups, three letters otherwise.
+        two letters for single-event groups and for a multi-event group the
+        row budget cuts short enough that a three-letter spine would overrun
+        its drawn rows, three letters otherwise.
     """
     raw_groups, has_unparseable = _calendar_day_groups(events, logger)
     if not raw_groups:
@@ -652,8 +654,11 @@ def _calendar_layout(
         # ponytail: a single-row group can't carry a rotated 3-letter spine
         # ("Wed" overruns every row budget in BODY_SIZE_LADDER, up to ~123%
         # of it at size 24); two letters stay unambiguous across all seven
-        # days (Mo/Tu/We/Th/Fr/Sa/Su) and fit with margin at every size.
-        # Groups with >=2 events keep the full label. Prefix mode is exempt
+        # days (Mo/Tu/We/Th/Fr/Sa/Su) and fit one row at sizes up to 24. At
+        # 28 "Mo" exactly fills one advance, so the gate rejects it there and
+        # a panel holding a single-event day draws in prefix mode instead.
+        # Groups with >=2 events keep the full label (unless truncated; see
+        # below). Prefix mode is exempt
         # -- it never shortens, since the label there is prose, not a spine.
         spine_groups = [
             (day, label[:2] if len(rows) == 1 else label, rows)
