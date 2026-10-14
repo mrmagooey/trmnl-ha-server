@@ -54,12 +54,13 @@ CALENDAR_MIN_BODY_SIZE: int = 20
 CALENDAR_LINE_SPACING: int = 4    # unscaled gap below each row
 CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
 # Unscaled space kept clear below the last thing the calendar draws. With
-# events only that is the last row's ADVANCE, which already carries descent
-# plus line spacing (~11 unscaled at size 20), so the visible clearance is
-# larger than the constant. With a footer it is the "+N more" line's ascent
-# (see _calendar_capacity), so the margin is the descent-and-then-some of
-# that text. It was 30, then 16: both predate the tighter spacing and the
-# footer charged at SEP + ascent, and each banked a row's worth of blank.
+# events only that is the last row's ADVANCE, whose trailing gap (descent +
+# line spacing) is 10 unscaled at size 20 (12 + 4*2 scaled px), so the visible
+# clearance is the margin plus that 10. With a footer the budget is charged
+# only SEP + the "+N more" text's ascent (see _calendar_capacity); the text's
+# 6px descent (12 scaled at size 20) then hangs into this margin, which is
+# why it is 8 rather than 0. It was 30, then 16; both predate the tighter
+# spacing and footer accounting and left whole rows' worth of blank panel.
 CALENDAR_BOTTOM_MARGIN: int = 8
 CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
 CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
@@ -687,6 +688,24 @@ def _calendar_layout(
                 # "+N more" with nothing above it is worse than silent
                 # truncation, so spend every available row on events.
                 drawn, footer = capacity, False
+        if use_gutter:
+            # The label was chosen (and the gate checked) against the group's
+            # FULL row count, but the row budget may cut the last drawn group
+            # short. A 3-letter spine taller than the rows actually drawn
+            # would hang below its rule into the gutter beside the footer, so
+            # such a group drops to the two-letter form, which fits one row.
+            advance = _calendar_row_advance(size, logger)
+            left = drawn
+            for index, (label, rows) in enumerate(groups):
+                if left <= 0:
+                    break
+                drawn_here = min(len(rows), left)
+                left -= drawn_here
+                if (
+                    drawn_here < len(rows) and len(label) > 2
+                    and _spine_ink_height(label, size, logger) >= drawn_here * advance
+                ):
+                    groups[index] = (label[:2], rows)
         return CalendarLayout(
             size, 'gutter' if use_gutter else 'prefix', gutter,
             groups, drawn, n_rows - drawn, footer,
@@ -777,6 +796,8 @@ def _calendar_capacity(
     rows = 0
     for count in group_sizes:
         gap = sep if rows else 0
+        if count == 0:
+            continue  # an empty group draws nothing, so costs no separator
         fit = max(0, min(count, (budget - used - gap) // advance))
         if fit == 0:
             break

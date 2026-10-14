@@ -4216,14 +4216,61 @@ class TestCalendarSeparatorAndFooterAccounting(unittest.TestCase):
         advance = _calendar_row_advance(20, log)
         sep = CALENDAR_SEP_H * COMPONENT_SCALE
         content_top = _calendar_content_top(None, 1, log)
-        height = 220
-        budget = (height - content_top - CALENDAR_BOTTOM_MARGIN) * COMPONENT_SCALE
+        # Hard-coded anchor at a fixed height: 220px at size 20 has a 324px
+        # scaled budget, so 4 singles (4*63 + 3*6 = 270) fit and 5 (339) don't,
+        # with or without the footer reserve (275 left for rows).
+        self.assertEqual(_calendar_capacity(20, 220, [1] * 9, log), 4)
+        self.assertEqual(_calendar_capacity(20, 220, [1] * 9, log, footer=True), 4)
         # Exactly enough for 3 singles and their 2 separators.
         tight = -(-(3 * advance + 2 * sep) // COMPONENT_SCALE) + content_top + CALENDAR_BOTTOM_MARGIN
         self.assertEqual(_calendar_capacity(20, tight, [1] * 9, log), 3)
         # Two unscaled pixels short (one is rounding slack) drops the third row.
         self.assertEqual(_calendar_capacity(20, tight - 2, [1] * 9, log), 2)
-        self.assertGreater(budget, 0)
+
+    def test_capacity_skips_empty_groups_without_charging_a_separator(self):
+        """A zero-row group neither stops the walk nor costs a separator."""
+        self.assertEqual(
+            _calendar_capacity(20, 220, [2, 0, 2], mock_logger),
+            _calendar_capacity(20, 220, [2, 2], mock_logger),
+        )
+
+    def test_truncated_multi_event_group_gets_a_spine_that_fits_its_drawn_rows(self):
+        """A Mon/Wed group cut to one drawn row falls back to a two-letter spine.
+
+        The label is chosen from the group's full row count (3 letters for 2+
+        events), but a 3-letter spine is taller than one advance for Mon (85)
+        and Wed (83) at size 20 and would hang below its rule beside the footer.
+        """
+        advance = _calendar_row_advance(20, mock_logger)
+        # 2024-01-15 is a Monday, 2024-01-17 a Wednesday.
+        for start, full in (('2024-01-15', 'Mon'), ('2024-01-17', 'Wed')):
+            with self.subTest(day=full):
+                events = [
+                    {'summary': f'E{i}',
+                     'start': {'dateTime': f'{start}T{9 + i:02d}:00:00+00:00'},
+                     'end': {'dateTime': f'{start}T{9 + i:02d}:30:00+00:00'}}
+                    for i in range(2)
+                ]
+                # 114px: room for exactly one row plus the footer.
+                layout = _calendar_layout(events, 800, 114, mock_logger, fixed_size=20)
+                self.assertEqual(layout.mode, 'gutter')
+                self.assertEqual((layout.drawn_rows, layout.footer), (1, True))
+                self.assertGreaterEqual(_spine_ink_height(full, 20, mock_logger), advance)
+                label = layout.groups[0][0]
+                self.assertEqual(len(label), 2)
+                self.assertLess(_spine_ink_height(label, 20, mock_logger), advance)
+
+    def test_untruncated_multi_event_group_keeps_a_three_letter_spine(self):
+        """A group whose rows are all drawn keeps its full label."""
+        events = [
+            {'summary': f'E{i}',
+             'start': {'dateTime': f'2024-01-15T{9 + i:02d}:00:00+00:00'},
+             'end': {'dateTime': f'2024-01-15T{9 + i:02d}:30:00+00:00'}}
+            for i in range(2)
+        ]
+        layout = _calendar_layout(events, 800, 220, mock_logger, fixed_size=20)
+        self.assertFalse(layout.footer)
+        self.assertEqual(layout.groups[0][0], 'Mon')
 
     def test_footer_reserves_separator_plus_ascent_not_a_full_advance(self):
         """The footer line costs CALENDAR_SEP_H + the text ascent below the last row."""
@@ -4269,7 +4316,7 @@ class TestCalendarSeparatorAndFooterAccounting(unittest.TestCase):
                         'Cal', list(events), 800, 220, mock_logger,
                         body_font_size=layout.size,
                     )
-                rows = [r for r in drawn if r.startswith('Event') or 'Event ' in r]
+                rows = [r for r in drawn if 'Event ' in r]
                 self.assertEqual(len(rows), layout.drawn_rows)
                 self.assertEqual(
                     any(t.endswith(' more') for t in drawn), layout.footer)
