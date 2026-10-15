@@ -51,19 +51,20 @@ BODY_SIZE_LADDER: tuple[int, ...] = (28, 24, 20, 18, 16)
 # ponytail: one constant for every calendar. Promote to a per-component
 # `min_font_size` option if a second calendar ever needs a different floor.
 CALENDAR_MIN_BODY_SIZE: int = 20
-CALENDAR_LINE_SPACING: int = 8    # unscaled gap below each row
+CALENDAR_LINE_SPACING: int = 4    # unscaled gap below each row
 CALENDAR_CONTENT_TOP: int = 50    # unscaled y where rows start under a 1-line title
-# Unscaled space kept clear at the panel foot. Counted from the last row's
-# ADVANCE, not its ink: the advance already carries descent + line spacing
-# (14 unscaled at size 20), so this yields roughly 30px of visible clearance
-# rather than 16. It was 30 -- a figure that predates advance-based row
-# spacing and so double-counted that trailing gap, costing a whole row on
-# panels whose height left little slack (a large_display calendar drew 2
-# rows and banked 30% of its height as blank).
-CALENDAR_BOTTOM_MARGIN: int = 16
+# Unscaled space kept clear below the last thing the calendar draws. With
+# events only that is the last row's ADVANCE, whose trailing gap (descent +
+# line spacing) is 10 unscaled at size 20 (12 + 4*2 scaled px), so the visible
+# clearance is the margin plus that 10. With a footer the budget is charged
+# only SEP + the "+N more" text's ascent (see _calendar_capacity); the text's
+# 6px descent (12 scaled at size 20) then hangs into this margin, which is
+# why it is 8 rather than 0. It was 30, then 16; both predate the tighter
+# spacing and footer accounting and left whole rows' worth of blank panel.
+CALENDAR_BOTTOM_MARGIN: int = 8
 CALENDAR_GUTTER_W: int = 32       # unscaled width of the rotated-day gutter
 CALENDAR_MIN_SUMMARY_W: int = 60  # unscaled floor on width left for the summary
-CALENDAR_SEP_H: int = 6           # unscaled vertical space one separator occupies
+CALENDAR_SEP_H: int = 3           # unscaled vertical space one separator occupies
 TODO_HEADER_H: int = 50
 # Top inset for a hide_title card: content starts here instead of below a title.
 NO_TITLE_CONTENT_TOP: int = 10
@@ -639,7 +640,9 @@ def _calendar_layout(
         A CalendarLayout. `groups` rows are the FINAL strings for the chosen
         mode: already prefixed with the day in prefix mode, bare in gutter
         mode. In gutter mode, the group label is also final: shortened to
-        two letters for single-event groups, three letters otherwise.
+        two letters for single-event groups and for a multi-event group the
+        row budget cuts short enough that a three-letter spine would overrun
+        its drawn rows, three letters otherwise.
     """
     raw_groups, has_unparseable = _calendar_day_groups(events, logger)
     if not raw_groups:
@@ -651,8 +654,11 @@ def _calendar_layout(
         # ponytail: a single-row group can't carry a rotated 3-letter spine
         # ("Wed" overruns every row budget in BODY_SIZE_LADDER, up to ~123%
         # of it at size 24); two letters stay unambiguous across all seven
-        # days (Mo/Tu/We/Th/Fr/Sa/Su) and fit with margin at every size.
-        # Groups with >=2 events keep the full label. Prefix mode is exempt
+        # days (Mo/Tu/We/Th/Fr/Sa/Su) and fit one row at sizes up to 24. At
+        # 28 "Mo" exactly fills one advance, so the gate rejects it there and
+        # a panel holding a single-event day draws in prefix mode instead.
+        # Groups with >=2 events keep the full label (unless truncated; see
+        # below). Prefix mode is exempt
         # -- it never shortens, since the label there is prose, not a spine.
         spine_groups = [
             (day, label[:2] if len(rows) == 1 else label, rows)
@@ -668,24 +674,43 @@ def _calendar_layout(
                 for _, label, rows in raw_groups
             ]
             gutter = 0
+        group_sizes = [len(rows) for _, _, rows in raw_groups]
         capacity = _calendar_capacity(
-            size, height, len(raw_groups), logger,
+            size, height, group_sizes, logger,
             title_font_size=title_font_size, title_lines=title_lines,
         )
         if n_rows <= capacity:
             drawn, footer = n_rows, False
         else:
             footer_rows = _calendar_capacity(
-                size, height, len(raw_groups) + 1, logger,
+                size, height, group_sizes, logger, footer=True,
                 title_font_size=title_font_size, title_lines=title_lines,
             )
-            if footer_rows - 1 >= 1:
-                drawn, footer = footer_rows - 1, True
+            if footer_rows >= 1:
+                drawn, footer = footer_rows, True
             else:
                 # A footer would leave no room for any event at all. A bare
                 # "+N more" with nothing above it is worse than silent
                 # truncation, so spend every available row on events.
                 drawn, footer = capacity, False
+        if use_gutter:
+            # The label was chosen (and the gate checked) against the group's
+            # FULL row count, but the row budget may cut the last drawn group
+            # short. A 3-letter spine taller than the rows actually drawn
+            # would hang below its rule into the gutter beside the footer, so
+            # such a group drops to the two-letter form, which fits one row.
+            advance = _calendar_row_advance(size, logger)
+            left = drawn
+            for index, (label, rows) in enumerate(groups):
+                if left <= 0:
+                    break
+                drawn_here = min(len(rows), left)
+                left -= drawn_here
+                if (
+                    drawn_here < len(rows) and len(label) > 2
+                    and _spine_ink_height(label, size, logger) >= drawn_here * advance
+                ):
+                    groups[index] = (label[:2], rows)
         return CalendarLayout(
             size, 'gutter' if use_gutter else 'prefix', gutter,
             groups, drawn, n_rows - drawn, footer,
@@ -730,27 +755,62 @@ def _calendar_content_top(title_font_size: int | None, title_lines: int, logger:
 def _calendar_capacity(
     size: int,
     height: int,
-    n_groups: int,
+    group_sizes: list[int],
     logger: "Logger",
     *,
+    footer: bool = False,
     title_font_size: int | None = None,
     title_lines: int = 1,
 ) -> int:
-    """How many rows fit the panel at this size, after separators.
+    """How many rows fit the panel at this size.
 
-    Separators are counted in both modes — prefix mode keeps them, which is
-    what makes the vertical budget mode-independent so it need not be resolved
-    after the mode.
+    Walks the day groups in draw order, mirroring _draw_calendar_component:
+    each row costs one advance, and a CALENDAR_SEP_H gap is charged before
+    every group after the first that draws at least one row. A group the
+    budget never reaches costs nothing, so hidden days behind the footer do
+    not shrink the visible list. Separators are counted in both modes --
+    prefix mode keeps them -- so the budget is mode-independent.
+
+    Args:
+        size: Body font size (unscaled)
+        height: Unscaled tile height
+        group_sizes: Row count of each day group, in draw order
+        logger: Logger instance
+        footer: Reserve room for the "+N more" line: CALENDAR_SEP_H (the gap
+            between its rule and its text) plus the text's ascent. That is
+            all the footer draws below the last row's advance; a full row
+            advance would double-count its descent and line spacing.
+        title_font_size: Title size resolved by the caller
+        title_lines: Title line count resolved by the caller
+
+    Returns:
+        The number of rows that can be drawn (0 if none fit)
     """
     content_top = _calendar_content_top(title_font_size, title_lines, logger)
     budget = (
         height * COMPONENT_SCALE
         - content_top * COMPONENT_SCALE
         - CALENDAR_BOTTOM_MARGIN * COMPONENT_SCALE
-        - max(0, n_groups - 1) * CALENDAR_SEP_H * COMPONENT_SCALE
     )
+    if footer:
+        ascent = _load_font(size * COMPONENT_SCALE, logger).getmetrics()[0]
+        budget -= CALENDAR_SEP_H * COMPONENT_SCALE + ascent
     advance = _calendar_row_advance(size, logger)
-    return max(0, budget // advance)
+    sep = CALENDAR_SEP_H * COMPONENT_SCALE
+    used = 0
+    rows = 0
+    for count in group_sizes:
+        gap = sep if rows else 0
+        if count == 0:
+            continue  # an empty group draws nothing, so costs no separator
+        fit = max(0, min(count, (budget - used - gap) // advance))
+        if fit == 0:
+            break
+        used += gap + fit * advance
+        rows += fit
+        if fit < count:
+            break
+    return rows
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int, d: "ImageDraw.ImageDraw") -> str:
@@ -1857,8 +1917,9 @@ def _draw_calendar_component(
                 # mode, and every row carries its own day in prefix mode, so
                 # a horizontal rule restated a boundary both modes had
                 # covered. The gap it occupied stays, which is also what
-                # keeps _calendar_capacity's budget (it subtracts
-                # CALENDAR_SEP_H per gap) in step with what is drawn.
+                # keeps _calendar_capacity's walk (it charges CALENDAR_SEP_H
+                # before each later group that draws a row) in step with
+                # what is drawn.
                 y_pos += CALENDAR_SEP_H * scale
             group_top = y_pos
             drawn_here = min(len(rows), remaining)
