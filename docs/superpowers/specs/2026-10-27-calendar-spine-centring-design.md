@@ -19,8 +19,9 @@ mode are unchanged.
 ## Geometry (unscaled px; drawn at `COMPONENT_SCALE` = 2)
 
 - `CALENDAR_GUTTER_W` = 32; row text starts at `x_text = 20 + 32 = 52`.
-- The rule is drawn at `x_text - 8 = 44` with width `2` (4 scaled px, centred on the line), so its
-  left ink edge is at 43.
+- The rule is drawn at `x_text - 8 = 44` with width `2` (4 scaled px). PIL inks a width-`w` line
+  drawn at `x` across `x - (w - 1) // 2` to `x + w // 2`, so on the scaled canvas the rule covers
+  87-90 and its left ink edge is at scaled x 87 (`rule_x - (rule_width - 1) // 2`).
 - Rotated label width = the label's ink height: ~14.5 px at size 20, ~21 px at size 28.
 - New label x = `(rule_left_edge - rotated.width) // 2` in scaled px — equal gaps on both sides of
   the label within ±1 scaled px (integer division).
@@ -41,8 +42,8 @@ mode are unchanged.
   gutter's visible right boundary (the rule's left ink edge). Paste x becomes
   `max(0, (right - rotated.width) // 2)`.
 - `_draw_calendar_component` computes the rule's x once (`x_text - 8 * scale`), uses it for the
-  rule, and passes `right = rule_x - rule_width // 2` to `_draw_spine`, where `rule_width` is the
-  same value passed to `d.line`.
+  rule, and passes `right = rule_x - (rule_width - 1) // 2` (the rule's real left ink edge) to
+  `_draw_spine`, where `rule_width` is the same value passed to `d.line`.
 
 ## Testing
 
