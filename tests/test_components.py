@@ -42,6 +42,7 @@ from trmnl_server.components import (
     _draw_calendar_component,
     _draw_entities_component,
     _draw_todo_list_component,
+    _draw_spine,
     _load_font,
     _todo_capacity,
     _fit_title_size,
@@ -4660,6 +4661,41 @@ class TestTitlelessGraphAndEntity(unittest.TestCase):
         self.assertGreaterEqual(bb[1], 1)
         self.assertLessEqual(bb[2], 199)
         self.assertLessEqual(bb[3], 119)
+
+
+class TestSpineCentring(unittest.TestCase):
+    """A day spine sits centred between the card's left edge and the gutter rule.
+
+    Spec: docs/superpowers/specs/2026-10-27-calendar-spine-centring-design.md
+    """
+
+    @staticmethod
+    def _ink_columns(img):
+        """(first, last) x holding any non-white pixel."""
+        box = ImageChops.invert(img.convert('L')).getbbox()
+        assert box is not None, "nothing was drawn"
+        return box[0], box[2] - 1
+
+    def test_spine_ink_is_centred_between_card_edge_and_right_bound(self):
+        """Left gap to x=0 equals right gap to `right`, for every label and size."""
+        right = 86  # the rule's left ink edge on the scaled canvas: (20+32-8)*2 - 2
+        for size in (16, 20, 28):
+            for label, top, bottom in (('Wed', 0, 300), ('Fri', 0, 300), ('Mo', 40, 100)):
+                with self.subTest(size=size, label=label):
+                    img = Image.new('RGB', (200, 400), 'white')
+                    _draw_spine(img, label, size, top, bottom, mock_logger, right=right)
+                    first, last = self._ink_columns(img)
+                    left_gap = first
+                    right_gap = right - (last + 1)
+                    self.assertLessEqual(abs(left_gap - right_gap), 1,
+                                         f"gaps {left_gap} vs {right_gap}")
+
+    def test_spine_wider_than_gutter_clamps_to_left_edge(self):
+        """A bound narrower than the label pastes at x=0, never off-canvas."""
+        img = Image.new('RGB', (200, 400), 'white')
+        _draw_spine(img, 'Wed', 28, 0, 300, mock_logger, right=10)
+        first, _ = self._ink_columns(img)
+        self.assertLessEqual(first, 1)
 
 
 if __name__ == '__main__':

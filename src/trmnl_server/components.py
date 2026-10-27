@@ -1817,13 +1817,17 @@ def _draw_entity_component(
 
 
 def _draw_spine(img: Image.Image, label: str, size: int,
-                top: int, bottom: int, logger: "Logger") -> None:
+                top: int, bottom: int, logger: "Logger", *, right: int) -> None:
     """Draws a day label rotated 90 degrees in the left gutter.
 
     PIL cannot draw rotated text, so the label is rendered to a temp image and
     rotated. The temp image is sized by the label's INK box, not the font's
     line box: after rotation the text's height becomes its width, and the line
     box is 38px at 28pt against a 32px gutter, where the ink box is 22px.
+
+    The label is centred horizontally between the card's left edge and
+    `right`, the scaled x of the gutter rule's left ink edge -- the visible
+    boundary of the label column -- so it no longer hugs the card edge.
     """
     font = _load_font(size * COMPONENT_SCALE, logger)
     box = font.getbbox(label)
@@ -1834,7 +1838,8 @@ def _draw_spine(img: Image.Image, label: str, size: int,
     ImageDraw.Draw(tmp).text((-box[0], -box[1]), label, font=font, fill='black')
     rotated = tmp.rotate(90, expand=True)
     y = top + max(0, (bottom - top - rotated.height) // 2)
-    img.paste(rotated, (4 * COMPONENT_SCALE, y))
+    x = max(0, (right - rotated.width) // 2)
+    img.paste(rotated, (x, y))
 
 
 def _draw_calendar_component(
@@ -1936,11 +1941,16 @@ def _draw_calendar_component(
                 # spanning only the rows this group actually drew (group_top
                 # to y_pos, the same span _draw_spine uses) -- a group
                 # truncated by the row budget gets a rule sized to match.
+                rule_x = x_text - 8 * scale
+                rule_width = 2 * scale
                 d.line(
-                    [(x_text - 8 * scale, group_top), (x_text - 8 * scale, y_pos)],
-                    fill='black', width=2 * scale,
+                    [(rule_x, group_top), (rule_x, y_pos)],
+                    fill='black', width=rule_width,
                 )
-                _draw_spine(img, label, layout.size, group_top, y_pos, logger)
+                # The spine centres against the rule's left ink edge: a line
+                # of width w drawn at rule_x spans rule_x - w//2 onwards.
+                _draw_spine(img, label, layout.size, group_top, y_pos, logger,
+                            right=rule_x - rule_width // 2)
 
         if layout.footer:
             d.line(

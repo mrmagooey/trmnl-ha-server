@@ -122,3 +122,46 @@ class TestCalendarGroupingEndToEnd(unittest.TestCase):
         mock_cal.return_value = []
         img_io = render_dashboard_image(self.DASHBOARD, mock_logger)
         self.assertEqual(Image.open(img_io).size, (800, 480))
+
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_spine_is_centred_between_card_edge_and_gutter_rule(self, mock_cal):
+        """On the final image the spine's left gap equals its gap to the rule.
+
+        The rule is the tallest dark column just left of the row text; the
+        spine is the ink to its left. Measured on the downsampled output, so a
+        1px tolerance absorbs LANCZOS edge softening.
+        """
+        events = _events([('2024-01-17', 3), ('2024-01-18', 3)])
+        mock_cal.return_value = events
+        layout = _calendar_layout(list(events), _SOLO_TILE_W, _SOLO_TILE_H, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+
+        img = Image.open(render_dashboard_image(self.DASHBOARD_SOLO, mock_logger)).convert('L')
+        w, h = img.size
+        px = img.load()
+        dark = lambda x, y: px[x, y] < 128
+        # Rows below the header band, where only spine, rule and row text live.
+        ys = range(_TOP_MARGIN + 40, h)
+        col_counts = [sum(dark(x, y) for y in ys) for x in range(0, 52)]
+
+        # The rule is the transition from sparse spine ink to dense text ink. The
+        # spine occupies columns with low ink counts; the text starts where the
+        # ink count jumps sharply. The rule is drawn first (at the transition),
+        # then text on top, so it's visible where text is densest.
+        sparse_spine_cols = [x for x in range(len(col_counts)) if 0 < col_counts[x] < 50]
+        dense_text_cols = [x for x in range(len(col_counts)) if col_counts[x] > 100]
+
+        self.assertTrue(sparse_spine_cols, "no sparse spine ink found")
+        self.assertTrue(dense_text_cols, "no dense text ink found")
+
+        # The rule sits at the boundary. Since it's drawn before the text, use
+        # the leftmost dense column as the rule position.
+        rule_left = min(dense_text_cols)
+
+        # Re-collect spine columns (columns with ink before the rule).
+        spine_cols = [x for x in range(rule_left) if col_counts[x] > 0]
+        self.assertTrue(spine_cols, "no spine ink found left of the rule")
+        left_gap = spine_cols[0]
+        right_gap = rule_left - (spine_cols[-1] + 1)
+        self.assertLessEqual(abs(left_gap - right_gap), 1,
+                             f"spine gaps {left_gap} (edge) vs {right_gap} (rule)")
