@@ -42,6 +42,7 @@ from trmnl_server.components import (
     _draw_calendar_component,
     _draw_entities_component,
     _draw_todo_list_component,
+    _draw_spine,
     _load_font,
     _todo_capacity,
     _fit_title_size,
@@ -4660,6 +4661,102 @@ class TestTitlelessGraphAndEntity(unittest.TestCase):
         self.assertGreaterEqual(bb[1], 1)
         self.assertLessEqual(bb[2], 199)
         self.assertLessEqual(bb[3], 119)
+
+
+class TestSpineCentring(unittest.TestCase):
+    """A day spine sits centred between the card's left edge and the gutter rule.
+
+    Spec: docs/superpowers/specs/2026-10-27-calendar-spine-centring-design.md
+    """
+
+    @staticmethod
+    def _ink_columns(img):
+        """(first, last) x holding any non-white pixel."""
+        box = ImageChops.invert(img.convert('L')).getbbox()
+        assert box is not None, "nothing was drawn"
+        return box[0], box[2] - 1
+
+    def test_spine_ink_is_centred_between_card_edge_and_right_bound(self):
+        """Left gap to x=0 equals right gap to `right`, for every label and size.
+
+        Derive `right` from an actual line drawn with PIL to verify the geometry:
+        a width-w line at x spans x - (w-1)//2 .. x + w//2, so the leftmost ink
+        column is x - (w-1)//2.
+        """
+        # Draw a line at the position where the rule would be: x_text - 8*scale
+        rule_width = 2 * COMPONENT_SCALE
+        rule_x = (20 + CALENDAR_GUTTER_W - 8) * COMPONENT_SCALE
+
+        # Measure the line's first ink column to verify PIL geometry
+        line_img = Image.new('RGB', (400, 10), 'white')
+        ImageDraw.Draw(line_img).line(
+            [(rule_x, 0), (rule_x, 9)],
+            fill='black', width=rule_width
+        )
+        rule_first_ink, _ = self._ink_columns(line_img)
+
+        # The rule's left ink edge is the leftmost column
+        # Assert that PIL's geometry matches: width w at x spans x - (w-1)//2 onwards
+        expected_right = rule_x - (rule_width - 1) // 2
+        self.assertEqual(rule_first_ink, expected_right,
+                        "PIL line geometry: width-w at x spans x-(w-1)//2 onwards")
+        self.assertEqual(rule_first_ink, 87, "rule's left ink edge on 2x-scaled canvas")
+
+        right = rule_first_ink
+        for size in (16, 20, 28):
+            for label, top, bottom in (('Wed', 0, 300), ('Fri', 0, 300), ('Mo', 40, 100)):
+                with self.subTest(size=size, label=label):
+                    img = Image.new('RGB', (200, 400), 'white')
+                    _draw_spine(img, label, size, top, bottom, mock_logger, right=right)
+                    first, last = self._ink_columns(img)
+                    left_gap = first
+                    right_gap = right - (last + 1)
+                    self.assertLessEqual(abs(left_gap - right_gap), 1,
+                                         f"gaps {left_gap} vs {right_gap}")
+
+    def test_spine_wider_than_gutter_clamps_to_left_edge(self):
+        """A bound narrower than the label pastes at x=0, never off-canvas."""
+        img = Image.new('RGB', (200, 400), 'white')
+        _draw_spine(img, 'Wed', 28, 0, 300, mock_logger, right=10)
+        first, _ = self._ink_columns(img)
+        self.assertLessEqual(first, 1)
+
+    def test_vertical_placement_unchanged(self):
+        """The ink's vertical centre is centred in [top, bottom], guarding the
+        'vertical placement unchanged' constraint. This test uses a span large
+        enough to fit the rotated label (top=40, bottom=200) so the centering
+        logic activates rather than clamping to the top.
+        """
+        # Draw a line at the expected rule position for PIL geometry verification
+        rule_width = 2 * COMPONENT_SCALE
+        rule_x = (20 + CALENDAR_GUTTER_W - 8) * COMPONENT_SCALE
+
+        # Measure the line's first ink column
+        line_img = Image.new('RGB', (400, 10), 'white')
+        ImageDraw.Draw(line_img).line(
+            [(rule_x, 0), (rule_x, 9)],
+            fill='black', width=rule_width
+        )
+        rule_first_ink, _ = self._ink_columns(line_img)
+        right = rule_first_ink
+
+        # Test with a span that fits all label sizes at all font sizes.
+        top, bottom = 40, 200
+
+        for size in (16, 20, 28):
+            for label in ('Mo', 'Wed'):
+                with self.subTest(size=size, label=label):
+                    img = Image.new('RGB', (200, 400), 'white')
+                    _draw_spine(img, label, size, top, bottom, mock_logger, right=right)
+
+                    # Get ink's vertical extent by looking at row occupancy
+                    # Transpose to swap rows/cols, then find first and last columns
+                    # (which are rows in the original image)
+                    ink_top, ink_bottom = self._ink_columns(img.transpose(Image.TRANSPOSE))
+                    ink_centre = (ink_top + ink_bottom + 1) / 2
+                    expected_centre = (top + bottom) / 2
+                    self.assertLessEqual(abs(ink_centre - expected_centre), 2,
+                                        f"vertical centre off: {ink_centre} vs {expected_centre}")
 
 
 if __name__ == '__main__':

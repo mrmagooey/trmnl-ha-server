@@ -7,7 +7,7 @@ from unittest import mock
 
 from PIL import Image, ImageDraw
 
-from trmnl_server.components import render_dashboard_image, _calendar_layout, _draw_spine
+from trmnl_server.components import render_dashboard_image, _calendar_layout, _draw_spine, CALENDAR_GUTTER_W
 
 mock_logger = mock.Mock(spec=logging.Logger)
 
@@ -122,3 +122,46 @@ class TestCalendarGroupingEndToEnd(unittest.TestCase):
         mock_cal.return_value = []
         img_io = render_dashboard_image(self.DASHBOARD, mock_logger)
         self.assertEqual(Image.open(img_io).size, (800, 480))
+
+    @mock.patch('trmnl_server.hass_client._fetch_calendar_events')
+    def test_spine_is_centred_between_card_edge_and_gutter_rule(self, mock_cal):
+        """On the final image the spine's left gap equals its gap to the rule.
+
+        The gutter is a narrow column to the left of the event text. The rule
+        is a thin vertical line between the spine and the text, plainly visible
+        in the dithered 1-bit output. A 1px tolerance absorbs LANCZOS edge
+        softening in the downsampling.
+        """
+        events = _events([('2024-01-17', 3), ('2024-01-18', 3)])
+        mock_cal.return_value = events
+        layout = _calendar_layout(list(events), _SOLO_TILE_W, _SOLO_TILE_H, mock_logger)
+        self.assertEqual(layout.mode, 'gutter')
+
+        img = Image.open(render_dashboard_image(self.DASHBOARD_SOLO, mock_logger)).convert('L')
+        w, h = img.size
+        px = img.load()
+        dark = lambda x, y: px[x, y] < 128
+        # Rows below the header band, where only spine, rule and row text live.
+        ys = range(_TOP_MARGIN + 40, h)
+
+        # Window spanning the gutter on the downsampled output (unscaled pixels
+        # in the final 800px-wide image). Includes the spine, rule, and text start.
+        x_text_px = 20 + CALENDAR_GUTTER_W
+        col_counts = [sum(dark(x, y) for y in ys) for x in range(0, x_text_px)]
+
+        # Detect the rule using peak-relative density: find columns above 40% of
+        # the peak ink count. The rule (width ~2px after downsampling) shows clearly.
+        peak = max(col_counts)
+        rule_candidates = [x for x, c in enumerate(col_counts) if c >= peak * 0.4]
+        self.assertTrue(rule_candidates, "no dense ink found in gutter")
+        rule_left = min(rule_candidates)
+
+        # Spine ink should exist left of the rule.
+        spine_cols = [x for x in range(rule_left) if col_counts[x] > 0]
+        self.assertTrue(spine_cols, "no spine ink found left of the rule")
+
+        # Verify centring: left gap to x=0 equals right gap to the rule.
+        left_gap = spine_cols[0]
+        right_gap = rule_left - (spine_cols[-1] + 1)
+        self.assertLessEqual(abs(left_gap - right_gap), 1,
+                             f"spine gaps {left_gap} (edge) vs {right_gap} (rule)")
