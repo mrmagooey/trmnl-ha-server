@@ -4677,8 +4677,32 @@ class TestSpineCentring(unittest.TestCase):
         return box[0], box[2] - 1
 
     def test_spine_ink_is_centred_between_card_edge_and_right_bound(self):
-        """Left gap to x=0 equals right gap to `right`, for every label and size."""
-        right = 86  # the rule's left ink edge on the scaled canvas: (20+32-8)*2 - 2
+        """Left gap to x=0 equals right gap to `right`, for every label and size.
+
+        Derive `right` from an actual line drawn with PIL to verify the geometry:
+        a width-w line at x spans x - (w-1)//2 .. x + w//2, so the leftmost ink
+        column is x - (w-1)//2.
+        """
+        # Draw a line at the position where the rule would be: x_text - 8*scale
+        rule_width = 2 * COMPONENT_SCALE
+        rule_x = (20 + CALENDAR_GUTTER_W - 8) * COMPONENT_SCALE
+
+        # Measure the line's first ink column to verify PIL geometry
+        line_img = Image.new('RGB', (400, 10), 'white')
+        ImageDraw.Draw(line_img).line(
+            [(rule_x, 0), (rule_x, 9)],
+            fill='black', width=rule_width
+        )
+        rule_first_ink, _ = self._ink_columns(line_img)
+
+        # The rule's left ink edge is the leftmost column
+        # Assert that PIL's geometry matches: width w at x spans x - (w-1)//2 onwards
+        expected_right = rule_x - (rule_width - 1) // 2
+        self.assertEqual(rule_first_ink, expected_right,
+                        "PIL line geometry: width-w at x spans x-(w-1)//2 onwards")
+        self.assertEqual(rule_first_ink, 87, "rule's left ink edge on 2x-scaled canvas")
+
+        right = rule_first_ink
         for size in (16, 20, 28):
             for label, top, bottom in (('Wed', 0, 300), ('Fri', 0, 300), ('Mo', 40, 100)):
                 with self.subTest(size=size, label=label):

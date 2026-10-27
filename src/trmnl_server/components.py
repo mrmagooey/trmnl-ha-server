@@ -1826,8 +1826,10 @@ def _draw_spine(img: Image.Image, label: str, size: int,
     box is 38px at 28pt against a 32px gutter, where the ink box is 22px.
 
     The label is centred horizontally between the card's left edge and
-    `right`, the scaled x of the gutter rule's left ink edge -- the visible
-    boundary of the label column -- so it no longer hugs the card edge.
+    `right`, the scaled x of the gutter rule's left ink edge. A rule drawn with
+    width w at x spans columns x - (w-1)//2 .. x + w//2, so `right` is the
+    leftmost inked column of the rule, allowing the spine to centre in the
+    space before it.
     """
     font = _load_font(size * COMPONENT_SCALE, logger)
     box = font.getbbox(label)
@@ -1948,9 +1950,9 @@ def _draw_calendar_component(
                     fill='black', width=rule_width,
                 )
                 # The spine centres against the rule's left ink edge: a line
-                # of width w drawn at rule_x spans rule_x - w//2 onwards.
+                # of width w drawn at rule_x spans rule_x - (w-1)//2 .. rule_x + w//2.
                 _draw_spine(img, label, layout.size, group_top, y_pos, logger,
-                            right=rule_x - rule_width // 2)
+                            right=rule_x - (rule_width - 1) // 2)
 
         if layout.footer:
             d.line(

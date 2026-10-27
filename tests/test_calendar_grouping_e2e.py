@@ -7,7 +7,7 @@ from unittest import mock
 
 from PIL import Image, ImageDraw
 
-from trmnl_server.components import render_dashboard_image, _calendar_layout, _draw_spine
+from trmnl_server.components import render_dashboard_image, _calendar_layout, _draw_spine, CALENDAR_GUTTER_W
 
 mock_logger = mock.Mock(spec=logging.Logger)
 
@@ -127,9 +127,11 @@ class TestCalendarGroupingEndToEnd(unittest.TestCase):
     def test_spine_is_centred_between_card_edge_and_gutter_rule(self, mock_cal):
         """On the final image the spine's left gap equals its gap to the rule.
 
-        The rule is the tallest dark column just left of the row text; the
-        spine is the ink to its left. Measured on the downsampled output, so a
-        1px tolerance absorbs LANCZOS edge softening.
+        The gutter is a narrow column to the left of the event text. The rule
+        is a thin vertical line between the spine and the text, and is plainly
+        visible at columns ~43-45 on the downsampled output. The spine occupies
+        ~12-30, leaving symmetric gaps. A 1px tolerance absorbs LANCZOS edge
+        softening in the downsampling.
         """
         events = _events([('2024-01-17', 3), ('2024-01-18', 3)])
         mock_cal.return_value = events
@@ -142,25 +144,24 @@ class TestCalendarGroupingEndToEnd(unittest.TestCase):
         dark = lambda x, y: px[x, y] < 128
         # Rows below the header band, where only spine, rule and row text live.
         ys = range(_TOP_MARGIN + 40, h)
-        col_counts = [sum(dark(x, y) for y in ys) for x in range(0, 52)]
 
-        # The rule is the transition from sparse spine ink to dense text ink. The
-        # spine occupies columns with low ink counts; the text starts where the
-        # ink count jumps sharply. The rule is drawn first (at the transition),
-        # then text on top, so it's visible where text is densest.
-        sparse_spine_cols = [x for x in range(len(col_counts)) if 0 < col_counts[x] < 50]
-        dense_text_cols = [x for x in range(len(col_counts)) if col_counts[x] > 100]
+        # The gutter's width on the downsampled output (800px). The rule should be
+        # well within this window.
+        gutter_width_scaled = 20 + CALENDAR_GUTTER_W
+        col_counts = [sum(dark(x, y) for y in ys) for x in range(0, gutter_width_scaled)]
 
-        self.assertTrue(sparse_spine_cols, "no sparse spine ink found")
-        self.assertTrue(dense_text_cols, "no dense text ink found")
+        # Detect the rule using peak-relative density: find columns above 40% of
+        # the peak ink count. The rule (width ~2px after downsampling) shows clearly.
+        peak = max(col_counts)
+        rule_candidates = [x for x, c in enumerate(col_counts) if c >= peak * 0.4]
+        self.assertTrue(rule_candidates, "no dense ink found in gutter")
+        rule_left = min(rule_candidates)
 
-        # The rule sits at the boundary. Since it's drawn before the text, use
-        # the leftmost dense column as the rule position.
-        rule_left = min(dense_text_cols)
-
-        # Re-collect spine columns (columns with ink before the rule).
+        # Spine ink should exist left of the rule.
         spine_cols = [x for x in range(rule_left) if col_counts[x] > 0]
         self.assertTrue(spine_cols, "no spine ink found left of the rule")
+
+        # Verify centring: left gap to x=0 equals right gap to the rule.
         left_gap = spine_cols[0]
         right_gap = rule_left - (spine_cols[-1] + 1)
         self.assertLessEqual(abs(left_gap - right_gap), 1,
