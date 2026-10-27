@@ -128,9 +128,8 @@ class TestCalendarGroupingEndToEnd(unittest.TestCase):
         """On the final image the spine's left gap equals its gap to the rule.
 
         The gutter is a narrow column to the left of the event text. The rule
-        is a thin vertical line between the spine and the text, and is plainly
-        visible at columns ~43-45 on the downsampled output. The spine occupies
-        ~12-30, leaving symmetric gaps. A 1px tolerance absorbs LANCZOS edge
+        is a thin vertical line between the spine and the text, plainly visible
+        in the dithered 1-bit output. A 1px tolerance absorbs LANCZOS edge
         softening in the downsampling.
         """
         events = _events([('2024-01-17', 3), ('2024-01-18', 3)])
@@ -145,10 +144,10 @@ class TestCalendarGroupingEndToEnd(unittest.TestCase):
         # Rows below the header band, where only spine, rule and row text live.
         ys = range(_TOP_MARGIN + 40, h)
 
-        # The gutter's width on the downsampled output (800px). The rule should be
-        # well within this window.
-        gutter_width_scaled = 20 + CALENDAR_GUTTER_W
-        col_counts = [sum(dark(x, y) for y in ys) for x in range(0, gutter_width_scaled)]
+        # Window spanning the gutter on the downsampled output (unscaled pixels
+        # in the final 800px-wide image). Includes the spine, rule, and text start.
+        x_text_px = 20 + CALENDAR_GUTTER_W
+        col_counts = [sum(dark(x, y) for y in ys) for x in range(0, x_text_px)]
 
         # Detect the rule using peak-relative density: find columns above 40% of
         # the peak ink count. The rule (width ~2px after downsampling) shows clearly.

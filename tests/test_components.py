@@ -4721,6 +4721,43 @@ class TestSpineCentring(unittest.TestCase):
         first, _ = self._ink_columns(img)
         self.assertLessEqual(first, 1)
 
+    def test_vertical_placement_unchanged(self):
+        """The ink's vertical centre is centred in [top, bottom], guarding the
+        'vertical placement unchanged' constraint. This test uses a span large
+        enough to fit the rotated label (top=40, bottom=200) so the centering
+        logic activates rather than clamping to the top.
+        """
+        # Draw a line at the expected rule position for PIL geometry verification
+        rule_width = 2 * COMPONENT_SCALE
+        rule_x = (20 + CALENDAR_GUTTER_W - 8) * COMPONENT_SCALE
+
+        # Measure the line's first ink column
+        line_img = Image.new('RGB', (400, 10), 'white')
+        ImageDraw.Draw(line_img).line(
+            [(rule_x, 0), (rule_x, 9)],
+            fill='black', width=rule_width
+        )
+        rule_first_ink, _ = self._ink_columns(line_img)
+        right = rule_first_ink
+
+        # Test with a span that fits all label sizes at all font sizes.
+        top, bottom = 40, 200
+
+        for size in (16, 20, 28):
+            for label in ('Mo', 'Wed'):
+                with self.subTest(size=size, label=label):
+                    img = Image.new('RGB', (200, 400), 'white')
+                    _draw_spine(img, label, size, top, bottom, mock_logger, right=right)
+
+                    # Get ink's vertical extent by looking at row occupancy
+                    # Transpose to swap rows/cols, then find first and last columns
+                    # (which are rows in the original image)
+                    ink_top, ink_bottom = self._ink_columns(img.transpose(Image.TRANSPOSE))
+                    ink_centre = (ink_top + ink_bottom + 1) / 2
+                    expected_centre = (top + bottom) / 2
+                    self.assertLessEqual(abs(ink_centre - expected_centre), 2,
+                                        f"vertical centre off: {ink_centre} vs {expected_centre}")
+
 
 if __name__ == '__main__':
     unittest.main()
