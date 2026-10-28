@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-10-27
+
+### Changed
+- Calendar rows are packed more tightly: less space below each event, between days and under the last row, so a calendar fits more events in the same card.
+- In the gutter layout, the rotated day labels sit centred between the card's left edge and the vertical rule, instead of hugging the edge.
+
+### Fixed
+- A calendar no longer reserves space for days hidden behind the "+N more" line, and that line takes only the room it needs. A large calendar spanning a week drew 2 events with about 65px left blank; it now fills the card.
+- A day cut short by the "+N more" line switches to a two-letter label (e.g. "We") when its full name would hang below its rows.
+
 ## [1.14.0] - 2026-10-04
 
 ### Added
