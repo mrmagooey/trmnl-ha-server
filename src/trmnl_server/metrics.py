@@ -7,15 +7,35 @@ server local time via datetime.fromtimestamp.
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 WINDOW_DAYS: int = 7
 
-# Voltage range for the linear battery percentage. Mirrors the validation
-# bounds in ServerState.set_battery_voltage and the on-screen formula.
-_V_MIN: float = 2.4
-_V_MAX: float = 4.2
+# Single-cell LiPo resting voltage -> percent. TRMNL firmware reads the battery
+# before Wi-Fi and the display turn on, so readings are close to open-circuit
+# voltage. Points from 3.30V up are Meshtastic's OCV_ARRAY; below that the tail
+# is stretched to 0% at 3.0V, matching TRMNL's own byos_laravel server and the
+# TRMNL X firmware fallback. A linear map is wrong here: a LiPo spends most of
+# its capacity on a flat plateau and falls steeply near empty.
+# Voltages must be strictly ascending (voltage_to_percent bisects them).
+_LIPO_CURVE: tuple[tuple[float, int], ...] = (
+    (3.00, 0),
+    (3.10, 2),
+    (3.20, 5),
+    (3.30, 10),
+    (3.42, 20),
+    (3.53, 30),
+    (3.63, 40),
+    (3.72, 50),
+    (3.80, 60),
+    (3.89, 70),
+    (3.99, 80),
+    (4.05, 90),
+    (4.20, 100),
+)
+_LIPO_VOLTS: tuple[float, ...] = tuple(v for v, _ in _LIPO_CURVE)
 
 
 @dataclass
@@ -29,13 +49,20 @@ class ServeEvent:
 
 
 def voltage_to_percent(voltage: float) -> int:
-    """Map a battery voltage to 0–100%, linear across 2.4–4.2V, clamped.
+    """Map a battery voltage to 0–100% along the LiPo discharge curve.
 
-    Identical to the formula formerly inlined in components.py so the metrics
-    percentage and the on-screen percentage can never drift apart.
+    Interpolates linearly between the two `_LIPO_CURVE` points that bracket
+    `voltage`, clamping to 0 at or below 3.0V and 100 at or above 4.2V. Both
+    the on-screen battery text and /api/metrics call this, so they always agree.
     """
-    pct: int = int(round(((voltage - _V_MIN) / (_V_MAX - _V_MIN)) * 100))
-    return max(0, min(100, pct))
+    if voltage <= _LIPO_VOLTS[0]:
+        return 0
+    if voltage >= _LIPO_VOLTS[-1]:
+        return 100
+    i: int = bisect.bisect_right(_LIPO_VOLTS, voltage)
+    v_lo, p_lo = _LIPO_CURVE[i - 1]
+    v_hi, p_hi = _LIPO_CURVE[i]
+    return int(round(p_lo + (p_hi - p_lo) * (voltage - v_lo) / (v_hi - v_lo)))
 
 
 def aggregate_metrics(events: list[ServeEvent], now: float) -> dict:

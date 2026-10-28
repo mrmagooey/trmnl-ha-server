@@ -654,6 +654,33 @@ class TestAPIMetrics(unittest.TestCase):
         today = out['battery']['AA:BB:CC:DD:EE:FF']['daily'][-1]
         self.assertEqual(today['voltage'], 3.9)
 
+    @mock.patch('trmnl_server.api._aligned_refresh_rate', return_value=288)
+    @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
+    @mock.patch('trmnl_server.api.read_config')
+    def test_battery_header_reported_on_lipo_curve(self, mock_read_config, _vis, _rate):
+        """A Battery-Voltage header sent to /api/display shows up in /api/metrics on the LiPo curve.
+
+        3.30V is nearly empty: the curve reports 10%, where the old linear map said 50%.
+        """
+        mock_read_config.return_value = {
+            'devices': [{'id': 'AA:BB:CC:DD:EE:FF', 'schedule': [{'dashboard': 'morning'}]}],
+            'dashboards': [],
+        }
+        display = self.create_handler(
+            '/api/display',
+            {'ID': 'AA:BB:CC:DD:EE:FF', 'Battery-Voltage': '3.30'},
+        )
+        display._handle_api_display()
+        self.assertEqual(display._response_code, 200)
+
+        metrics = self.create_handler('/api/metrics')
+        metrics._handle_api_metrics()
+        metrics.wfile.seek(0)
+        out = json.loads(metrics.wfile.read().decode())
+        today = out['battery']['AA:BB:CC:DD:EE:FF']['daily'][-1]
+        self.assertEqual(today['voltage'], 3.3)
+        self.assertEqual(today['percent'], 10)
+
     @mock.patch('trmnl_server.api.read_config')
     def test_no_dashboard_selected_records_nothing(self, mock_read_config):
         # Unknown device → no dashboard selected → no serve event.
