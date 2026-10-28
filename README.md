@@ -280,7 +280,7 @@ Returns the next dashboard for the requesting device. The server finds the devic
 | Header | Description |
 |--------|-------------|
 | `ID` | Device MAC address (primary identifier) |
-| `Battery-Voltage` | Optional battery voltage, rendered on the dashboard image |
+| `Battery-Voltage` | Optional battery voltage, rendered on the dashboard image as a percentage along a LiPo discharge curve (3.0V = 0%, 4.2V = 100%) |
 | `FW-Version` | Device's current firmware version; compared against `firmware.version` in `config.yaml` when present |
 | `X-Forwarded-For` | Used as device ID if `ID` header is absent (proxy environments) |
 

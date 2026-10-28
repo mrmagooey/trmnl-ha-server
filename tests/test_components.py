@@ -78,19 +78,38 @@ from trmnl_server.components import (
     TODO_BOTTOM_PAD,
     TODO_ROW_H,
 )
-from trmnl_server.metrics import voltage_to_percent
 
 # Create a mock logger for testing
 mock_logger = mock.Mock(spec=logging.Logger)
 
 
-class TestBatteryPercentParity(unittest.TestCase):
-    """The shared helper must reproduce the legacy inline battery formula."""
+class TestBatteryTextUsesCurve(unittest.TestCase):
+    """The on-screen battery text shows the LiPo-curve percent, as /api/metrics does."""
 
-    def test_helper_matches_legacy_formula_across_range(self):
-        for v in (2.4, 2.7, 3.0, 3.3, 3.7, 3.91, 4.0, 4.2):
-            legacy = max(0, min(100, int(round(((v - 2.4) / (4.2 - 2.4)) * 100))))
-            self.assertEqual(voltage_to_percent(v), legacy)
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.state.server_state')
+    def test_three_point_seven_volts_renders_48_percent(self, mock_state, mock_get_entity_state):
+        """3.7V was 72% on the old linear map; the curve gives 48%."""
+        mock_get_entity_state.return_value = {'state': 'On'}
+        mock_state.consume_battery_voltage.return_value = 3.7
+        dashboard = {
+            'name': 'test_dash',
+            'components': [
+                {'entity_name': 'sensor.test', 'friendly_name': 'Test', 'type': 'entity'},
+            ],
+        }
+        drawn: list[str] = []
+        original_text = ImageDraw.ImageDraw.text
+
+        def spy(self, xy, text, *args, **kwargs):
+            drawn.append(text)
+            return original_text(self, xy, text, *args, **kwargs)
+
+        with mock.patch.object(ImageDraw.ImageDraw, 'text', spy):
+            render_dashboard_image(dashboard, mock_logger, 'AA:BB:CC:DD:EE:FF')
+
+        self.assertIn('48%', drawn)
+        self.assertNotIn('72%', drawn)
 
 
 class TestLoadFont(unittest.TestCase):

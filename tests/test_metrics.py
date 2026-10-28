@@ -8,6 +8,7 @@ from trmnl_server.metrics import (
     aggregate_metrics,
     voltage_to_percent,
     WINDOW_DAYS,
+    _LIPO_CURVE,
 )
 
 
@@ -17,26 +18,52 @@ def ts_for(d: datetime) -> float:
 
 
 class TestVoltageToPercent(unittest.TestCase):
-    def test_minimum_is_zero(self):
-        self.assertEqual(voltage_to_percent(2.4), 0)
+    """Battery percent follows a LiPo discharge curve, 3.0V = 0% to 4.2V = 100%."""
 
-    def test_maximum_is_hundred(self):
-        self.assertEqual(voltage_to_percent(4.2), 100)
+    CURVE = [
+        (3.00, 0), (3.10, 2), (3.20, 5), (3.30, 10), (3.42, 20), (3.53, 30),
+        (3.63, 40), (3.72, 50), (3.80, 60), (3.89, 70), (3.99, 80), (4.05, 90),
+        (4.20, 100),
+    ]
 
-    def test_midpoint(self):
-        self.assertEqual(voltage_to_percent(3.3), 50)
+    def test_every_table_point_returns_its_percent(self):
+        """A reading exactly on a curve point returns that point's percent."""
+        for volts, pct in self.CURVE:
+            with self.subTest(volts=volts):
+                self.assertEqual(voltage_to_percent(volts), pct)
 
-    def test_clamps_below_range(self):
-        self.assertEqual(voltage_to_percent(2.0), 0)
+    def test_interpolates_between_points(self):
+        """Values between points are interpolated linearly and rounded."""
+        for volts, pct in ((3.7, 48), (3.35, 14), (3.76, 55), (3.05, 1), (4.1, 93)):
+            with self.subTest(volts=volts):
+                self.assertEqual(voltage_to_percent(volts), pct)
 
-    def test_clamps_above_range(self):
-        self.assertEqual(voltage_to_percent(4.5), 100)
+    def test_at_or_below_three_volts_is_zero(self):
+        """3.0V is empty; lower readings that pass validation (down to 2.4V) clamp to 0."""
+        for volts in (3.0, 2.9, 2.4, 2.0):
+            with self.subTest(volts=volts):
+                self.assertEqual(voltage_to_percent(volts), 0)
 
-    def test_matches_legacy_inline_formula(self):
-        # The exact formula previously inlined in components.py:1186.
-        for v in (2.4, 2.9, 3.3, 3.7, 3.91, 4.2):
-            expected = max(0, min(100, int(round(((v - 2.4) / (4.2 - 2.4)) * 100))))
-            self.assertEqual(voltage_to_percent(v), expected)
+    def test_at_or_above_four_point_two_is_hundred(self):
+        """4.2V and above is full."""
+        for volts in (4.2, 4.3, 4.5):
+            with self.subTest(volts=volts):
+                self.assertEqual(voltage_to_percent(volts), 100)
+
+    def test_percent_never_falls_as_voltage_rises(self):
+        """Sweeping 2.40V to 4.30V in 0.01V steps never decreases and stays in 0..100."""
+        previous = 0
+        for step in range(240, 431):
+            pct = voltage_to_percent(step / 100)
+            self.assertGreaterEqual(pct, previous, f"dropped at {step / 100}V")
+            self.assertTrue(0 <= pct <= 100)
+            previous = pct
+
+    def test_curve_constant_matches_spec_and_is_strictly_ascending(self):
+        """bisect needs strictly ascending voltages; the points are the spec's table."""
+        self.assertEqual(list(_LIPO_CURVE), self.CURVE)
+        volts = [v for v, _ in _LIPO_CURVE]
+        self.assertEqual(volts, sorted(set(volts)))
 
 
 class TestAggregateMetrics(unittest.TestCase):
