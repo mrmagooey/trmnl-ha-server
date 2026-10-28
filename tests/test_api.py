@@ -658,7 +658,7 @@ class TestAPIMetrics(unittest.TestCase):
     @mock.patch('trmnl_server.api.is_schedule_entry_visible', return_value=True)
     @mock.patch('trmnl_server.api.read_config')
     def test_battery_header_reported_on_lipo_curve(self, mock_read_config, _vis, _rate):
-        """A Battery-Voltage header sent to /api/display shows up in /api/metrics on the LiPo curve.
+        """A Battery-Voltage header sent through do_GET on /api/display shows up in /api/metrics on the LiPo curve.
 
         3.30V is nearly empty: the curve reports 10%, where the old linear map said 50%.
         """
@@ -670,11 +670,11 @@ class TestAPIMetrics(unittest.TestCase):
             '/api/display',
             {'ID': 'AA:BB:CC:DD:EE:FF', 'Battery-Voltage': '3.30'},
         )
-        display._handle_api_display()
+        display.do_GET()
         self.assertEqual(display._response_code, 200)
 
         metrics = self.create_handler('/api/metrics')
-        metrics._handle_api_metrics()
+        metrics.do_GET()
         metrics.wfile.seek(0)
         out = json.loads(metrics.wfile.read().decode())
         today = out['battery']['AA:BB:CC:DD:EE:FF']['daily'][-1]
