@@ -209,6 +209,7 @@ class _FakeImageResponse:
 
     def __init__(self, body: bytes):
         self._body = body
+        self._offset = 0
 
     def __enter__(self):
         return self
@@ -217,7 +218,16 @@ class _FakeImageResponse:
         return False
 
     def read(self, n: int = -1) -> bytes:
-        return self._body[:n] if n and n > 0 else self._body
+        """Return successive chunks of the body on repeated calls."""
+        if n == -1:
+            chunk = self._body[self._offset:]
+            self._offset = len(self._body)
+            return chunk
+        if n <= 0:
+            return b""
+        chunk = self._body[self._offset:self._offset + n]
+        self._offset += len(chunk)
+        return chunk
 
 
 class TestFetchEntityImage(unittest.TestCase):
@@ -335,6 +345,85 @@ class TestFetchEntityImage(unittest.TestCase):
         with mock.patch.object(hass_client, 'urlopen', side_effect=URLError('down')):
             second = hass_client.fetch_entity_image('camera.front', self.logger)
         self.assertNotEqual(second.getextrema(), (0, 0))
+
+    def test_timeout_during_read_falls_back(self):
+        """TimeoutError during read() falls back to last good image and logs error."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            first = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.logger.reset_mock()
+
+        class _TimeoutResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+            def read(self, n: int = -1) -> bytes:
+                raise TimeoutError('timeout during read')
+
+        with mock.patch.object(hass_client, 'urlopen', return_value=_TimeoutResponse()):
+            second = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertIsNotNone(second)
+        self.assertEqual(second.tobytes(), first.tobytes())
+        self.logger.error.assert_called()
+
+    def test_incomplete_read_during_read_falls_back(self):
+        """http.client.IncompleteRead during read() falls back and logs error."""
+        import http.client
+
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            first = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.logger.reset_mock()
+
+        class _IncompleteReadResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+            def read(self, n: int = -1) -> bytes:
+                raise http.client.IncompleteRead(b'')
+
+        with mock.patch.object(hass_client, 'urlopen', return_value=_IncompleteReadResponse()):
+            second = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertIsNotNone(second)
+        self.assertEqual(second.tobytes(), first.tobytes())
+        self.logger.error.assert_called()
+
+    def test_trickle_exceeding_deadline_returns_none(self):
+        """A response that trickles past the deadline returns None and logs error."""
+        monotonic_values = [0.0]  # Start at time 0
+
+        def advance_time(*args):
+            monotonic_values[0] += 6.0  # Each call advances 6 seconds, exceeding 5s timeout
+            return monotonic_values[0]
+
+        class _TrickleResponse:
+            def __init__(self):
+                self._chunks = [b'x' * 100, b'y' * 100]
+                self._chunk_idx = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n: int = -1) -> bytes:
+                if self._chunk_idx >= len(self._chunks):
+                    return b''
+                chunk = self._chunks[self._chunk_idx]
+                self._chunk_idx += 1
+                return chunk
+
+        with mock.patch.object(hass_client, 'time') as mock_time, \
+             mock.patch.object(hass_client, 'urlopen', return_value=_TrickleResponse()):
+            mock_time.monotonic.side_effect = advance_time
+            result = hass_client.fetch_entity_image('camera.front', self.logger, timeout=5)
+
+        self.assertIsNone(result)
+        # Should log timeout error
+        logged = ' '.join(str(a) for c in self.logger.error.call_args_list for a in c.args)
+        self.assertIn('Timed out', logged)
+        self.assertIn('camera.front', logged)
 
 
 if __name__ == '__main__':

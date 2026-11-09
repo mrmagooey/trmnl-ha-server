@@ -4,8 +4,10 @@ This module handles all communication with the Home Assistant API,
 including fetching entity states, history, and calendar events.
 """
 
+import http.client
 import json
 import threading
+import time
 import warnings
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -379,6 +381,9 @@ def _decode_image(data: bytes, entity_name: str, logger: "Logger") -> Image.Imag
 def _download_entity_image(entity_name: str, logger: "Logger", timeout: int) -> Image.Image | None:
     """Fetch and decode an entity's current picture, without any fallback.
 
+    Reads the response body in chunks against a total deadline to prevent
+    slow-trickling servers from holding the single-threaded server.
+
     Args:
         entity_name: A camera.* or image.* entity id.
         logger: Logger for request and decode failures.
@@ -399,19 +404,29 @@ def _download_entity_image(entity_name: str, logger: "Logger", timeout: int) -> 
     url: str = f"{HASS_URL}/api/{endpoint}/{quote(entity_name, safe='')}"
     req = Request(url, headers={"Authorization": f"Bearer {HASS_TOKEN}"})
     try:
+        deadline: float = time.monotonic() + timeout
         with urlopen(req, timeout=timeout) as response:
-            data: bytes = response.read(IMAGE_MAX_BYTES + 1)
+            data: bytes = b""
+            chunk_size: int = 65_536  # 64 KiB chunks
+            while True:
+                if time.monotonic() > deadline:
+                    logger.error("Timed out fetching image for %s after %ds.", entity_name, timeout)
+                    return None
+                chunk: bytes = response.read(chunk_size)
+                if not chunk:
+                    break
+                data += chunk
+                if len(data) > IMAGE_MAX_BYTES:
+                    logger.error("Image for %s exceeds %d bytes.", entity_name, IMAGE_MAX_BYTES)
+                    return None
     except HTTPError as e:
         logger.error("HTTP error fetching image for %s: %d %s", entity_name, e.code, e.reason)
         return None
     except URLError as e:
         logger.error("URL error fetching image for %s: %s", entity_name, e.reason)
         return None
-    except OSError as e:  # socket timeouts during read
+    except (OSError, http.client.HTTPException, ValueError) as e:
         logger.error("Error fetching image for %s: %s", entity_name, e)
-        return None
-    if len(data) > IMAGE_MAX_BYTES:
-        logger.error("Image for %s exceeds %d bytes.", entity_name, IMAGE_MAX_BYTES)
         return None
     return _decode_image(data, entity_name, logger)
 
