@@ -685,10 +685,6 @@ class TestUrlComponentValidation(unittest.TestCase):
         self.assertNotIn("SECRET", logged)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class TestValidateImageComponent(unittest.TestCase):
     """Config validation for type: image."""
 
@@ -721,3 +717,7 @@ class TestValidateImageComponent(unittest.TestCase):
             {'type': 'image', 'entity_name': 'camera.a', 'friendly_name': 'x', 'timeout': 0}))
         self.assertIn('capped at 15', self._warnings(
             {'type': 'image', 'entity_name': 'camera.a', 'friendly_name': 'x', 'timeout': 30}))
+
+
+if __name__ == '__main__':
+    unittest.main()

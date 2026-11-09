@@ -453,12 +453,15 @@ def fetch_entity_image(
     Args:
         entity_name: A camera.* or image.* entity id.
         logger: Logger for failures.
-        timeout: Socket timeout in seconds.
+        timeout: Download deadline in seconds (see _download_entity_image).
 
     Returns:
         A mode 'L' image (a copy the caller may modify), or None if the fetch
         failed and no earlier picture exists.
     """
+    if not isinstance(entity_name, str):
+        logger.error("Image entity_name must be a string, got %r.", entity_name)
+        return None
     image = _download_entity_image(entity_name, logger, timeout)
     with _image_lock:
         if image is not None:

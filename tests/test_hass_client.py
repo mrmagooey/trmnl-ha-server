@@ -453,6 +453,13 @@ class TestFetchEntityImage(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_non_string_entity_name_returns_none(self):
+        """A list/dict entity_name (malformed YAML) logs an error and returns None."""
+        with mock.patch.object(hass_client, 'urlopen') as m:
+            self.assertIsNone(hass_client.fetch_entity_image(['camera.a'], self.logger))
+        m.assert_not_called()
+        self.logger.error.assert_called()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -4870,10 +4870,6 @@ class TestDrawImageComponent(unittest.TestCase):
         self.assertEqual((tile.mode, tile.size), ('RGB', (266, 220)))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class TestRenderImageBranch(unittest.TestCase):
     """render_dashboard_image wiring for type: image."""
 
@@ -4901,3 +4897,7 @@ class TestRenderImageBranch(unittest.TestCase):
             render_dashboard_image({'name': 'd', 'components': [
                 {'type': 'image', 'entity_name': 'camera.front', 'friendly_name': 'Cam'}]}, self.logger)
         self.assertIn('No data for\nCam', [c.args[0] for c in spy.call_args_list])
+
+
+if __name__ == '__main__':
+    unittest.main()
