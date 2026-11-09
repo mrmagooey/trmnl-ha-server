@@ -381,13 +381,17 @@ def _decode_image(data: bytes, entity_name: str, logger: "Logger") -> Image.Imag
 def _download_entity_image(entity_name: str, logger: "Logger", timeout: int) -> Image.Image | None:
     """Fetch and decode an entity's current picture, without any fallback.
 
-    Reads the response body in chunks against a total deadline to prevent
-    slow-trickling servers from holding the single-threaded server.
+    Reads the response body in chunks with a total deadline and per-operation
+    socket timeout to prevent slow-trickling servers from holding the
+    single-threaded server. The total deadline for download is `timeout`
+    seconds, and a single stalled socket operation may add up to one more
+    `timeout` seconds.
 
     Args:
         entity_name: A camera.* or image.* entity id.
         logger: Logger for request and decode failures.
-        timeout: Socket timeout in seconds.
+        timeout: Total deadline in seconds for the download (plus up to one
+            additional socket timeout for stalled operations).
 
     Returns:
         A mode 'L' image, or None on any failure.
@@ -403,22 +407,25 @@ def _download_entity_image(entity_name: str, logger: "Logger", timeout: int) -> 
 
     url: str = f"{HASS_URL}/api/{endpoint}/{quote(entity_name, safe='')}"
     req = Request(url, headers={"Authorization": f"Bearer {HASS_TOKEN}"})
+    deadline: float = time.monotonic() + timeout
     try:
-        deadline: float = time.monotonic() + timeout
         with urlopen(req, timeout=timeout) as response:
-            data: bytes = b""
+            chunks: list[bytes] = []
             chunk_size: int = 65_536  # 64 KiB chunks
+            total_size: int = 0
             while True:
                 if time.monotonic() > deadline:
                     logger.error("Timed out fetching image for %s after %ds.", entity_name, timeout)
                     return None
-                chunk: bytes = response.read(chunk_size)
+                chunk: bytes = response.read1(chunk_size)
                 if not chunk:
                     break
-                data += chunk
-                if len(data) > IMAGE_MAX_BYTES:
+                chunks.append(chunk)
+                total_size += len(chunk)
+                if total_size > IMAGE_MAX_BYTES:
                     logger.error("Image for %s exceeds %d bytes.", entity_name, IMAGE_MAX_BYTES)
                     return None
+            data: bytes = b"".join(chunks)
     except HTTPError as e:
         logger.error("HTTP error fetching image for %s: %d %s", entity_name, e.code, e.reason)
         return None

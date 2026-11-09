@@ -1,6 +1,9 @@
 """Tests for hass_client module."""
 
 import logging
+import socketserver
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from io import BytesIO
@@ -229,6 +232,10 @@ class _FakeImageResponse:
         self._offset += len(chunk)
         return chunk
 
+    def read1(self, n: int = -1) -> bytes:
+        """Same as read() — simulate single underlying socket read."""
+        return self.read(n)
+
 
 class TestFetchEntityImage(unittest.TestCase):
     """Tests for fetch_entity_image."""
@@ -347,7 +354,7 @@ class TestFetchEntityImage(unittest.TestCase):
         self.assertNotEqual(second.getextrema(), (0, 0))
 
     def test_timeout_during_read_falls_back(self):
-        """TimeoutError during read() falls back to last good image and logs error."""
+        """TimeoutError during read1() falls back to last good image and logs error."""
         with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
             first = hass_client.fetch_entity_image('camera.front', self.logger)
         self.logger.reset_mock()
@@ -359,6 +366,8 @@ class TestFetchEntityImage(unittest.TestCase):
                 return False
             def read(self, n: int = -1) -> bytes:
                 raise TimeoutError('timeout during read')
+            def read1(self, n: int = -1) -> bytes:
+                raise TimeoutError('timeout during read1')
 
         with mock.patch.object(hass_client, 'urlopen', return_value=_TimeoutResponse()):
             second = hass_client.fetch_entity_image('camera.front', self.logger)
@@ -367,7 +376,7 @@ class TestFetchEntityImage(unittest.TestCase):
         self.logger.error.assert_called()
 
     def test_incomplete_read_during_read_falls_back(self):
-        """http.client.IncompleteRead during read() falls back and logs error."""
+        """http.client.IncompleteRead during read1() falls back and logs error."""
         import http.client
 
         with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
@@ -381,6 +390,8 @@ class TestFetchEntityImage(unittest.TestCase):
                 return False
             def read(self, n: int = -1) -> bytes:
                 raise http.client.IncompleteRead(b'')
+            def read1(self, n: int = -1) -> bytes:
+                raise http.client.IncompleteRead(b'')
 
         with mock.patch.object(hass_client, 'urlopen', return_value=_IncompleteReadResponse()):
             second = hass_client.fetch_entity_image('camera.front', self.logger)
@@ -388,42 +399,59 @@ class TestFetchEntityImage(unittest.TestCase):
         self.assertEqual(second.tobytes(), first.tobytes())
         self.logger.error.assert_called()
 
-    def test_trickle_exceeding_deadline_returns_none(self):
-        """A response that trickles past the deadline returns None and logs error."""
-        monotonic_values = [0.0]  # Start at time 0
+    def test_real_socket_trickle_timeout(self):
+        """A real socket server trickling data times out and returns None."""
 
-        def advance_time(*args):
-            monotonic_values[0] += 6.0  # Each call advances 6 seconds, exceeding 5s timeout
-            return monotonic_values[0]
+        class _TrickleHandler(socketserver.BaseRequestHandler):
+            """Handler that sends HTTP headers then trickles data slowly."""
 
-        class _TrickleResponse:
-            def __init__(self):
-                self._chunks = [b'x' * 100, b'y' * 100]
-                self._chunk_idx = 0
+            def handle(self):
+                try:
+                    # Send HTTP response headers
+                    self.request.sendall(
+                        b"HTTP/1.1 200 OK\r\n"
+                        b"Content-Type: image/png\r\n"
+                        b"Content-Length: 100000\r\n"
+                        b"\r\n"
+                    )
+                    # Trickle bytes slowly (1 byte every 0.2s)
+                    for i in range(50):
+                        try:
+                            self.request.sendall(b"x")
+                            time.sleep(0.2)
+                        except (BrokenPipeError, ConnectionResetError):
+                            break
+                except Exception:
+                    pass
 
-            def __enter__(self):
-                return self
+        # Start server on localhost with random port
+        server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), _TrickleHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
 
-            def __exit__(self, *exc):
-                return False
+        try:
+            host, port = server.server_address
+            url = f"http://{host}:{port}"
 
-            def read(self, n: int = -1) -> bytes:
-                if self._chunk_idx >= len(self._chunks):
-                    return b''
-                chunk = self._chunks[self._chunk_idx]
-                self._chunk_idx += 1
-                return chunk
+            with mock.patch.object(hass_client, 'HASS_URL', url):
+                start = time.monotonic()
+                result = hass_client.fetch_entity_image('camera.front', self.logger, timeout=1)
+                elapsed = time.monotonic() - start
 
-        with mock.patch.object(hass_client, 'time') as mock_time, \
-             mock.patch.object(hass_client, 'urlopen', return_value=_TrickleResponse()):
-            mock_time.monotonic.side_effect = advance_time
-            result = hass_client.fetch_entity_image('camera.front', self.logger, timeout=5)
-
-        self.assertIsNone(result)
-        # Should log timeout error
-        logged = ' '.join(str(a) for c in self.logger.error.call_args_list for a in c.args)
-        self.assertIn('Timed out', logged)
-        self.assertIn('camera.front', logged)
+            # Should timeout and return None
+            self.assertIsNone(result)
+            # Should have logged error
+            self.logger.error.assert_called()
+            logged = ' '.join(str(a) for c in self.logger.error.call_args_list for a in c.args)
+            self.assertIn('Timed out', logged)
+            self.assertIn('camera.front', logged)
+            # Timeout should happen quickly (within ~4 seconds total)
+            self.assertLess(elapsed, 4.0)
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == '__main__':
