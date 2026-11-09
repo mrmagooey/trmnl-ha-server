@@ -4872,3 +4872,32 @@ class TestDrawImageComponent(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRenderImageBranch(unittest.TestCase):
+    """render_dashboard_image wiring for type: image."""
+
+    def setUp(self):
+        self.logger = mock.Mock(spec=logging.Logger)
+
+    @mock.patch('trmnl_server.hass_client.fetch_entity_image')
+    def test_timeout_resolved_and_capped(self, mock_fetch):
+        """timeout defaults to 5, is capped at 15, and bad values warn and default."""
+        mock_fetch.return_value = Image.new('L', (40, 20), 128)
+        for given, expected in ((None, 5), (8, 8), (99, 15), ('x', 5), (True, 5), (0, 5)):
+            comp = {'type': 'image', 'entity_name': 'camera.front', 'friendly_name': 'Cam'}
+            if given is not None:
+                comp['timeout'] = given
+            render_dashboard_image({'name': 'd', 'components': [comp]}, self.logger)
+            self.assertEqual(mock_fetch.call_args.kwargs['timeout'], expected, given)
+            self.assertEqual(mock_fetch.call_args.args[0], 'camera.front')
+
+    @mock.patch('trmnl_server.hass_client.fetch_entity_image', return_value=None)
+    def test_no_picture_renders_no_data_placeholder(self, _mock_fetch):
+        """A failed fetch with no fallback draws the standard placeholder."""
+        from trmnl_server import components as components_module
+        with mock.patch.object(components_module, '_create_info_image',
+                               wraps=components_module._create_info_image) as spy:
+            render_dashboard_image({'name': 'd', 'components': [
+                {'type': 'image', 'entity_name': 'camera.front', 'friendly_name': 'Cam'}]}, self.logger)
+        self.assertIn('No data for\nCam', [c.args[0] for c in spy.call_args_list])

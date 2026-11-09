@@ -45,7 +45,7 @@ class ComponentConfig(TypedDict, total=False):
     entity_name: str
     attribute: str
     friendly_name: str
-    type: Literal["history_graph", "entity", "calendar", "entities", "todo_list", "url"]
+    type: Literal["history_graph", "entity", "calendar", "entities", "todo_list", "url", "image"]
     arguments: CalendarArguments
     entities: list[EntityItem]
     large_display: bool

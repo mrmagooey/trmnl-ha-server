@@ -368,6 +368,24 @@ class TestGoldenImages(unittest.TestCase):
         assert_golden(img_io, 'url_panel')
 
     @mock.patch('trmnl_server.hass_client.get_entity_state')
+    @mock.patch('trmnl_server.hass_client.fetch_entity_image')
+    def test_image_panel(self, mock_fetch_image, mock_get_entity_state):
+        """An image panel beside an entity panel: dithered picture under a title."""
+        mock_fetch_image.return_value = Image.linear_gradient('L').resize((320, 180))
+        mock_get_entity_state.return_value = {'state': '21.5', 'attributes': {}}
+        dashboard = {
+            'name': 'image_panel',
+            'title': 'Image',
+            'components': [
+                {'type': 'image', 'entity_name': 'camera.front', 'friendly_name': 'Front door'},
+                {'type': 'entity', 'entity_name': 'sensor.t', 'friendly_name': 'Temp'},
+            ],
+        }
+        with mock.patch('datetime.datetime', mock_datetime()):
+            img_io = render_dashboard_image(dashboard, mock_logger)
+        assert_golden(img_io, 'image_panel')
+
+    @mock.patch('trmnl_server.hass_client.get_entity_state')
     def test_title_size_harmonisation(self, mock_get_entity_state):
         """Four panels in a 2x2 grid: the top row shares one title size, the
         bottom row drops to a smaller one because of a long title."""

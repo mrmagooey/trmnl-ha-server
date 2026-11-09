@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `image` component: shows a Home Assistant camera or image entity's current picture, dithered to black and white so greys come through as dot patterns on the e-ink screen. Fetched fresh on every render with a short `timeout` (default 5s, max 15s); the last good picture is shown if a fetch fails.
+
 ## [1.14.2] - 2026-11-08
 
 ### Changed

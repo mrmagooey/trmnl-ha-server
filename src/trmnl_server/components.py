@@ -2479,6 +2479,16 @@ def tile_components(
                 title_lines=title_lines,
                 body_font_size=body_font_size,
             )
+        elif component_type == 'image':
+            return _draw_image_component(
+                friendly_name,
+                data,  # type: ignore[arg-type]
+                tile_width,
+                tile_height,
+                logger,
+                title_font_size=title_font_size,
+                title_lines=title_lines,
+            )
         elif component_type == 'todo_list':
             todo_columns = render_data.get('columns', 1)
             todo_key = render_data.get('todo_key')
@@ -2731,6 +2741,19 @@ def render_dashboard_image(
         elif component_type == 'url':
             from .url_source import fetch_url_value
             data = fetch_url_value(component, logger)
+        elif component_type == 'image':
+            from .hass_client import fetch_entity_image, IMAGE_DEFAULT_TIMEOUT, IMAGE_MAX_TIMEOUT
+            image_timeout = component.get('timeout', IMAGE_DEFAULT_TIMEOUT)
+            if isinstance(image_timeout, bool) or not isinstance(image_timeout, int) or image_timeout <= 0:
+                logger.warning(
+                    "Invalid 'timeout' (%r) for %s; defaulting to %d.",
+                    image_timeout, component.get('friendly_name'), IMAGE_DEFAULT_TIMEOUT,
+                )
+                image_timeout = IMAGE_DEFAULT_TIMEOUT
+            data = fetch_entity_image(
+                component.get('entity_name', ''), logger,
+                timeout=min(image_timeout, IMAGE_MAX_TIMEOUT),
+            )
         elif component_type == 'todo_list':
             from .hass_client import _fetch_todo_list
             entity_name = component.get('entity_name', '')
