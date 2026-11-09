@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from .hass_client import IMAGE_DOMAIN_ENDPOINTS, IMAGE_MAX_TIMEOUT
 from .models import Config, DashboardConfig, DeviceConfig, ScheduleEntry
 
 if TYPE_CHECKING:
@@ -79,12 +80,42 @@ def _aligned_refresh_rate(
     return int(remaining)
 
 
-VALID_COMPONENT_TYPES = {"history_graph", "entity", "calendar", "entities", "todo_list", "url"}
+VALID_COMPONENT_TYPES = {"history_graph", "entity", "calendar", "entities", "todo_list", "url", "image"}
 VALID_DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 DAYS_MAP: dict[str, int] = {
     "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
     "Friday": 4, "Saturday": 5, "Sunday": 6,
 }
+
+
+def _validate_image_component(
+    component: "ComponentConfig",
+    tag: str,
+    index: int,
+    logger: "Logger",
+) -> None:
+    """Warn about invalid fields on an image component."""
+    entity = component.get("entity_name")
+    if not entity:
+        logger.warning("config: %s component[%d] type 'image' is missing 'entity_name'", tag, index)
+    elif not isinstance(entity, str) or entity.split(".", 1)[0] not in IMAGE_DOMAIN_ENDPOINTS:
+        logger.warning(
+            "config: %s component[%d] 'entity_name' must be a camera.* or image.* entity, got %r",
+            tag, index, entity,
+        )
+
+    timeout = component.get("timeout")
+    if timeout is not None:
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+            logger.warning(
+                "config: %s component[%d] 'timeout' must be a positive integer, got %r",
+                tag, index, timeout,
+            )
+        elif timeout > IMAGE_MAX_TIMEOUT:
+            logger.warning(
+                "config: %s component[%d] 'timeout' %d is capped at %d seconds",
+                tag, index, timeout, IMAGE_MAX_TIMEOUT,
+            )
 
 
 def _validate_url_component(
@@ -210,6 +241,8 @@ def _validate_config(config: Config, logger: "Logger") -> None:
                 )
             if ctype == "url":
                 _validate_url_component(component, tag, j, logger)
+            if ctype == "image":
+                _validate_image_component(component, tag, j, logger)
 
 
 def read_config(logger: "Logger") -> Config:

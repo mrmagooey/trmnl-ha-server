@@ -685,5 +685,39 @@ class TestUrlComponentValidation(unittest.TestCase):
         self.assertNotIn("SECRET", logged)
 
 
+class TestValidateImageComponent(unittest.TestCase):
+    """Config validation for type: image."""
+
+    def _warnings(self, component):
+        logger = mock.Mock(spec=logging.Logger)
+        _validate_config({'dashboards': [{'name': 'd', 'components': [component]}]}, logger)
+        return ' '.join(
+            c.args[0] % c.args[1:] for c in logger.warning.call_args_list
+            if 'component[' in c.args[0]
+        )
+
+    def test_valid_camera_and_image_no_warning(self):
+        """camera.* and image.* entities validate cleanly, and 'image' is a known type."""
+        for entity in ('camera.front', 'image.map'):
+            self.assertEqual(self._warnings({'type': 'image', 'entity_name': entity,
+                                             'friendly_name': 'x'}), '')
+
+    def test_missing_entity_warns(self):
+        """A missing entity_name warns."""
+        self.assertIn("missing 'entity_name'", self._warnings({'type': 'image', 'friendly_name': 'x'}))
+
+    def test_wrong_domain_warns(self):
+        """A sensor entity warns that it must be camera.* or image.*."""
+        self.assertIn('camera.* or image.*', self._warnings(
+            {'type': 'image', 'entity_name': 'sensor.temp', 'friendly_name': 'x'}))
+
+    def test_bad_timeout_warns(self):
+        """A non-positive or non-int timeout warns; an over-cap one notes the cap."""
+        self.assertIn("'timeout' must be a positive integer", self._warnings(
+            {'type': 'image', 'entity_name': 'camera.a', 'friendly_name': 'x', 'timeout': 0}))
+        self.assertIn('capped at 15', self._warnings(
+            {'type': 'image', 'entity_name': 'camera.a', 'friendly_name': 'x', 'timeout': 30}))
+
+
 if __name__ == '__main__':
     unittest.main()

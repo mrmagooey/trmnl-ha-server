@@ -4,12 +4,20 @@ This module handles all communication with the Home Assistant API,
 including fetching entity states, history, and calendar events.
 """
 
+import http.client
 import json
+import threading
+import time
+import warnings
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from os import environ
 from typing import TYPE_CHECKING
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+from PIL import Image
 
 from .models import EntityState, HistoryPoint, CalendarEvent
 
@@ -315,3 +323,158 @@ def _process_history_to_points(
             continue
     data_points.sort(key=lambda point: point[0])
     return data_points
+
+
+# Image components: HA serves a camera's or image entity's current picture
+# through these proxy endpoints, authenticated with the same Bearer token.
+IMAGE_DOMAIN_ENDPOINTS: dict[str, str] = {"camera": "camera_proxy", "image": "image_proxy"}
+# The render runs inside a single-threaded server's request, so a slow camera
+# must give up quickly; the last good picture covers the gap.
+IMAGE_DEFAULT_TIMEOUT: int = 5
+IMAGE_MAX_TIMEOUT: int = 15
+IMAGE_MAX_BYTES: int = 10_485_760
+IMAGE_MAX_PIXELS: int = 16_000_000
+
+# entity id -> last successfully decoded picture ('L' mode), one per entity.
+_last_good_images: dict[str, Image.Image] = {}
+_image_lock = threading.Lock()
+
+
+def _decode_image(data: bytes, entity_name: str, logger: "Logger") -> Image.Image | None:
+    """Decode untrusted image bytes into a greyscale picture.
+
+    Rejects pictures over IMAGE_MAX_PIXELS from the header, before any pixel
+    data is decoded, and treats Pillow's decompression-bomb warning as an
+    error. Transparent pixels are composited onto white.
+
+    Args:
+        data: Raw response body.
+        entity_name: Entity id, for log context.
+        logger: Logger for decode failures.
+
+    Returns:
+        A mode 'L' image, or None if the bytes are not a usable picture.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(data)) as img:
+                width, height = img.size
+                if width * height > IMAGE_MAX_PIXELS:
+                    logger.error(
+                        "Image for %s is %dx%d, over the %d pixel limit.",
+                        entity_name, width, height, IMAGE_MAX_PIXELS,
+                    )
+                    return None
+                img.draft("L", (2048, 2048))  # JPEG decodes at reduced size; no-op otherwise
+                if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+                    rgba = img.convert("RGBA")
+                    flattened = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                    flattened.alpha_composite(rgba)
+                    return flattened.convert("L")
+                return img.convert("L")
+    except Exception as e:  # noqa: BLE001 - untrusted bytes must never crash a render
+        logger.error("Could not decode image for %s: %s", entity_name, e)
+        return None
+
+
+def _download_entity_image(entity_name: str, logger: "Logger", timeout: int) -> Image.Image | None:
+    """Fetch and decode an entity's current picture, without any fallback.
+
+    Reads the response body in chunks with a total deadline and per-operation
+    socket timeout to prevent slow-trickling servers from holding the
+    single-threaded server. The total deadline for download is `timeout`
+    seconds, and a single stalled socket operation may add up to one more
+    `timeout` seconds.
+
+    Args:
+        entity_name: A camera.* or image.* entity id.
+        logger: Logger for request and decode failures.
+        timeout: Total deadline in seconds for the download (plus up to one
+            additional socket timeout for stalled operations).
+
+    Returns:
+        A mode 'L' image, or None on any failure.
+    """
+    domain: str = entity_name.split(".", 1)[0] if isinstance(entity_name, str) else ""
+    endpoint: str | None = IMAGE_DOMAIN_ENDPOINTS.get(domain)
+    if endpoint is None:
+        logger.error("Image entity %r must be a camera.* or image.* entity.", entity_name)
+        return None
+    if not HASS_URL or not HASS_TOKEN:
+        logger.error("HASS_URL and HASS_TOKEN environment variables must be set.")
+        return None
+
+    url: str = f"{HASS_URL}/api/{endpoint}/{quote(entity_name, safe='')}"
+    req = Request(url, headers={"Authorization": f"Bearer {HASS_TOKEN}"})
+    deadline: float = time.monotonic() + timeout
+    try:
+        with urlopen(req, timeout=timeout) as response:
+            chunks: list[bytes] = []
+            chunk_size: int = 65_536  # 64 KiB chunks
+            total_size: int = 0
+            while True:
+                if time.monotonic() > deadline:
+                    logger.error("Timed out fetching image for %s after %ds.", entity_name, timeout)
+                    return None
+                chunk: bytes = response.read1(chunk_size)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total_size += len(chunk)
+                if total_size > IMAGE_MAX_BYTES:
+                    logger.error("Image for %s exceeds %d bytes.", entity_name, IMAGE_MAX_BYTES)
+                    return None
+            data: bytes = b"".join(chunks)
+    except HTTPError as e:
+        logger.error("HTTP error fetching image for %s: %d %s", entity_name, e.code, e.reason)
+        return None
+    except URLError as e:
+        logger.error("URL error fetching image for %s: %s", entity_name, e.reason)
+        return None
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        logger.error("Error fetching image for %s: %s", entity_name, e)
+        return None
+    return _decode_image(data, entity_name, logger)
+
+
+def fetch_entity_image(
+    entity_name: str,
+    logger: "Logger",
+    *,
+    timeout: int = IMAGE_DEFAULT_TIMEOUT,
+) -> Image.Image | None:
+    """Get a camera or image entity's current picture, greyscale.
+
+    Fetches synchronously from the entity's HA proxy endpoint. On success the
+    picture is remembered; on any failure the last good picture for the
+    entity is returned instead, so an outage keeps showing the old picture.
+
+    Args:
+        entity_name: A camera.* or image.* entity id.
+        logger: Logger for failures.
+        timeout: Download deadline in seconds (see _download_entity_image).
+
+    Returns:
+        A mode 'L' image (a copy the caller may modify), or None if the fetch
+        failed and no earlier picture exists.
+    """
+    if not isinstance(entity_name, str):
+        logger.error("Image entity_name must be a string, got %r.", entity_name)
+        return None
+    image = _download_entity_image(entity_name, logger, timeout)
+    with _image_lock:
+        if image is not None:
+            _last_good_images[entity_name] = image
+            return image.copy()
+        fallback = _last_good_images.get(entity_name)
+    if fallback is None:
+        return None
+    logger.warning("Showing the last good image for %s.", entity_name)
+    return fallback.copy()
+
+
+def reset_image_cache() -> None:
+    """Forget every remembered picture. Test-only helper."""
+    with _image_lock:
+        _last_good_images.clear()

@@ -133,6 +133,7 @@ If `firmware:` is omitted, `/api/display` always returns `update_firmware: false
 | `calendar` | Upcoming calendar events | `friendly_name`, `arguments.calendar_id`, `arguments.days` |
 | `todo_list` | Incomplete items from a Home Assistant todo list | `entity_name`, `friendly_name` |
 | `url` | Text value fetched from an external HTTP(S) URL, optionally extracted with a JSON path and/or regex | `url`, `friendly_name` |
+| `image` | A camera or image entity's current picture, dithered to black and white | `entity_name` (`camera.*` or `image.*`), `friendly_name` |
 
 Set `large_display: true` on one component to give it the top half of the screen; remaining components are tiled along the bottom.
 
@@ -195,6 +196,23 @@ Example — pull a temperature field out of a JSON weather API:
   json_path: ".current.temp_f"
   cache_ttl: 600
   timeout: 5
+```
+
+#### `image` component
+
+Shows the current picture of a Home Assistant `camera.*` or `image.*` entity, fetched from `/api/camera_proxy/<entity>` or `/api/image_proxy/<entity>` with the same token as every other request.
+
+- **`entity_name`** (required): a `camera.*` or `image.*` entity. Any other domain logs a config warning and the panel shows "No data".
+- **`timeout`** (optional, default `5` seconds, capped at `15`): roughly how long fetching the picture may take — it is a deadline for the whole download, though a stalled connection can add up to one more `timeout`. The fetch happens while the dashboard renders, so a fresh picture is shown on every refresh, and renders run one at a time, so several `image` components on one dashboard add up; keep this short, because the device waits for the render.
+- **`hide_title`** and **`large_display`** work the same as for any other component type.
+
+The picture is scaled to fit the panel with its aspect ratio kept — letterboxed on white, never cropped — then its contrast is stretched (always on) and it is Floyd–Steinberg dithered to black and white so shades of grey show as dot density. If a fetch fails, the last picture fetched successfully for that entity since the server started is shown instead; before the first success the panel shows "No data". Responses over 10 MB or pictures over 16 megapixels are rejected. Transparent areas render white.
+
+```yaml
+- type: image
+  entity_name: "camera.front_door"
+  friendly_name: "Front door"
+  large_display: true
 ```
 
 ## Usage

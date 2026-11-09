@@ -1,10 +1,18 @@
 """Tests for hass_client module."""
 
 import logging
+import socketserver
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
+from io import BytesIO
 from unittest import mock
+from urllib.error import HTTPError, URLError
 
+from PIL import Image
+
+from trmnl_server import hass_client
 from trmnl_server.hass_client import (
     _cast_to_numbers,
     _fetch_history,
@@ -191,6 +199,266 @@ class TestSelectEntityValue(unittest.TestCase):
         state_data = {'attributes': {}}  # entity present but no 'state' key
         result = _select_entity_value(state_data, None, 'sensor.x', self.logger)
         self.assertIsNone(result)
+
+
+def _png_bytes(img: "Image.Image") -> bytes:
+    buf = BytesIO()
+    img.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+class _FakeImageResponse:
+    """Context-manager stand-in for urlopen's response."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+        self._offset = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n: int = -1) -> bytes:
+        """Return successive chunks of the body on repeated calls."""
+        if n == -1:
+            chunk = self._body[self._offset:]
+            self._offset = len(self._body)
+            return chunk
+        if n <= 0:
+            return b""
+        chunk = self._body[self._offset:self._offset + n]
+        self._offset += len(chunk)
+        return chunk
+
+    def read1(self, n: int = -1) -> bytes:
+        """Same as read() — simulate single underlying socket read."""
+        return self.read(n)
+
+
+class TestFetchEntityImage(unittest.TestCase):
+    """Tests for fetch_entity_image."""
+
+    def setUp(self):
+        hass_client.reset_image_cache()
+        self.logger = mock.Mock(spec=logging.Logger)
+        patcher_url = mock.patch.object(hass_client, 'HASS_URL', 'http://hass')
+        patcher_token = mock.patch.object(hass_client, 'HASS_TOKEN', 'secret-token')
+        patcher_url.start()
+        patcher_token.start()
+        self.addCleanup(patcher_url.stop)
+        self.addCleanup(patcher_token.stop)
+        self.addCleanup(hass_client.reset_image_cache)
+
+    def _ok(self, img=None):
+        img = img if img is not None else Image.new('RGB', (40, 20), (200, 100, 50))
+        return _FakeImageResponse(_png_bytes(img))
+
+    def test_camera_uses_camera_proxy_with_bearer(self):
+        """camera.* entities hit /api/camera_proxy with the Bearer token."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()) as m:
+            img = hass_client.fetch_entity_image('camera.front', self.logger)
+        req = m.call_args.args[0]
+        self.assertEqual(req.full_url, 'http://hass/api/camera_proxy/camera.front')
+        self.assertEqual(req.get_header('Authorization'), 'Bearer secret-token')
+        self.assertEqual(img.mode, 'L')
+        self.assertEqual(img.size, (40, 20))
+
+    def test_image_uses_image_proxy(self):
+        """image.* entities hit /api/image_proxy."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()) as m:
+            hass_client.fetch_entity_image('image.map', self.logger)
+        self.assertEqual(m.call_args.args[0].full_url, 'http://hass/api/image_proxy/image.map')
+
+    def test_entity_id_is_url_quoted(self):
+        """Characters outside an entity id's normal set are percent-encoded."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()) as m:
+            hass_client.fetch_entity_image('camera.a/b c', self.logger)
+        self.assertEqual(m.call_args.args[0].full_url, 'http://hass/api/camera_proxy/camera.a%2Fb%20c')
+
+    def test_rejects_other_domains_without_request(self):
+        """A non camera/image entity logs an error and never makes a request."""
+        with mock.patch.object(hass_client, 'urlopen') as m:
+            self.assertIsNone(hass_client.fetch_entity_image('sensor.temp', self.logger))
+        m.assert_not_called()
+        self.logger.error.assert_called()
+
+    def test_missing_credentials_returns_none(self):
+        """No HASS_TOKEN: error logged, no request, None."""
+        with mock.patch.object(hass_client, 'HASS_TOKEN', None), \
+             mock.patch.object(hass_client, 'urlopen') as m:
+            self.assertIsNone(hass_client.fetch_entity_image('camera.front', self.logger))
+        m.assert_not_called()
+
+    def test_timeout_passed_and_fallback_used(self):
+        """timeout reaches urlopen; a later timeout serves the last good image."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()) as m:
+            first = hass_client.fetch_entity_image('camera.front', self.logger, timeout=7)
+        self.assertEqual(m.call_args.kwargs['timeout'], 7)
+        with mock.patch.object(hass_client, 'urlopen', side_effect=TimeoutError('slow')):
+            second = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertIsNotNone(second)
+        self.assertEqual(second.tobytes(), first.tobytes())
+
+    def test_http_error_logs_status_not_token_and_falls_back(self):
+        """401 logs status + entity (never the token) and serves the last good image."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            hass_client.fetch_entity_image('camera.front', self.logger)
+        err = HTTPError('http://hass/x', 401, 'Unauthorized', {}, None)
+        with mock.patch.object(hass_client, 'urlopen', side_effect=err):
+            img = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertIsNotNone(img)
+        logged = ' '.join(str(a) for c in self.logger.error.call_args_list for a in c.args)
+        self.assertIn('401', logged)
+        self.assertIn('camera.front', logged)
+        self.assertNotIn('secret-token', logged)
+
+    def test_failure_with_no_history_returns_none(self):
+        """A URLError before any success yields None."""
+        with mock.patch.object(hass_client, 'urlopen', side_effect=URLError('down')):
+            self.assertIsNone(hass_client.fetch_entity_image('camera.front', self.logger))
+
+    def test_garbage_bytes_fall_back(self):
+        """Undecodable bytes log an error and fall back."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=_FakeImageResponse(b'not an image')):
+            self.assertIsNone(hass_client.fetch_entity_image('camera.front', self.logger))
+        self.logger.error.assert_called()
+
+    def test_oversized_body_rejected(self):
+        """A body over IMAGE_MAX_BYTES is rejected without decoding."""
+        big = b'x' * (hass_client.IMAGE_MAX_BYTES + 1)
+        with mock.patch.object(hass_client, 'urlopen', return_value=_FakeImageResponse(big)):
+            self.assertIsNone(hass_client.fetch_entity_image('camera.front', self.logger))
+
+    def test_too_many_pixels_rejected(self):
+        """An image whose header exceeds IMAGE_MAX_PIXELS is rejected."""
+        with mock.patch.object(hass_client, 'IMAGE_MAX_PIXELS', 100), \
+             mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            self.assertIsNone(hass_client.fetch_entity_image('camera.front', self.logger))
+
+    def test_transparent_png_composited_on_white(self):
+        """Fully transparent pixels become white, not black."""
+        rgba = Image.new('RGBA', (10, 10), (0, 0, 0, 0))
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok(rgba)):
+            img = hass_client.fetch_entity_image('image.map', self.logger)
+        self.assertEqual(img.getextrema(), (255, 255))
+
+    def test_fallback_is_a_copy(self):
+        """Mutating a returned image never corrupts the stored fallback."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            first = hass_client.fetch_entity_image('camera.front', self.logger)
+        first.paste(0, (0, 0, 40, 20))
+        with mock.patch.object(hass_client, 'urlopen', side_effect=URLError('down')):
+            second = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertNotEqual(second.getextrema(), (0, 0))
+
+    def test_timeout_during_read_falls_back(self):
+        """TimeoutError during read1() falls back to last good image and logs error."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            first = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.logger.reset_mock()
+
+        class _TimeoutResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+            def read(self, n: int = -1) -> bytes:
+                raise TimeoutError('timeout during read')
+            def read1(self, n: int = -1) -> bytes:
+                raise TimeoutError('timeout during read1')
+
+        with mock.patch.object(hass_client, 'urlopen', return_value=_TimeoutResponse()):
+            second = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertIsNotNone(second)
+        self.assertEqual(second.tobytes(), first.tobytes())
+        self.logger.error.assert_called()
+
+    def test_incomplete_read_during_read_falls_back(self):
+        """http.client.IncompleteRead during read1() falls back and logs error."""
+        import http.client
+
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._ok()):
+            first = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.logger.reset_mock()
+
+        class _IncompleteReadResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+            def read(self, n: int = -1) -> bytes:
+                raise http.client.IncompleteRead(b'')
+            def read1(self, n: int = -1) -> bytes:
+                raise http.client.IncompleteRead(b'')
+
+        with mock.patch.object(hass_client, 'urlopen', return_value=_IncompleteReadResponse()):
+            second = hass_client.fetch_entity_image('camera.front', self.logger)
+        self.assertIsNotNone(second)
+        self.assertEqual(second.tobytes(), first.tobytes())
+        self.logger.error.assert_called()
+
+    def test_real_socket_trickle_timeout(self):
+        """A real socket server trickling data times out and returns None."""
+
+        class _TrickleHandler(socketserver.BaseRequestHandler):
+            """Handler that sends HTTP headers then trickles data slowly."""
+
+            def handle(self):
+                try:
+                    # Send HTTP response headers
+                    self.request.sendall(
+                        b"HTTP/1.1 200 OK\r\n"
+                        b"Content-Type: image/png\r\n"
+                        b"Content-Length: 100000\r\n"
+                        b"\r\n"
+                    )
+                    # Trickle bytes slowly (1 byte every 0.2s)
+                    for i in range(50):
+                        try:
+                            self.request.sendall(b"x")
+                            time.sleep(0.2)
+                        except (BrokenPipeError, ConnectionResetError):
+                            break
+                except Exception:
+                    pass
+
+        # Start server on localhost with random port
+        server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), _TrickleHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
+
+        try:
+            host, port = server.server_address
+            url = f"http://{host}:{port}"
+
+            with mock.patch.object(hass_client, 'HASS_URL', url):
+                start = time.monotonic()
+                result = hass_client.fetch_entity_image('camera.front', self.logger, timeout=1)
+                elapsed = time.monotonic() - start
+
+            # Should timeout and return None
+            self.assertIsNone(result)
+            # Should have logged error
+            self.logger.error.assert_called()
+            logged = ' '.join(str(a) for c in self.logger.error.call_args_list for a in c.args)
+            self.assertIn('Timed out', logged)
+            self.assertIn('camera.front', logged)
+            # Timeout should happen quickly (within ~4 seconds total)
+            self.assertLess(elapsed, 4.0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_non_string_entity_name_returns_none(self):
+        """A list/dict entity_name (malformed YAML) logs an error and returns None."""
+        with mock.patch.object(hass_client, 'urlopen') as m:
+            self.assertIsNone(hass_client.fetch_entity_image(['camera.a'], self.logger))
+        m.assert_not_called()
+        self.logger.error.assert_called()
 
 
 if __name__ == '__main__':

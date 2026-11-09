@@ -10,7 +10,7 @@ from math import ceil, isfinite, sqrt
 from pathlib import Path
 from typing import NamedTuple, TYPE_CHECKING
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .models import CalendarEvent, DashboardConfig, RenderData
 
@@ -68,6 +68,8 @@ CALENDAR_SEP_H: int = 3           # unscaled vertical space one separator occupi
 TODO_HEADER_H: int = 50
 # Top inset for a hide_title card: content starts here instead of below a title.
 NO_TITLE_CONTENT_TOP: int = 10
+# Unscaled inset around an image panel's picture, on the sides and bottom.
+IMAGE_PADDING: int = 10
 GRAPH_NO_TITLE_MARGIN_TOP: int = 15  # unscaled; clears the top y-axis label's ink
 # Unscaled gap kept between the latest-value label's ink bottom and the x-axis
 # line, so a value at the bottom of the range doesn't collide with the axis.
@@ -2074,6 +2076,118 @@ def _draw_entities_component(
     return img.resize((width, height), Image.LANCZOS)
 
 
+def _image_body_box(
+    width: int,
+    height: int,
+    title_font_size: int | None,
+    title_lines: int,
+    logger: "Logger",
+) -> tuple[int, int, int, int]:
+    """The area of an image panel the picture is fitted into.
+
+    Args:
+        width: Unscaled tile width
+        height: Unscaled tile height
+        title_font_size: Resolved title size (None means the default)
+        title_lines: Title line count, or NO_TITLE_LINES for a hidden title
+        logger: Logger instance
+
+    Returns:
+        (left, top, right, bottom) in unscaled tile pixels; may be empty
+    """
+    if title_lines == NO_TITLE_LINES:
+        top: int = NO_TITLE_CONTENT_TOP
+    else:
+        band: int = _title_band_height(
+            title_font_size or COMPONENT_TITLE_FONT_SIZE, title_lines, logger
+        )
+        top = 5 + band + TITLE_BAND_GAP
+    return (
+        IMAGE_PADDING,
+        top,
+        max(IMAGE_PADDING, width - IMAGE_PADDING),
+        max(top, height - IMAGE_PADDING),
+    )
+
+
+def _dither_to_box(image: Image.Image, box_w: int, box_h: int) -> Image.Image:
+    """Fit a picture inside a box and dither it to pure black and white.
+
+    The picture keeps its aspect ratio and is never cropped. Contrast is
+    stretched first, since flat camera frames otherwise dither to grey mush.
+
+    Args:
+        image: Source picture, ideally mode 'L' as fetch_entity_image returns (alpha already flattened onto white); other modes go through Pillow's default convert('L'), which drops alpha.
+        box_w: Box width in final pixels (> 0)
+        box_h: Box height in final pixels (> 0)
+
+    Returns:
+        A mode '1' image no larger than the box, Floyd–Steinberg dithered
+    """
+    grey: Image.Image = image.convert('L')
+    if grey.width == 0 or grey.height == 0:
+        return Image.new('1', (1, 1), 1)
+    ratio: float = min(box_w / grey.width, box_h / grey.height)
+    size: tuple[int, int] = (
+        max(1, min(box_w, round(grey.width * ratio))),
+        max(1, min(box_h, round(grey.height * ratio))),
+    )
+    fitted: Image.Image = ImageOps.autocontrast(grey.resize(size, Image.LANCZOS), cutoff=1)
+    return fitted.convert('1')  # Pillow's default dither is Floyd–Steinberg
+
+
+def _draw_image_component(
+    friendly_name: str,
+    image: Image.Image,
+    width: int,
+    height: int,
+    logger: "Logger",
+    *,
+    title_font_size: int | None = None,
+    title_lines: int = 1,
+) -> Image.Image:
+    """Draws a picture panel: a title above a dithered picture.
+
+    The title is drawn at COMPONENT_SCALE and downscaled like every other
+    panel. The picture is dithered at final resolution and pasted after the
+    downscale, so its dots are already pure black and white and survive
+    eink_display's threshold unchanged.
+
+    Args:
+        friendly_name: Display name for the component
+        image: The picture to show
+        width: Component width in pixels
+        height: Component height in pixels
+        logger: Logger instance
+        title_font_size: Title size resolved by the caller (None: default)
+        title_lines: Title lines, or NO_TITLE_LINES to draw no title
+
+    Returns:
+        Rendered PIL Image
+    """
+    scale: int = COMPONENT_SCALE
+    large_width: int = width * scale
+    img = Image.new('RGB', (large_width, height * scale), color='white')
+    d = ImageDraw.Draw(img)
+    if title_lines != NO_TITLE_LINES:
+        font_title = _load_font((title_font_size or COMPONENT_TITLE_FONT_SIZE) * scale, logger)
+        _draw_panel_title(d, friendly_name, font_title, large_width, title_lines, scale)
+    tile: Image.Image = img.resize((width, height), Image.LANCZOS)
+
+    left, top, right, bottom = _image_body_box(width, height, title_font_size, title_lines, logger)
+    box_w, box_h = right - left, bottom - top
+    if box_w <= 0 or box_h <= 0:
+        logger.warning("No room for the picture in %s's %dx%d panel.", friendly_name, width, height)
+        return tile
+
+    dithered: Image.Image = _dither_to_box(image, box_w, box_h)
+    tile.paste(
+        dithered.convert('RGB'),
+        (left + (box_w - dithered.width) // 2, top + (box_h - dithered.height) // 2),
+    )
+    return tile
+
+
 def _todo_capacity(
     height: int,
     columns: int,
@@ -2365,6 +2479,16 @@ def tile_components(
                 title_lines=title_lines,
                 body_font_size=body_font_size,
             )
+        elif component_type == 'image':
+            return _draw_image_component(
+                friendly_name,
+                data,  # type: ignore[arg-type]
+                tile_width,
+                tile_height,
+                logger,
+                title_font_size=title_font_size,
+                title_lines=title_lines,
+            )
         elif component_type == 'todo_list':
             todo_columns = render_data.get('columns', 1)
             todo_key = render_data.get('todo_key')
@@ -2617,6 +2741,19 @@ def render_dashboard_image(
         elif component_type == 'url':
             from .url_source import fetch_url_value
             data = fetch_url_value(component, logger)
+        elif component_type == 'image':
+            from .hass_client import fetch_entity_image, IMAGE_DEFAULT_TIMEOUT, IMAGE_MAX_TIMEOUT
+            image_timeout = component.get('timeout', IMAGE_DEFAULT_TIMEOUT)
+            if isinstance(image_timeout, bool) or not isinstance(image_timeout, int) or image_timeout <= 0:
+                logger.warning(
+                    "Invalid 'timeout' (%r) for %s; defaulting to %d.",
+                    image_timeout, component.get('friendly_name'), IMAGE_DEFAULT_TIMEOUT,
+                )
+                image_timeout = IMAGE_DEFAULT_TIMEOUT
+            data = fetch_entity_image(
+                component.get('entity_name', ''), logger,
+                timeout=min(image_timeout, IMAGE_MAX_TIMEOUT),
+            )
         elif component_type == 'todo_list':
             from .hass_client import _fetch_todo_list
             entity_name = component.get('entity_name', '')
