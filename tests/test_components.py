@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 from unittest import mock
 import io
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 import logging
 
 from trmnl_server import url_source
@@ -77,6 +77,10 @@ from trmnl_server.components import (
     COMPONENT_SCALE,
     TODO_BOTTOM_PAD,
     TODO_ROW_H,
+    IMAGE_PADDING,
+    _image_body_box,
+    _dither_to_box,
+    _draw_image_component,
 )
 
 # Create a mock logger for testing
@@ -4776,6 +4780,86 @@ class TestSpineCentring(unittest.TestCase):
                     expected_centre = (top + bottom) / 2
                     self.assertLessEqual(abs(ink_centre - expected_centre), 2,
                                         f"vertical centre off: {ink_centre} vs {expected_centre}")
+
+
+class TestDrawImageComponent(unittest.TestCase):
+    """Tests for the dithered image panel."""
+
+    def setUp(self):
+        self.logger = mock.Mock(spec=logging.Logger)
+
+    def _body(self, tile, box):
+        return tile.crop(box)
+
+    def test_body_pixels_are_pure_black_or_white(self):
+        """Every pixel in the body box is 0 or 255 on every channel."""
+        src = Image.linear_gradient('L').resize((300, 200))
+        tile = _draw_image_component('Cam', src, 400, 300, self.logger, title_font_size=30)
+        box = _image_body_box(400, 300, 30, 1, self.logger)
+        colours = {px for px in self._body(tile, box).getdata()}
+        self.assertTrue(colours <= {(0, 0, 0), (255, 255, 255)}, colours)
+
+    def test_mid_grey_is_dithered_not_thresholded(self):
+        """A uniform mid-grey becomes a mix of black and white dots."""
+        src = Image.new('L', (200, 200), 128)
+        tile = _draw_image_component('Cam', src, 400, 300, self.logger, title_font_size=30)
+        body = self._body(tile, _image_body_box(400, 300, 30, 1, self.logger)).convert('L')
+        black = sum(1 for p in body.getdata() if p == 0)
+        self.assertGreater(black / (body.width * body.height), 0.2)
+        self.assertLess(black / (body.width * body.height), 0.8)
+
+    def test_title_region_independent_of_picture(self):
+        """Pixels above the body box are the same whatever the picture is."""
+        a = _draw_image_component('Cam', Image.new('L', (50, 50), 0), 400, 300, self.logger, title_font_size=30)
+        b = _draw_image_component('Cam', Image.new('L', (50, 50), 255), 400, 300, self.logger, title_font_size=30)
+        top = _image_body_box(400, 300, 30, 1, self.logger)[1]
+        self.assertEqual(a.crop((0, 0, 400, top)).tobytes(), b.crop((0, 0, 400, top)).tobytes())
+        self.assertIsNotNone(ImageOps.invert(a.crop((0, 0, 400, top)).convert('L')).getbbox(),
+                             'title ink expected')
+
+    def test_contain_keeps_aspect_and_centres(self):
+        """A 2:1 black picture fills the box width and is vertically centred."""
+        left, top, right, bottom = _image_body_box(400, 300, 30, 1, self.logger)
+        tile = _draw_image_component('Cam', Image.new('L', (200, 100), 0), 400, 300,
+                                     self.logger, title_font_size=30)
+        ink = ImageOps.invert(tile.crop((left, top, right, bottom)).convert('L')).getbbox()
+        box_w, box_h = right - left, bottom - top
+        ink_w, ink_h = ink[2] - ink[0], ink[3] - ink[1]
+        expected_h = min(box_h, round(box_w / 2))
+        expected_w = min(box_w, round(expected_h * 2))
+        self.assertAlmostEqual(ink_w, expected_w, delta=1)
+        self.assertAlmostEqual(ink_h, expected_h, delta=1)
+        self.assertAlmostEqual(ink[0], box_w - ink[2], delta=1)
+        self.assertAlmostEqual(ink[1], box_h - ink[3], delta=1)
+
+    def test_hide_title_uses_top_inset(self):
+        """With no title the body starts at NO_TITLE_CONTENT_TOP."""
+        box = _image_body_box(400, 300, None, NO_TITLE_LINES, self.logger)
+        self.assertEqual(box, (IMAGE_PADDING, NO_TITLE_CONTENT_TOP, 400 - IMAGE_PADDING, 300 - IMAGE_PADDING))
+
+    def test_two_line_title_pushes_body_down(self):
+        """A two-line title band starts the body lower than a one-line one."""
+        one = _image_body_box(400, 300, 30, 1, self.logger)[1]
+        two = _image_body_box(400, 300, 30, 2, self.logger)[1]
+        self.assertGreater(two, one)
+
+    def test_extreme_aspect_ratio_does_not_crash(self):
+        """A 2000x1 picture still renders at least one pixel high."""
+        out = _dither_to_box(Image.new('L', (2000, 1), 0), 380, 200)
+        self.assertEqual(out.mode, '1')
+        self.assertGreaterEqual(out.height, 1)
+        self.assertLessEqual(out.width, 380)
+
+    def test_no_body_room_returns_title_only(self):
+        """A tile too short for a body returns the tile without raising."""
+        tile = _draw_image_component('Cam', Image.new('L', (50, 50), 0), 400, 40,
+                                     self.logger, title_font_size=30)
+        self.assertEqual(tile.size, (400, 40))
+
+    def test_output_size_and_mode(self):
+        """The tile is RGB at the requested size."""
+        tile = _draw_image_component('Cam', Image.new('L', (50, 50), 0), 266, 220, self.logger)
+        self.assertEqual((tile.mode, tile.size), ('RGB', (266, 220)))
 
 
 if __name__ == '__main__':
