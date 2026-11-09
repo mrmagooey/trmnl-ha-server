@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.14.2] - 2026-11-08
+
 ### Changed
 - Battery percentage follows a LiPo discharge curve instead of a straight line from 2.4V to 4.2V, on the dashboard and in `/api/metrics`. 3.0V is now 0%. Previously a nearly empty battery at 3.3V read 50%, so the percentage fell slowly to about half, then dropped quickly, and a device could die while still showing about a third of its charge.
 
