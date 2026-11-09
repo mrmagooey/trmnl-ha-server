@@ -4850,6 +4850,14 @@ class TestDrawImageComponent(unittest.TestCase):
         self.assertGreaterEqual(out.height, 1)
         self.assertLessEqual(out.width, 380)
 
+    def test_zero_size_picture_does_not_crash(self):
+        """A zero-dimension picture returns a single white pixel and doesn't crash the component."""
+        out = _dither_to_box(Image.new('L', (0, 5)), 380, 200)
+        self.assertEqual(out.mode, '1')
+        self.assertEqual(out.size, (1, 1))
+        tile = _draw_image_component('Cam', Image.new('L', (0, 5), 0), 400, 300, self.logger)
+        self.assertEqual(tile.size, (400, 300))
+
     def test_no_body_room_returns_title_only(self):
         """A tile too short for a body returns the tile without raising."""
         tile = _draw_image_component('Cam', Image.new('L', (50, 50), 0), 400, 40,

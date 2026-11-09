@@ -2117,7 +2117,7 @@ def _dither_to_box(image: Image.Image, box_w: int, box_h: int) -> Image.Image:
     stretched first, since flat camera frames otherwise dither to grey mush.
 
     Args:
-        image: Source picture, any mode
+        image: Source picture, ideally mode 'L' as fetch_entity_image returns (alpha already flattened onto white); other modes go through Pillow's default convert('L'), which drops alpha.
         box_w: Box width in final pixels (> 0)
         box_h: Box height in final pixels (> 0)
 
@@ -2125,6 +2125,8 @@ def _dither_to_box(image: Image.Image, box_w: int, box_h: int) -> Image.Image:
         A mode '1' image no larger than the box, Floyd–Steinberg dithered
     """
     grey: Image.Image = image.convert('L')
+    if grey.width == 0 or grey.height == 0:
+        return Image.new('1', (1, 1), 1)
     ratio: float = min(box_w / grey.width, box_h / grey.height)
     size: tuple[int, int] = (
         max(1, min(box_w, round(grey.width * ratio))),
