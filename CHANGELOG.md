@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-11-11
+
+### Fixed
+- `todo_list` shows the list's real items. They are now fetched from Home Assistant's `todo.get_items` service; previously the list's state (the number of open items) was shown as a single item, e.g. a box labelled "1".
+- Todo checkboxes are drawn with a solid outline instead of breaking up into dots on the e-ink screen.
+- A Home Assistant that stops responding no longer stalls the dashboard: the todo fetch gives up after 10 seconds and the list shows no items.
+
 ## [1.15.0] - 2026-11-11
 
 ### Added
