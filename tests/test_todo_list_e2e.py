@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 import shutil
+import socket
 import socketserver
 import tempfile
 import threading
@@ -64,24 +65,46 @@ class _FakeHomeAssistant(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _solid_runs(img: Image.Image, x: int, min_len: int) -> list[int]:
+    """Lengths of black vertical runs of at least min_len pixels in column x."""
+    gray = img.convert('L')
+    runs: list[int] = []
+    run = 0
+    for y in range(gray.height + 1):
+        if y < gray.height and gray.getpixel((x, y)) == 0:
+            run += 1
+        else:
+            if run >= min_len:
+                runs.append(run)
+            run = 0
+    return runs
+
+
 class TestTodoListEndToEnd(unittest.TestCase):
     """GET /static/<dash>.png -> HA todo.get_items -> 1-bit PNG."""
 
+    CHECKBOX_INSET = 15  # mirrors _draw_todo_list_component
+    CHECKBOX_SIZE = 24
+
     def setUp(self):
         server_state.reset_todo_pages()
-        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(server_state.reset_todo_pages)
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
 
         self.ha = socketserver.ThreadingTCPServer(('127.0.0.1', 0), _FakeHomeAssistant)
+        self.addCleanup(self.ha.server_close)
         self.ha.requests, self.ha.gets = [], []
         threading.Thread(target=self.ha.serve_forever, daemon=True).start()
-        ha_url = f"http://127.0.0.1:{self.ha.server_address[1]}"
-        for patcher in (mock.patch.object(hass_client, 'HASS_URL', ha_url),
-                        mock.patch.object(hass_client, 'HASS_TOKEN', 'e2e-token')):
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        self.addCleanup(self.ha.shutdown)
+        self.ha_url = f"http://127.0.0.1:{self.ha.server_address[1]}"
+        self._patch_ha(self.ha_url)
+        token = mock.patch.object(hass_client, 'HASS_TOKEN', 'e2e-token')
+        token.start()
+        self.addCleanup(token.stop)
 
-        self.config_path = os.path.join(self.tmp_dir, 'config.yaml')
-        with open(self.config_path, 'w') as f:
+        config_path = os.path.join(tmp_dir, 'config.yaml')
+        with open(config_path, 'w') as f:
             f.write(
                 "devices:\n"
                 '  - id: "AA:BB:CC:DD:EE:FF"\n'
@@ -95,27 +118,24 @@ class TestTodoListEndToEnd(unittest.TestCase):
                 "        entity_name: todo.shop\n"
                 "        friendly_name: Shopping\n"
             )
-        self._orig_config_path = os.environ.get('CONFIG_PATH')
-        os.environ['CONFIG_PATH'] = self.config_path
+        env_patch = mock.patch.dict(os.environ, {'CONFIG_PATH': config_path})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
 
         Handler = create_handler_class(getLogger('test_todo_list_e2e'))
         self.httpd = socketserver.TCPServer(('127.0.0.1', 0), Handler)
+        self.addCleanup(self.httpd.server_close)
         self.port = self.httpd.server_address[1]
-        self._orig_server_name = api.SERVER_NAME
-        api.SERVER_NAME = f"http://127.0.0.1:{self.port}"
+        server_name = mock.patch.object(api, 'SERVER_NAME', f"http://127.0.0.1:{self.port}")
+        server_name.start()
+        self.addCleanup(server_name.stop)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.shutdown)
 
-    def tearDown(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        self.ha.shutdown()
-        self.ha.server_close()
-        api.SERVER_NAME = self._orig_server_name
-        if self._orig_config_path is None:
-            os.environ.pop('CONFIG_PATH', None)
-        else:
-            os.environ['CONFIG_PATH'] = self._orig_config_path
-        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+    def _patch_ha(self, url: str) -> None:
+        patcher = mock.patch.object(hass_client, 'HASS_URL', url)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _get(self) -> Image.Image:
         url = f"http://127.0.0.1:{self.port}/static/AA-BB-CC-DD-EE-FF/shop.png"
@@ -126,7 +146,7 @@ class TestTodoListEndToEnd(unittest.TestCase):
         return img
 
     def test_items_fetched_via_service_and_checkbox_is_solid(self):
-        """HA gets one authenticated POST; two checkboxes are drawn with solid outlines."""
+        """HA gets one authenticated POST; both outline columns of both checkboxes are solid."""
         img = self._get()
         self.assertEqual(img.mode, '1')
         self.assertEqual(img.size, (800, 480))
@@ -135,27 +155,18 @@ class TestTodoListEndToEnd(unittest.TestCase):
         )
         self.assertEqual(self.ha.gets, [])
 
-        gray = img.convert('L')
-        # Find the longest vertical black run in the checkbox left-edge column;
-        # a continuous outline is >= 24px tall. Two incomplete items -> two runs.
-        runs: list[int] = []
-        for x in range(10, 60):
-            run = 0
-            col_runs = []
-            for y in range(gray.height):
-                if gray.getpixel((x, y)) == 0:
-                    run += 1
-                else:
-                    if run >= 24:
-                        col_runs.append(run)
-                    run = 0
-            if len(col_runs) >= 2:
-                runs = col_runs
-                break
-        self.assertGreaterEqual(len(runs), 2, "expected two solid checkbox outlines")
+        # Two incomplete items -> two checkboxes. The outline is 2px wide, so
+        # both left-edge columns must be solid for the whole checkbox height.
+        for x in (self.CHECKBOX_INSET, self.CHECKBOX_INSET + 1):
+            runs = _solid_runs(img, x, self.CHECKBOX_SIZE)
+            self.assertEqual(len(runs), 2, f"column {x}: expected two solid outlines")
 
-    def test_ha_failure_renders_without_items(self):
-        """A failing service call renders an empty list rather than erroring."""
-        with mock.patch.object(hass_client, 'HASS_URL', 'http://127.0.0.1:1'):
-            img = self._get()
+    def test_ha_failure_renders_no_items(self):
+        """An unreachable HA renders the same as an empty list: no checkbox ink."""
+        with socket.socket() as s:  # bind then close -> a port nothing listens on
+            s.bind(('127.0.0.1', 0))
+            dead_port = s.getsockname()[1]
+        self._patch_ha(f"http://127.0.0.1:{dead_port}")
+        img = self._get()
         self.assertEqual(img.size, (800, 480))
+        self.assertEqual(_solid_runs(img, self.CHECKBOX_INSET, self.CHECKBOX_SIZE), [])

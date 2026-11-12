@@ -47,35 +47,25 @@ class TestTodoListRenderIntegration(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def _render(self) -> Image.Image:
+    def _render(self, items: list[dict]) -> Image.Image:
         dashboard = {
             'name': 'tasks', 'title': 'Tasks',
             'components': [{'type': 'todo_list', 'entity_name': 'todo.shop',
                             'friendly_name': 'Shopping'}],
         }
-        body = {'changed_states': [], 'service_response': {'todo.shop': {'items': ITEMS}}}
+        body = {'changed_states': [], 'service_response': {'todo.shop': {'items': items}}}
         with mock.patch.object(hass_client, 'urlopen', return_value=_Resp(body)) as m:
             png = render_dashboard_image(dashboard, mock_logger)
         self.assertIn('/api/services/todo/get_items', m.call_args[0][0].full_url)
         return Image.open(png).convert('L')
 
     def test_items_from_service_response_are_rendered(self):
-        """Items from the service response produce ink in the rendered body."""
-        rendered = self._render()
-        # The tile sits under the header; some ink must exist in the body area.
-        body = rendered.crop((0, 40, 800, 480))
-        self.assertIsNotNone(ImageChops.invert(body).getbbox())
-        self.assertGreater(sum(1 for p in body.getdata() if p == 0), 100)
+        """Items in the service response change the render versus an empty list."""
+        with_items = self._render(ITEMS)
+        empty = self._render([])
+        self.assertIsNotNone(ImageChops.difference(with_items, empty).getbbox())
 
-    def test_different_items_render_differently(self):
-        """Changing the service response changes the image (items really drive output)."""
-        first = self._render()
-        body = {'changed_states': [], 'service_response': {'todo.shop': {'items': []}}}
-        dashboard = {
-            'name': 'tasks', 'title': 'Tasks',
-            'components': [{'type': 'todo_list', 'entity_name': 'todo.shop',
-                            'friendly_name': 'Shopping'}],
-        }
-        with mock.patch.object(hass_client, 'urlopen', return_value=_Resp(body)):
-            second = Image.open(render_dashboard_image(dashboard, mock_logger)).convert('L')
-        self.assertIsNotNone(ImageChops.difference(first, second).getbbox())
+    def test_completed_items_are_not_drawn(self):
+        """A list holding only completed items renders the same as an empty list."""
+        done = [{'summary': 'Old', 'status': 'completed', 'uid': 'x'}]
+        self.assertIsNone(ImageChops.difference(self._render(done), self._render([])).getbbox())

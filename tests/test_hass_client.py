@@ -462,10 +462,6 @@ class TestFetchEntityImage(unittest.TestCase):
         self.logger.error.assert_called()
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class TestFetchTodoList(unittest.TestCase):
     """Tests for _fetch_todo_list (todo.get_items service call)."""
 
@@ -520,6 +516,19 @@ class TestFetchTodoList(unittest.TestCase):
         with mock.patch.object(hass_client, 'urlopen', return_value=self._resp([])):
             self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
 
+    def test_null_fields_are_defaulted(self):
+        """None summary/status become '' and needs_action."""
+        with mock.patch.object(hass_client, 'urlopen',
+                               return_value=self._resp([{'summary': None, 'status': None}])):
+            result = hass_client._fetch_todo_list('todo.shop', self.logger)
+        self.assertEqual(result, [{'summary': '', 'status': 'needs_action'}])
+
+    def test_timeout_returns_empty_and_passes_timeout(self):
+        """A TimeoutError yields []; urlopen is called with the module timeout."""
+        with mock.patch.object(hass_client, 'urlopen', side_effect=TimeoutError()) as m:
+            self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
+        self.assertEqual(m.call_args.kwargs['timeout'], hass_client.HASS_TIMEOUT_SECONDS)
+
     def test_http_error_returns_empty(self):
         """HTTPError is logged and yields []."""
         err = HTTPError('http://hass', 500, 'boom', {}, None)
@@ -557,3 +566,7 @@ class TestFetchTodoList(unittest.TestCase):
              mock.patch.object(hass_client, 'urlopen') as m:
             self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
         m.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

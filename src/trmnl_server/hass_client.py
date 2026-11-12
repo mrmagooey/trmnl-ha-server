@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 # Environment configuration
 HASS_URL: str = environ.get("HASS_URL", "http://homeassistant.local:8123")
 HASS_TOKEN: str | None = environ.get("HASS_TOKEN")
+HASS_TIMEOUT_SECONDS: int = 10
 
 
 def _cast_to_numbers(input_value: str) -> str | int | float:
@@ -226,7 +227,7 @@ def _fetch_todo_list(
     entity_name: str,
     logger: "Logger",
 ) -> list[dict[str, str]]:
-    """Fetches todo list items via the ``todo.get_items`` service (HA 2024.1+).
+    """Fetches todo list items via the ``todo.get_items`` service.
 
     Args:
         entity_name: Home Assistant todo list entity ID (e.g., 'todo.shopping_list')
@@ -250,7 +251,7 @@ def _fetch_todo_list(
         method="POST",
     )
     try:
-        with urlopen(req) as response:
+        with urlopen(req, timeout=HASS_TIMEOUT_SECONDS) as response:
             payload: object = json.loads(response.read().decode())
         service_response = payload.get('service_response') if isinstance(payload, dict) else None
         entity_response = (
@@ -262,8 +263,8 @@ def _fetch_todo_list(
             return []
         return [
             {
-                'summary': item.get('summary', ''),
-                'status': item.get('status', 'needs_action'),
+                'summary': str(item.get('summary') or ''),
+                'status': item.get('status') or 'needs_action',
             }
             for item in todo_items
             if isinstance(item, dict)
@@ -274,8 +275,8 @@ def _fetch_todo_list(
     except URLError as e:
         logger.error("URL error getting todo list %s: %s", entity_name, e.reason)
         return []
-    except ValueError as e:
-        logger.error("Invalid todo.get_items response for %s: %s", entity_name, e)
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        logger.error("Error getting todo list %s: %s", entity_name, e)
         return []
 
 

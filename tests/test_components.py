@@ -1492,12 +1492,13 @@ class TestDrawTodoListComponent(unittest.TestCase):
         img.save(buf, 'PNG')
         buf.seek(0)
         bw_img = Image.open(eink_display(buf)).convert('L')
-        x = 15 + 1  # checkbox inset 15px, outline 2px wide
+        checkbox_inset, checkbox_size = 15, 24  # mirrors _draw_todo_list_component
+        x = checkbox_inset + 1  # inside the 2px-wide left edge
         best = run = 0
         for y in range(bw_img.height):
             run = run + 1 if bw_img.getpixel((x, y)) == 0 else 0
             best = max(best, run)
-        self.assertGreaterEqual(best, 24)
+        self.assertGreaterEqual(best, checkbox_size)
 
     def test_draw_todo_list_long_text(self):
         """Test drawing todo list with long item text."""
