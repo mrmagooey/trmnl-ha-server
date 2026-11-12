@@ -2344,7 +2344,7 @@ def _draw_todo_list_component(
         d.rectangle(
             [(checkbox_x, y), (checkbox_x + checkbox_size, y + checkbox_size)],
             outline='black',
-            width=2,
+            width=2 * scale,
         )
 
         text_x: int = col_x + text_offset

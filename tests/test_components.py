@@ -1483,6 +1483,22 @@ class TestDrawTodoListComponent(unittest.TestCase):
         
         self.assertIsInstance(img, Image.Image)
     
+    def test_checkbox_outline_survives_one_bit_conversion(self):
+        """Regression: the checkbox left edge stays solid black after 1-bit conversion."""
+        img = _draw_todo_list_component(
+            "Todos", [{'summary': 'Item', 'status': 'needs_action'}], 400, 300, mock_logger
+        )
+        buf = io.BytesIO()
+        img.save(buf, 'PNG')
+        buf.seek(0)
+        bw_img = Image.open(eink_display(buf)).convert('L')
+        x = 15 + 1  # checkbox inset 15px, outline 2px wide
+        best = run = 0
+        for y in range(bw_img.height):
+            run = run + 1 if bw_img.getpixel((x, y)) == 0 else 0
+            best = max(best, run)
+        self.assertGreaterEqual(best, 24)
+
     def test_draw_todo_list_long_text(self):
         """Test drawing todo list with long item text."""
         items = [

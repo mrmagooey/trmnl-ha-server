@@ -1,5 +1,6 @@
 """Tests for hass_client module."""
 
+import json
 import logging
 import socketserver
 import threading
@@ -463,3 +464,96 @@ class TestFetchEntityImage(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestFetchTodoList(unittest.TestCase):
+    """Tests for _fetch_todo_list (todo.get_items service call)."""
+
+    def setUp(self):
+        for patcher in (mock.patch.object(hass_client, 'HASS_URL', 'http://hass'),
+                        mock.patch.object(hass_client, 'HASS_TOKEN', 'secret-token')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.logger = mock.Mock(spec=logging.Logger)
+
+    @staticmethod
+    def _resp(items, entity='todo.shop'):
+        body = {'changed_states': [], 'service_response': {entity: {'items': items}}}
+        return _FakeImageResponse(json.dumps(body).encode())
+
+    def test_request_is_post_to_get_items_service(self):
+        """POSTs the entity_id to the service endpoint with auth headers."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._resp([])) as m:
+            hass_client._fetch_todo_list('todo.shop', self.logger)
+        req = m.call_args[0][0]
+        self.assertEqual(req.get_method(), 'POST')
+        self.assertEqual(req.full_url, 'http://hass/api/services/todo/get_items?return_response')
+        self.assertEqual(json.loads(req.data), {'entity_id': 'todo.shop'})
+        self.assertEqual(req.get_header('Authorization'), 'Bearer secret-token')
+        self.assertEqual(req.get_header('Content-type'), 'application/json')
+
+    def test_items_mapped_with_status(self):
+        """Summary and status are mapped, including completed items."""
+        items = [
+            {'summary': 'Milk', 'status': 'needs_action', 'uid': 'a'},
+            {'summary': 'Eggs', 'status': 'completed', 'uid': 'b'},
+        ]
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._resp(items)):
+            result = hass_client._fetch_todo_list('todo.shop', self.logger)
+        self.assertEqual(result, [
+            {'summary': 'Milk', 'status': 'needs_action'},
+            {'summary': 'Eggs', 'status': 'completed'},
+        ])
+
+    def test_missing_fields_default(self):
+        """Missing summary/status default; non-dict items are skipped."""
+        with mock.patch.object(hass_client, 'urlopen',
+                               return_value=self._resp([{}, 'junk', {'summary': 'X'}])):
+            result = hass_client._fetch_todo_list('todo.shop', self.logger)
+        self.assertEqual(result, [
+            {'summary': '', 'status': 'needs_action'},
+            {'summary': 'X', 'status': 'needs_action'},
+        ])
+
+    def test_empty_items_yields_no_fake_state_item(self):
+        """Regression: an empty list gives [], never a row labelled with the state count."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=self._resp([])):
+            self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
+
+    def test_http_error_returns_empty(self):
+        """HTTPError is logged and yields []."""
+        err = HTTPError('http://hass', 500, 'boom', {}, None)
+        with mock.patch.object(hass_client, 'urlopen', side_effect=err):
+            self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
+        self.logger.error.assert_called()
+
+    def test_url_error_returns_empty(self):
+        """URLError is logged and yields []."""
+        with mock.patch.object(hass_client, 'urlopen', side_effect=URLError('down')):
+            self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
+        self.logger.error.assert_called()
+
+    def test_malformed_json_returns_empty(self):
+        """Non-JSON body yields []."""
+        with mock.patch.object(hass_client, 'urlopen', return_value=_FakeImageResponse(b'<html>')):
+            self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
+
+    def test_unexpected_shape_returns_empty(self):
+        """Missing service_response, other entity, list payload or non-list items yield []."""
+        bodies = [
+            {'changed_states': []},
+            {'service_response': {'todo.other': {'items': []}}},
+            {'service_response': {'todo.shop': {'items': 'nope'}}},
+            [],
+        ]
+        for body in bodies:
+            with mock.patch.object(hass_client, 'urlopen',
+                                   return_value=_FakeImageResponse(json.dumps(body).encode())):
+                self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [], body)
+
+    def test_missing_env_returns_empty_without_request(self):
+        """No HASS_TOKEN: error logged, no request."""
+        with mock.patch.object(hass_client, 'HASS_TOKEN', None), \
+             mock.patch.object(hass_client, 'urlopen') as m:
+            self.assertEqual(hass_client._fetch_todo_list('todo.shop', self.logger), [])
+        m.assert_not_called()

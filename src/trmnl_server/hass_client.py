@@ -226,8 +226,8 @@ def _fetch_todo_list(
     entity_name: str,
     logger: "Logger",
 ) -> list[dict[str, str]]:
-    """Fetches todo list items from Home Assistant.
-    
+    """Fetches todo list items via the ``todo.get_items`` service (HA 2024.1+).
+
     Args:
         entity_name: Home Assistant todo list entity ID (e.g., 'todo.shopping_list')
         logger: Logger instance for errors
@@ -239,51 +239,43 @@ def _fetch_todo_list(
         logger.error("HASS_URL and HASS_TOKEN environment variables must be set.")
         return []
 
-    url: str = f"{HASS_URL}/api/states/{entity_name}"
+    url: str = f"{HASS_URL}/api/services/todo/get_items?return_response"
     req = Request(
         url,
+        data=json.dumps({"entity_id": entity_name}).encode(),
         headers={
             "Authorization": f"Bearer {HASS_TOKEN}",
             "Content-Type": "application/json",
         },
+        method="POST",
     )
     try:
         with urlopen(req) as response:
-            data: str = response.read().decode()
-            entity_data: dict[str, object] = json.loads(data)
-            
-            # Todo lists store items in attributes
-            attributes: dict[str, object] = entity_data.get('attributes', {})
-            items: list[dict[str, str]] = []
-            
-            # Try to get items from various common todo list formats
-            if 'items' in attributes:
-                todo_items = attributes['items']
-                if isinstance(todo_items, list):
-                    for item in todo_items:
-                        if isinstance(item, dict):
-                            items.append({
-                                'summary': item.get('summary', ''),
-                                'status': item.get('status', 'needs_action'),
-                            })
-            
-            # Alternative: parse state as comma-separated list
-            state = entity_data.get('state', '')
-            if state and not items:
-                for line in state.split(','):
-                    line = line.strip()
-                    if line:
-                        items.append({
-                            'summary': line,
-                            'status': 'needs_action',
-                        })
-            
-            return items
+            payload: object = json.loads(response.read().decode())
+        service_response = payload.get('service_response') if isinstance(payload, dict) else None
+        entity_response = (
+            service_response.get(entity_name) if isinstance(service_response, dict) else None
+        )
+        todo_items = entity_response.get('items') if isinstance(entity_response, dict) else None
+        if not isinstance(todo_items, list):
+            logger.error("Unexpected todo.get_items response for %s", entity_name)
+            return []
+        return [
+            {
+                'summary': item.get('summary', ''),
+                'status': item.get('status', 'needs_action'),
+            }
+            for item in todo_items
+            if isinstance(item, dict)
+        ]
     except HTTPError as e:
         logger.error("HTTP error getting todo list %s: %d %s", entity_name, e.code, e.reason)
         return []
     except URLError as e:
         logger.error("URL error getting todo list %s: %s", entity_name, e.reason)
+        return []
+    except ValueError as e:
+        logger.error("Invalid todo.get_items response for %s: %s", entity_name, e)
         return []
 
 
